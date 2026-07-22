@@ -16,15 +16,17 @@ any write.
 
 ## 1. New scaffolded note
 - [ ] Command **Ariadne: New scaffolded note** → type a seed ("Environmental
-      complexity drives morphological complexity") → a **preview modal** opens
-      showing the create-diff (frontmatter, key-idea bullets, section
-      headings, Related links).
+      complexity drives morphological complexity") → the note is created and
+      opened directly (no preview modal — creation is non-destructive, and
+      you're reading it in full anyway).
 - [ ] The scaffold is STRUCTURE ONLY — headings and telegraphic bullets, never
       a finished paragraph in your voice.
-- [ ] The suggested home folder is one of your real folders (Johnny-Decimal
+- [ ] The chosen home folder is one of your real folders (Johnny-Decimal
       folders included), and Related links point at real notes.
-- [ ] **Accept** → the note is created and opened. **Cancel/Esc** on a fresh
-      run → nothing is created.
+- [ ] Don't like it → delete it (goes to trash), OR **Ariadne: Undo last
+      action** removes it in one step.
+- [ ] Run it again with the same seed → the second note auto-disambiguates
+      (`Title 2.md`), never clobbers the first.
 - [ ] The glyph's brain cost ticks up after the model call.
 
 ## 2. Link weaving

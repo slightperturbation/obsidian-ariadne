@@ -9,6 +9,18 @@ const PRICING_PER_MTOK: Record<string, { input: number; output: number }> = {
   "claude-haiku-4-5": { input: 1, output: 5 },
 };
 
+const DEFAULT_MODEL = "claude-haiku-4-5";
+
+/**
+ * Adaptive thinking (`{type:"adaptive"}`) is a 4.6+ family feature. Sending it
+ * to Haiku 4.5 or older models returns a 400, so the provider only requests
+ * thinking when the configured model supports it — the task just runs without
+ * it otherwise (fine for these small structured jobs).
+ */
+function supportsAdaptiveThinking(model: string): boolean {
+  return /claude-(fable-5|mythos-5|opus-4-[678]|sonnet-5|sonnet-4-6)/.test(model);
+}
+
 export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
@@ -52,7 +64,7 @@ export class ClaudeProvider {
   }
 
   get modelId(): string {
-    return this.deps.model().trim() || "claude-opus-4-8";
+    return this.deps.model().trim() || DEFAULT_MODEL;
   }
 
   async complete(
@@ -68,11 +80,12 @@ export class ClaudeProvider {
     });
 
     const model = this.modelId;
+    const useThinking = opts.thinking && supportsAdaptiveThinking(model);
     const response = await client.messages.create({
       model,
       max_tokens: opts.maxTokens ?? 2048,
       ...(opts.system ? { system: opts.system } : {}),
-      ...(opts.thinking ? { thinking: { type: "adaptive" as const } } : {}),
+      ...(useThinking ? { thinking: { type: "adaptive" as const } } : {}),
       ...(opts.schema
         ? { output_config: { format: { type: "json_schema" as const, schema: opts.schema } } }
         : {}),

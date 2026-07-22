@@ -6,14 +6,28 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 3 — safe actions + Claude routing.** The first phase that writes to
-the vault, and it does so only through one path: **propose → preview (diff) →
-accept → atomic undo**, with a hard invariant that nothing writes without an
-explicit accept and a conflict check that refuses if a file changed since the
-preview. Actions: **new-note scaffolding** (type-aware, Johnny-Decimal home,
-structure-and-key-ideas only — never prose in your voice) and **bidirectional
-link weaving** (⇧↵ in the Line / ⇧-click in the Margin, with model-generated
-connective phrasing). A Claude provider (`claude-opus-4-8` default) runs
+**Phase 4a — refactoring engine.** Structural refactors on top of the Phase 3
+action framework: **semantic split** (break a long note into linked atomic
+child notes + turn the original into a Map-of-Content stub, as one atomic
+undoable op — content-preserving by construction, model-grouped with a
+per-section fallback), **Map-of-Content generation** (a themed, annotated
+index over a note's related neighborhood — pure creation, no preview), and
+**near-duplicate merge** (union a close duplicate into the current note and
+trash it, previewed). Commands: *Split this note*, *Generate Map of Content*,
+*Merge near-duplicate*. Manual test script:
+[tests/manual/phase-4.md](tests/manual/phase-4.md). **Deferred to 4b:** the
+filing subsystem (attachments sweep, Inbox/stub triage).
+
+Earlier: **Phase 3 — safe actions + Claude routing.** The first phase that writes to
+the vault, and edits to existing notes go through one path: **propose → preview (diff) →
+accept → atomic undo**, with a conflict check that refuses if a file changed
+since the preview. Creating a new note (non-destructive, trivially reversible)
+skips the modal — it's created and opened directly, still one-key undoable.
+Actions: **new-note scaffolding** (type-aware, Johnny-Decimal home,
+structure-and-key-ideas only — never prose in your voice; auto-disambiguates
+name collisions) and **bidirectional link weaving** (⇧↵ in the Line / ⇧-click
+in the Margin, previewed, with model-generated connective phrasing). A Claude provider (`claude-haiku-4-5` default — cheapest;
+switch to a larger model in settings for higher-quality scaffolds) runs
 reasoning tasks off the typing path, with a visible session cost in the glyph
 and a hard per-session spend cap. Multi-file undo reverts a whole action in
 one step. Manual test script:

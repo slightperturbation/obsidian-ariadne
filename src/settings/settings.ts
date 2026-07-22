@@ -38,7 +38,10 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
 
   brain: "cloud-first",
   claudeApiKey: "",
-  claudeModel: "claude-opus-4-8",
+  // Haiku is the cheapest current model ($1/$5 per MTok) and ample for the
+  // small structured tasks here (connective phrasing, note scaffolding).
+  // Bump to a larger model in settings if scaffold quality warrants it.
+  claudeModel: "claude-haiku-4-5",
   costLimitUsd: 2,
   localEndpoint: "http://localhost:1234/v1",
 

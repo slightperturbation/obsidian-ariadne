@@ -106,10 +106,12 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Claude model")
-      .setDesc("Model for reasoning tasks (scaffolds, connective phrasing).")
+      .setDesc(
+        "Model for reasoning tasks (scaffolds, connective phrasing). Default claude-haiku-4-5 is cheapest; use claude-opus-4-8 for higher-quality scaffolds.",
+      )
       .addText((t) =>
         t.setValue(this.plugin.settings.claudeModel).onChange(async (v) => {
-          this.plugin.settings.claudeModel = v.trim() || "claude-opus-4-8";
+          this.plugin.settings.claudeModel = v.trim() || "claude-haiku-4-5";
           await this.plugin.saveSettings();
         }),
       );

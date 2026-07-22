@@ -10,8 +10,7 @@ import { HashEmbedder } from "./index/embeddings/hash-embedder";
 import type { OrtWasmPaths } from "./index/embeddings/transformers-provider";
 import { WorkerEmbedder } from "./index/embeddings/worker-embedder";
 import { saveIndex, loadIndex, type FileIO } from "./index/persistence";
-import { ARIADNE_VIEW_TYPE, LineView } from "./line/view";
-import { ARIADNE_MARGIN_VIEW_TYPE, MarginView } from "./margin/sidebar-view";
+import { ARIADNE_VIEW_TYPE, AriadneView } from "./line/view";
 import { DraftWatcher } from "./margin/draft-watcher";
 import { GhostEngine } from "./margin/ghost/engine";
 import { ghostExtension } from "./margin/ghost/extension";
@@ -104,7 +103,7 @@ export default class AriadnePlugin extends Plugin {
       manager: () => this.manager,
       router: this.router,
       executor: this.executor,
-      lastMarkdown: () => this.lastMarkdown,
+      lastMarkdown: () => this.resolveMarkdown(),
       log: this.log,
     });
     this.status.set({ brain: provider.available() ? "cloud" : "none" });
@@ -128,6 +127,24 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "split-note",
+      name: "Split this note into atomic notes",
+      callback: () => void this.actions.splitNote(),
+    });
+
+    this.addCommand({
+      id: "generate-moc",
+      name: "Generate Map of Content from related notes",
+      callback: () => void this.actions.generateMoc(),
+    });
+
+    this.addCommand({
+      id: "merge-duplicate",
+      name: "Merge near-duplicate into this note",
+      callback: () => void this.actions.mergeNote(),
+    });
+
+    this.addCommand({
       id: "undo-last-action",
       name: "Undo last action",
       callback: () => void this.actions.undoLast(),
@@ -136,9 +153,11 @@ export default class AriadnePlugin extends Plugin {
     this.registerView(
       ARIADNE_VIEW_TYPE,
       (leaf) =>
-        new LineView(leaf, {
+        new AriadneView(leaf, {
           manager: () => this.manager,
           status: this.status,
+          watcher: this.getWatcher(),
+          marginEnabled: () => this.settings.enableMargin,
           onCreateNote: (seed) => void this.actions.createNote(seed),
           onWeave: (result) => void this.actions.weave(result),
         }),
@@ -146,28 +165,11 @@ export default class AriadnePlugin extends Plugin {
 
     this.addCommand({
       id: "focus-line",
-      name: "Focus the Line",
+      name: "Open Ariadne",
       callback: () => void this.activateLine(),
     });
 
-    this.registerView(
-      ARIADNE_MARGIN_VIEW_TYPE,
-      (leaf) =>
-        new MarginView(leaf, {
-          manager: () => this.manager,
-          watcher: this.getWatcher(),
-          enabled: () => this.settings.enableMargin,
-          onWeave: (result) => void this.actions.weave(result),
-        }),
-    );
-
-    this.addCommand({
-      id: "open-margin",
-      name: "Open the Margin",
-      callback: () => void this.activateMargin(),
-    });
-
-    // The Margin + ghost text listen to the writing via one shared watcher.
+    // The Margin section + ghost text listen to the writing via one shared watcher.
     this.ghost = new GhostEngine({
       app: this.app,
       manager: () => this.manager,
@@ -410,14 +412,20 @@ export default class AriadnePlugin extends Plugin {
     return this.watcher;
   }
 
-  private async activateMargin(): Promise<void> {
-    const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(ARIADNE_MARGIN_VIEW_TYPE)[0];
-    if (!leaf) {
-      leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
-      await leaf.setViewState({ type: ARIADNE_MARGIN_VIEW_TYPE, active: false });
+  /**
+   * The note the writer is working in, for weaving/inserting links. Prefer the
+   * active markdown view; when the Line/Margin has focus (so the active view
+   * isn't markdown) fall back to the last-focused note, then any open note.
+   * Without the fallbacks, weaving before ever switching notes finds nothing.
+   */
+  private resolveMarkdown(): MarkdownView | null {
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (active?.file) return active;
+    if (this.lastMarkdown?.file) return this.lastMarkdown;
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      if (leaf.view instanceof MarkdownView && leaf.view.file) return leaf.view;
     }
-    await workspace.revealLeaf(leaf);
+    return null;
   }
 
   private async activateLine(): Promise<void> {
@@ -428,7 +436,7 @@ export default class AriadnePlugin extends Plugin {
       await leaf.setViewState({ type: ARIADNE_VIEW_TYPE, active: true });
     }
     await workspace.revealLeaf(leaf);
-    if (leaf.view instanceof LineView) leaf.view.focusInput();
+    if (leaf.view instanceof AriadneView) leaf.view.focusInput();
   }
 
   onunload(): void {

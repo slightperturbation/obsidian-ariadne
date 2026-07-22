@@ -18,7 +18,7 @@
 
 /* ── The Line ─────────────────────────────────────────────────────────── */
 
-.ariadne-line {
+.ariadne-panel {
   display: flex;
   flex-direction: column;
   gap: var(--ariadne-gap);
@@ -26,6 +26,7 @@
 }
 
 .ariadne-input {
+  flex: none;
   width: 100%;
   font-size: var(--font-ui-medium);
   background: transparent;
@@ -40,8 +41,21 @@
   box-shadow: none;
 }
 
+/* Search results: collapse to nothing when idle; cap at 2/3 when active. */
 .ariadne-results {
-  flex: 1;
+  flex: 0 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+}
+.ariadne-results.is-active {
+  max-height: 66%;
+  border-bottom: 1px solid var(--ariadne-hairline);
+  padding-bottom: var(--size-4-1);
+}
+
+/* The Margin fills whatever the search results don't. */
+.ariadne-margin-section {
+  flex: 1 1 auto;
   overflow-y: auto;
   min-height: 0;
 }
@@ -100,13 +114,7 @@
   padding: var(--size-4-2) 0;
 }
 
-/* ── The Margin ───────────────────────────────────────────────────────── */
-
-.ariadne-margin {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ariadne-gap);
-}
+/* ── The Margin (cards) ───────────────────────────────────────────────── */
 
 .ariadne-cards {
   display: flex;
