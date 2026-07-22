@@ -63,12 +63,15 @@ sections → Split again (extract to files).
 - [ ] Undo removes it; a note with <2 related neighbors → notice, nothing made.
 
 ## 3. Merge near-duplicate
-- [ ] Make two near-identical notes (copy one, tweak a line). Open one, run
-      **Ariadne: Merge near-duplicate into this note**.
-- [ ] A **preview** shows the current note gaining the other's body under a
-      `## Merged from [[Other]]` heading, and the other note being deleted.
-- [ ] Accept → content unioned into the kept note, the other trashed. Undo
-      restores both.
+- [ ] Make two near-identical notes (copy one, tweak/add a paragraph). Open
+      one, run **Ariadne: Merge near-duplicate into this note**.
+- [ ] A **preview** shows the current note gaining only the other's *unique*
+      paragraphs under a `## Merged from [[Other]]` heading — identical shared
+      paragraphs are NOT duplicated — and the other note being deleted.
+- [ ] If the other note is fully contained already (its content is a subset),
+      the preview shows ONLY the delete (no edit to the kept note).
+- [ ] Accept → distinct content unioned into the kept note, the other trashed.
+      Undo restores both.
 - [ ] On a note with no close duplicate → notice "No near-duplicate found."
       (Merge only offers when cosine ≥ 0.9.)
 

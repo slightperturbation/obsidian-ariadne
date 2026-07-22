@@ -42,26 +42,42 @@ describe("buildMocProposal", () => {
 });
 
 describe("buildMergeProposal", () => {
-  it("appends the other's body under a Merged-from heading and deletes it", () => {
+  it("appends only the other's unique blocks under a Merged-from heading, then deletes it", () => {
     const proposal = buildMergeProposal({
       keepPath: "keep.md",
-      keepContent: "# Keep\n\nKept body.",
+      keepContent: "# Keep\n\nShared paragraph.\n\nKept-only paragraph.",
       keepTitle: "Keep",
       otherPath: "dupe.md",
-      otherContent: "---\ntype: note\n---\n\n# Dupe\n\nExtra content.",
+      // Shares "Shared paragraph." verbatim; adds one new paragraph.
+      otherContent: "---\ntype: note\n---\n\n# Dupe\n\nShared paragraph.\n\nExtra content.",
       otherTitle: "Dupe",
     });
     expect(proposal.changes).toHaveLength(2);
     const [modify, del] = proposal.changes;
     expect(modify.type).toBe("modify");
-    expect(modify.before).toBe("# Keep\n\nKept body.");
-    expect(modify.after).toContain("Kept body.");
+    expect(modify.before).toBe("# Keep\n\nShared paragraph.\n\nKept-only paragraph.");
     expect(modify.after).toContain("## Merged from [[Dupe]]");
     expect(modify.after).toContain("Extra content.");
+    // The shared paragraph is NOT duplicated: it appears exactly once total.
+    expect((modify.after!.match(/Shared paragraph\./g) ?? []).length).toBe(1);
     // Other note's frontmatter is dropped in the union.
     expect(modify.after).not.toContain("type: note");
     expect(del.type).toBe("delete");
     expect(del.path).toBe("dupe.md");
-    expect(del.before).toContain("Extra content.");
+  });
+
+  it("when the duplicate is fully contained, only trashes it (no edit to keep)", () => {
+    const proposal = buildMergeProposal({
+      keepPath: "keep.md",
+      keepContent: "# Keep\n\nAlpha.\n\nBeta.",
+      keepTitle: "Keep",
+      otherPath: "dupe.md",
+      otherContent: "# Dupe\n\nBeta.\n\nAlpha.", // same blocks, reordered
+      otherTitle: "Dupe",
+    });
+    // No modify — the kept note already has everything; just the delete.
+    expect(proposal.changes).toHaveLength(1);
+    expect(proposal.changes[0].type).toBe("delete");
+    expect(proposal.changes[0].path).toBe("dupe.md");
   });
 });
