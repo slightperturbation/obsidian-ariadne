@@ -33,10 +33,13 @@ import {
   SPLIT_SCHEMA,
   MOC_SCHEMA,
   ANALYZE_SCHEMA,
+  CRITIQUE_SCHEMA,
   splitPrompt,
   parseSplitGroups,
   analyzePrompt,
   parseAnalysis,
+  critiquePrompt,
+  parseCritique,
   mocPrompt,
   parseMoc,
   fallbackMoc,
@@ -341,12 +344,36 @@ export class ActionsController {
       return;
     }
 
+    // Second pass: critique the proposed sections for coherence and title
+    // quality and refine them before the user sees anything. Falls back to the
+    // first proposal if the critique can't run or returns something degenerate.
+    let clusters = analysis.clusters;
+    try {
+      const critiqueText = await this.withWorkingNotice(
+        "Ariadne is refining the proposed split…",
+        () =>
+          this.deps.router.run(
+            "scaffold",
+            critiquePrompt({
+              title: file.basename,
+              paragraphs: paragraphs.map((p) => ({ index: p.index, text: p.text })),
+              proposal: clusters,
+            }),
+            { schema: { ...CRITIQUE_SCHEMA }, maxTokens: 2000, thinking: true },
+          ),
+      );
+      const refined = parseCritique(critiqueText);
+      if (refined.length >= 2) clusters = refined;
+    } catch (err) {
+      this.deps.log.warn(`split critique pass failed, using first proposal: ${String(err)}`);
+    }
+
     this.preview(
       buildStructureProposal({
         path: file.path,
         content,
         parentTitle: file.basename,
-        clusters: analysis.clusters,
+        clusters,
       }),
     );
   }

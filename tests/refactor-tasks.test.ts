@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSplitGroups, parseMoc, fallbackMoc } from "../src/model/refactor-tasks";
+import { parseSplitGroups, parseMoc, fallbackMoc, parseCritique } from "../src/model/refactor-tasks";
 
 describe("parseSplitGroups", () => {
   it("parses valid groups and drops malformed ones", () => {
@@ -20,6 +20,27 @@ describe("parseSplitGroups", () => {
   it("returns [] on garbage", () => {
     expect(parseSplitGroups("not json")).toEqual([]);
     expect(parseSplitGroups("{}")).toEqual([]);
+  });
+});
+
+describe("parseCritique", () => {
+  it("parses refined clusters and drops malformed ones", () => {
+    const clusters = parseCritique(
+      JSON.stringify({
+        clusters: [
+          { title: "Sharper title", description: "d", paragraphIndices: [0, 1] },
+          { title: "", description: "x", paragraphIndices: [2] },
+          { title: "Another", description: "", paragraphIndices: [3] },
+        ],
+      }),
+    );
+    expect(clusters.map((c) => c.title)).toEqual(["Sharper title", "Another"]);
+    expect(clusters[0].paragraphIndices).toEqual([0, 1]);
+  });
+
+  it("returns [] on garbage so the caller keeps the first proposal", () => {
+    expect(parseCritique("not json")).toEqual([]);
+    expect(parseCritique("{}")).toEqual([]);
   });
 });
 

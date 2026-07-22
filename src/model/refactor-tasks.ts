@@ -63,6 +63,27 @@ export interface AnalysisResult {
   clusters: StructureCluster[];
 }
 
+/** Parse a `[{title, description, paragraphIndices}]` array, dropping malformed entries. */
+export function parseClusters(value: unknown): StructureCluster[] {
+  if (!Array.isArray(value)) return [];
+  const clusters: StructureCluster[] = [];
+  for (const c of value) {
+    if (typeof c !== "object" || c === null) continue;
+    const obj = c as Record<string, unknown>;
+    const title = typeof obj.title === "string" ? obj.title.trim() : "";
+    const indices = Array.isArray(obj.paragraphIndices)
+      ? obj.paragraphIndices.filter((n): n is number => Number.isInteger(n))
+      : [];
+    if (!title || indices.length === 0) continue;
+    clusters.push({
+      title,
+      description: typeof obj.description === "string" ? obj.description.trim() : "",
+      paragraphIndices: indices,
+    });
+  }
+  return clusters;
+}
+
 export function parseAnalysis(text: string): AnalysisResult | null {
   let parsed: { atomic?: unknown; reason?: unknown; clusters?: unknown };
   try {
@@ -70,28 +91,73 @@ export function parseAnalysis(text: string): AnalysisResult | null {
   } catch {
     return null;
   }
-  const clusters: StructureCluster[] = [];
-  if (Array.isArray(parsed.clusters)) {
-    for (const c of parsed.clusters) {
-      if (typeof c !== "object" || c === null) continue;
-      const obj = c as Record<string, unknown>;
-      const title = typeof obj.title === "string" ? obj.title.trim() : "";
-      const indices = Array.isArray(obj.paragraphIndices)
-        ? obj.paragraphIndices.filter((n): n is number => Number.isInteger(n))
-        : [];
-      if (!title || indices.length === 0) continue;
-      clusters.push({
-        title,
-        description: typeof obj.description === "string" ? obj.description.trim() : "",
-        paragraphIndices: indices,
-      });
-    }
-  }
   return {
     atomic: parsed.atomic === true,
     reason: typeof parsed.reason === "string" ? parsed.reason.trim() : "",
-    clusters,
+    clusters: parseClusters(parsed.clusters),
   };
+}
+
+/* ── Pass-1b critique: review and refine the proposed clustering ──────── */
+
+export const CRITIQUE_SCHEMA = {
+  type: "object",
+  properties: {
+    clusters: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "improved atomic-note title" },
+          description: { type: "string", description: "≤12-word topical label" },
+          paragraphIndices: { type: "array", items: { type: "integer" } },
+        },
+        required: ["title", "description", "paragraphIndices"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["clusters"],
+  additionalProperties: false,
+} as const;
+
+export function critiquePrompt(input: {
+  title: string;
+  paragraphs: Array<{ index: number; text: string }>;
+  proposal: StructureCluster[];
+}): string {
+  return [
+    `Review a proposed split of the note "${input.title}" into atomic Zettelkasten notes, and return an improved version.`,
+    ``,
+    `You are ONLY regrouping the note's existing paragraphs by index — never rewrite, rephrase, condense, or edit the note's words, and never alter quoted text. Only the section titles and descriptions are yours to write.`,
+    ``,
+    `Critique each proposed section and fix what's weak:`,
+    `- Coherence: each section must hold exactly ONE self-contained idea. Split a section that mixes two ideas; merge two sections that are really one; drop a section that's just framing/connective (its paragraphs return to the original note).`,
+    `- Paragraph fit: every paragraph in a section must actually be about that idea — move any that belong elsewhere.`,
+    `- Title: must be a good atomic-note title — a specific concept or claim, terse, a noun phrase in the note's own terminology; not vague ("Misc", "Notes", "Other"), not a full sentence. Rewrite weak titles.`,
+    `- Description: ≤10 words, a plain topical label; never a paraphrase or quotation of the content.`,
+    ``,
+    `Keep what's already good; change only what needs it. Aim for 2–6 coherent notes; you need not assign every paragraph. Return the improved proposal as clusters (title, description, paragraphIndices).`,
+    ``,
+    `Current proposal:`,
+    ...input.proposal.map(
+      (c, i) =>
+        `${i + 1}. "${c.title}" — paragraphs [${c.paragraphIndices.join(", ")}]${c.description ? ` — ${c.description}` : ""}`,
+    ),
+    ``,
+    `Paragraphs:`,
+    ...input.paragraphs.map((p) => `[${p.index}] ${p.text.replace(/\s+/g, " ").slice(0, 240)}`),
+  ].join("\n");
+}
+
+export function parseCritique(text: string): StructureCluster[] {
+  let parsed: { clusters?: unknown };
+  try {
+    parsed = JSON.parse(text) as typeof parsed;
+  } catch {
+    return [];
+  }
+  return parseClusters(parsed.clusters);
 }
 
 /* ── Semantic split: group segments into atomic notes ─────────────────── */

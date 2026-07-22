@@ -15,6 +15,10 @@ Ariadne: Split this note into atomic notes.**
 ### 1a. Structuring pass (unstructured note → editable sections)
 - [ ] Open a long, unstructured note (prose, few or no `##` headings) that
       clearly holds several ideas. Run Split.
+- [ ] Notices show it working in two phases: "analyzing this note to split…"
+      then "refining the proposed split…" — a first pass clusters the note, a
+      second critiques the sections (coherence + title quality) before you see
+      it.
 - [ ] A **preview** shows the SAME note rewritten in place: a top callout
       ("Proposed split — edit these sections…"), your framing/intro text kept,
       and a `## <proposed title>` section per idea holding the clustered
