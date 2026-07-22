@@ -1,0 +1,108 @@
+import { MarkdownView, type App } from "obsidian";
+import type { EditorView } from "@codemirror/view";
+import type { IndexManager } from "../../index/manager";
+import type { DraftContext } from "../draft-watcher";
+import { decideGhost } from "./suggest";
+import { setGhost } from "./state";
+import type { Logger } from "../../util/logger";
+
+export interface GhostEngineDeps {
+  app: App;
+  manager: () => IndexManager | undefined;
+  enabled: () => boolean;
+  minCosine: () => number;
+  log: Logger;
+}
+
+/** How many paragraphs' dismissals to remember before forgetting the oldest. */
+const DISMISS_MEMORY = 50;
+
+/**
+ * Turns draft contexts into ghost suggestions: shared-watcher context in,
+ * related() retrieval, decideGhost() policy, then a setGhost dispatch into
+ * the active editor. Dismissals are remembered per paragraph (keyed by the
+ * watcher's word-set paragraph key) so Esc actually means "stop it" and not
+ * "ask me again in 600 ms".
+ */
+export class GhostEngine {
+  private dismissed = new Map<string, Set<string>>();
+  private lastContext?: DraftContext;
+  private token = 0;
+
+  constructor(private deps: GhostEngineDeps) {}
+
+  /** keymap onDismiss hook. */
+  noteDismissed(targetPath: string): void {
+    if (!this.lastContext) return;
+    let set = this.dismissed.get(this.lastContext.key);
+    if (!set) {
+      set = new Set();
+      this.dismissed.set(this.lastContext.key, set);
+      // Bounded memory: drop the oldest paragraph's dismissals.
+      if (this.dismissed.size > DISMISS_MEMORY) {
+        const oldest = this.dismissed.keys().next().value;
+        if (oldest !== undefined) this.dismissed.delete(oldest);
+      }
+    }
+    set.add(targetPath);
+  }
+
+  async onContext(ctx: DraftContext): Promise<void> {
+    if (!this.deps.enabled()) return;
+    const manager = this.deps.manager();
+    if (!manager) return;
+    this.lastContext = ctx;
+    const token = ++this.token;
+
+    const view = this.deps.app.workspace.getActiveViewOfType(MarkdownView);
+    const cm = view
+      ? (view.editor as unknown as { cm?: EditorView }).cm
+      : undefined;
+    if (!view || !cm || view.file?.path !== ctx.path) return;
+
+    if (!ctx.text.trim()) {
+      cm.dispatch({ effects: setGhost.of(null) });
+      return;
+    }
+
+    const results = await manager.related(ctx.text, { excludePath: ctx.path, limit: 5 });
+    if (token !== this.token) return; // a newer context superseded this one
+
+    const decision = decideGhost({
+      results,
+      noteText: ctx.noteText,
+      paragraphText: ctx.text,
+      charBefore: ctx.charBefore,
+      charAfter: ctx.charAfter,
+      lineBefore: ctx.lineBefore,
+      dismissed: this.dismissed.get(ctx.key) ?? new Set(),
+      minCosine: this.deps.minCosine(),
+    });
+
+    // The editor may have changed while we retrieved: never dispatch into a
+    // different note, mid-composition, or after further typing moved the
+    // cursor off the paused position.
+    const nowView = this.deps.app.workspace.getActiveViewOfType(MarkdownView);
+    const nowCm = nowView
+      ? (nowView.editor as unknown as { cm?: EditorView }).cm
+      : undefined;
+    if (!nowView || !nowCm || nowView.file?.path !== ctx.path) return;
+    if (nowCm.composing) return;
+    const cursor = nowView.editor.getCursor();
+    if (cursor.line !== ctx.cursorLine || cursor.ch !== ctx.cursorCh) return;
+
+    if (!decision) {
+      nowCm.dispatch({ effects: setGhost.of(null) });
+      return;
+    }
+    const pos = nowView.editor.posToOffset(cursor);
+    nowCm.dispatch({
+      effects: setGhost.of({
+        pos,
+        insertText: decision.insertText,
+        targetPath: decision.targetPath,
+      }),
+    });
+    this.deps.log.debug(`ghost: [[${decision.title}]] suggested`);
+  }
+}

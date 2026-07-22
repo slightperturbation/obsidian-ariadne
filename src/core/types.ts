@@ -31,6 +31,9 @@ export interface ScoredResult {
   confidence: number; // drives UI prominence, 0..1
   /** Surfaced by the vector list but not the lexical one → Layer 2 (Related). */
   semanticOnly?: boolean;
+  /** Raw cosine similarity (0..1-mapped) when a vector matched — the purest
+   * "how close in meaning" signal, used for suggestion thresholds. */
+  cosine?: number;
   spark?: SparkValues;
 }
 

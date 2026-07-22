@@ -16,6 +16,12 @@ export interface AriadneSettings {
   // UI
   showStatusGlyph: boolean;
 
+  // Margin
+  enableMargin: boolean;
+  enableGhostText: boolean;
+  /** Minimum semantic closeness (raw cosine 0..1) before a ghost link is offered. */
+  ghostMinCosine: number;
+
   // Advanced
   debugLogging: boolean;
 }
@@ -32,6 +38,12 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   localEndpoint: "http://localhost:1234/v1",
 
   showStatusGlyph: true,
+
+  enableMargin: true,
+  enableGhostText: true,
+  // bge cosine similarities are compressed upward; 0.7 ≈ "clearly about the
+  // same idea". Lower = chattier, higher = only near-certain suggestions.
+  ghostMinCosine: 0.7,
 
   debugLogging: false,
 };

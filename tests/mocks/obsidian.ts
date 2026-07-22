@@ -21,6 +21,9 @@ export class Setting {
   addDropdown(): this {
     return this;
   }
+  addSlider(): this {
+    return this;
+  }
 }
 export class App {}
 export class TFile {

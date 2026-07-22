@@ -14,6 +14,12 @@ export interface QueryOptions {
   semantic?: boolean;
 }
 
+export interface RelatedOptions {
+  /** The note being written — never suggest a note to itself. */
+  excludePath?: string;
+  limit?: number;
+}
+
 export interface NoteMeta {
   path: string;
   title: string;
@@ -187,6 +193,58 @@ export class IndexManager {
         score: total > 1 ? 1 - rank / (total - 1) : 1,
         confidence: confidence({ fusedRank: rank, total, cosine: cosineById.get(entry.chunkId) }),
         semanticOnly: useSemantic && !lexicalPaths.has(entry.path),
+        cosine: cosineById.get(entry.chunkId),
+        spark: sparkValues(
+          { linkCount: meta.linkCount, mtime: meta.mtime, chunkCount: meta.chunkCount },
+          now,
+        ),
+      };
+    });
+  }
+
+  /**
+   * Notes related to a free-text context (a draft paragraph), for the Margin
+   * and ghost-text suggestions. Differs from query(): no grammar/filters,
+   * OR-combined lexical (any strong term overlap counts), and the context is
+   * embedded as a passage (no BGE query instruction — this is doc-to-doc
+   * similarity), with the note being written excluded.
+   */
+  async related(text: string, opts: RelatedOptions = {}): Promise<ScoredResult[]> {
+    const limit = opts.limit ?? 8;
+    // Strip wikilink brackets so already-made links don't dominate matching.
+    const clean = text.replace(/\[\[|\]\]/g, " ").replace(/\s+/g, " ").trim();
+    if (!clean) return [];
+
+    const lists: string[][] = [this.lexical.rankedIds(clean, 100, "or")];
+    const cosineById = new Map<string, number>();
+    if (this.embedder && this.vectors) {
+      const [vec] = await this.embedder.embed([clean]);
+      const vhits = this.vectors.search(vec, 100);
+      lists.push(vhits.map((h) => h.id));
+      for (const h of vhits) cosineById.set(h.id, (h.score + 1) / 2);
+    }
+
+    const bestPerNote: Array<{ chunkId: string; path: string }> = [];
+    const seen = new Set<string>();
+    for (const { id } of fuse(lists)) {
+      const chunk = this.chunks.get(id);
+      if (!chunk || seen.has(chunk.path) || chunk.path === opts.excludePath) continue;
+      seen.add(chunk.path);
+      bestPerNote.push({ chunkId: id, path: chunk.path });
+    }
+
+    const total = bestPerNote.length;
+    const now = Date.now();
+    return bestPerNote.slice(0, limit).map((entry, rank) => {
+      const chunk = this.chunks.get(entry.chunkId)!;
+      const meta = this.meta.get(entry.path)!;
+      return {
+        path: entry.path,
+        title: meta.title,
+        snippet: makeSnippet(chunk.text),
+        score: total > 1 ? 1 - rank / (total - 1) : 1,
+        confidence: confidence({ fusedRank: rank, total, cosine: cosineById.get(entry.chunkId) }),
+        cosine: cosineById.get(entry.chunkId),
         spark: sparkValues(
           { linkCount: meta.linkCount, mtime: meta.mtime, chunkCount: meta.chunkCount },
           now,

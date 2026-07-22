@@ -100,6 +100,36 @@
   padding: var(--size-4-2) 0;
 }
 
+/* ── The Margin ───────────────────────────────────────────────────────── */
+
+.ariadne-margin {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ariadne-gap);
+}
+
+.ariadne-cards {
+  display: flex;
+  flex-direction: column;
+}
+
+.ariadne-card {
+  padding: var(--size-4-2) var(--size-4-1);
+  border-bottom: 1px solid var(--ariadne-hairline);
+  cursor: default;
+}
+.ariadne-card:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* ── Ghost text ───────────────────────────────────────────────────────── */
+
+.ariadne-ghost {
+  opacity: 0.38;
+  color: var(--ariadne-accent);
+  pointer-events: none;
+}
+
 /* Status glyph: one quiet line at the foot of the Line. */
 .ariadne-glyph {
   font-size: var(--font-ui-smaller);

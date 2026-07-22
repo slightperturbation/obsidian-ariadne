@@ -11,6 +11,11 @@ import type { OrtWasmPaths } from "./index/embeddings/transformers-provider";
 import { WorkerEmbedder } from "./index/embeddings/worker-embedder";
 import { saveIndex, loadIndex, type FileIO } from "./index/persistence";
 import { ARIADNE_VIEW_TYPE, LineView } from "./line/view";
+import { ARIADNE_MARGIN_VIEW_TYPE, MarginView } from "./margin/sidebar-view";
+import { DraftWatcher } from "./margin/draft-watcher";
+import { GhostEngine } from "./margin/ghost/engine";
+import { ghostExtension } from "./margin/ghost/extension";
+import { MarkdownView } from "obsidian";
 
 /** Debounce between the index going idle and a snapshot hitting disk. */
 const SAVE_DELAY_MS = 5_000;
@@ -38,6 +43,8 @@ export default class AriadnePlugin extends Plugin {
   private ortBlobUrls?: OrtWasmPaths;
   private workerBlobUrl?: string;
   private embedder?: WorkerEmbedder;
+  private watcher?: DraftWatcher;
+  private ghost?: GhostEngine;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -60,6 +67,55 @@ export default class AriadnePlugin extends Plugin {
       name: "Focus the Line",
       callback: () => void this.activateLine(),
     });
+
+    this.registerView(
+      ARIADNE_MARGIN_VIEW_TYPE,
+      (leaf) =>
+        new MarginView(leaf, {
+          manager: () => this.manager,
+          watcher: this.getWatcher(),
+          enabled: () => this.settings.enableMargin,
+        }),
+    );
+
+    this.addCommand({
+      id: "open-margin",
+      name: "Open the Margin",
+      callback: () => void this.activateMargin(),
+    });
+
+    // The Margin + ghost text listen to the writing via one shared watcher.
+    this.ghost = new GhostEngine({
+      app: this.app,
+      manager: () => this.manager,
+      enabled: () => this.settings.enableGhostText,
+      minCosine: () => this.settings.ghostMinCosine,
+      log: this.log,
+    });
+    this.getWatcher().subscribe((ctx) => void this.ghost?.onContext(ctx));
+
+    this.registerEditorExtension(
+      ghostExtension({
+        isVim: () =>
+          (this.app.vault as unknown as { getConfig?: (k: string) => unknown }).getConfig?.(
+            "vimMode",
+          ) === true,
+        onDismiss: (path) => this.ghost?.noteDismissed(path),
+        onAccept: (path) => this.log.debug(`ghost link accepted → ${path}`),
+      }),
+    );
+
+    this.registerEvent(
+      this.app.workspace.on("editor-change", (editor, info) => {
+        if (info instanceof MarkdownView) this.getWatcher().onEditorChange(editor, info);
+      }),
+    );
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (view?.editor) this.getWatcher().onFocusChange(view.editor, view);
+      }),
+    );
 
     this.addCommand({
       id: "rebuild-index",
@@ -266,6 +322,21 @@ export default class AriadnePlugin extends Plugin {
     }
   }
 
+  private getWatcher(): DraftWatcher {
+    this.watcher ??= new DraftWatcher();
+    return this.watcher;
+  }
+
+  private async activateMargin(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(ARIADNE_MARGIN_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+      await leaf.setViewState({ type: ARIADNE_MARGIN_VIEW_TYPE, active: false });
+    }
+    await workspace.revealLeaf(leaf);
+  }
+
   private async activateLine(): Promise<void> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(ARIADNE_VIEW_TYPE)[0];
@@ -285,6 +356,7 @@ export default class AriadnePlugin extends Plugin {
       URL.revokeObjectURL(this.ortBlobUrls.mjs);
       URL.revokeObjectURL(this.ortBlobUrls.wasm);
     }
+    this.watcher?.dispose();
     this.scheduler?.dispose();
     // Best-effort: onunload can't await, but the write usually completes.
     void this.saveIndexNow();

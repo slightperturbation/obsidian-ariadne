@@ -75,18 +75,22 @@ export class LexicalIndex {
     this.pathIds.delete(path);
   }
 
-  /** Ranked hits for a query (best first). */
-  search(query: string, limit = 50): LexicalHit[] {
+  /**
+   * Ranked hits for a query (best first). mode "and" (default) is the search
+   * behavior — every term must match; mode "or" suits long free-text contexts
+   * (a draft paragraph) where any strong term overlap is a signal.
+   */
+  search(query: string, limit = 50, mode: "and" | "or" = "and"): LexicalHit[] {
     if (!query.trim()) return [];
     return this.engine
-      .search(query)
+      .search(query, mode === "or" ? { combineWith: "OR" } : undefined)
       .slice(0, limit)
       .map((r) => ({ id: r.id as string, path: r.path as string, score: r.score }));
   }
 
   /** Ranked chunk ids only — the shape RRF consumes. */
-  rankedIds(query: string, limit = 50): string[] {
-    return this.search(query, limit).map((h) => h.id);
+  rankedIds(query: string, limit = 50, mode: "and" | "or" = "and"): string[] {
+    return this.search(query, limit, mode).map((h) => h.id);
   }
 
   get size(): number {

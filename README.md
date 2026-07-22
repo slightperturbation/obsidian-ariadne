@@ -6,7 +6,16 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 1 — indexing core + the Line (read-only).** On top of the Phase 0
+**Phase 2 — the Margin (read-only).** While you write, a right-sidebar panel
+surfaces up to five related notes (typing-pause driven, confidence-scaled
+prominence, click to open / ⌥-click to insert a link), and a CodeMirror
+ghost-text extension offers faint inline `[[link]]` suggestions — Tab
+accepts, Esc dismisses (with per-paragraph dismissal memory), gated behind a
+raw-cosine reticence threshold tunable in settings. Suggestions never fire
+mid-word, inside a wikilink, during IME composition, or for notes already
+linked. Manual test script: [tests/manual/phase-2.md](tests/manual/phase-2.md).
+
+Earlier: **Phase 1 — indexing core + the Line.** On top of the Phase 0
 foundations, the plugin now indexes the vault incrementally (lexical BM25 +
 vector fusion, chunked per heading/paragraph) and surfaces results through the
 Line: a persistent search view with layered results (Found / Related),

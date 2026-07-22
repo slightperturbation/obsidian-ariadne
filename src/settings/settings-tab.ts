@@ -36,6 +36,42 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("Margin").setHeading();
+
+    new Setting(containerEl)
+      .setName("Related notes while writing")
+      .setDesc("Show the Margin: notes related to what you're writing, in the right sidebar.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableMargin).onChange(async (v) => {
+          this.plugin.settings.enableMargin = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Ghost link suggestions")
+      .setDesc("Faint inline [[link]] suggestions after a typing pause. Tab accepts, Esc dismisses.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableGhostText).onChange(async (v) => {
+          this.plugin.settings.enableGhostText = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Suggestion reticence")
+      .setDesc("How semantically close a note must be before a ghost link is offered. Higher = quieter.")
+      .addSlider((s) =>
+        s
+          .setLimits(0.5, 0.9, 0.01)
+          .setValue(this.plugin.settings.ghostMinCosine)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.ghostMinCosine = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
     new Setting(containerEl).setName("Models").setHeading();
 
     new Setting(containerEl)
