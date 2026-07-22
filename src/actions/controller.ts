@@ -19,6 +19,12 @@ import {
 import { buildMocProposal } from "./moc";
 import { buildMergeProposal } from "./merge";
 import {
+  planAttachmentSweep,
+  isEmptyNote,
+  buildDeleteProposal,
+  type AttachmentMove,
+} from "./filing";
+import {
   CONNECTIVE_SCHEMA,
   SCAFFOLD_SCHEMA,
   connectivePrompt,
@@ -45,6 +51,7 @@ import {
   fallbackMoc,
 } from "../model/refactor-tasks";
 import { PreviewModal } from "../ui/preview-modal";
+import { ListPreviewModal } from "../ui/list-preview-modal";
 
 const EXCERPT_CHARS = 600;
 const SEGMENT_PREVIEW_CHARS = 200;
@@ -66,6 +73,7 @@ export class ActionsController {
       router: ModelRouter;
       executor: ActionExecutor;
       lastMarkdown: () => MarkdownView | null;
+      attachmentsFolder: () => string;
       log: Logger;
     },
   ) {}
@@ -474,6 +482,113 @@ export class ActionsController {
         otherTitle: otherFile.basename,
       }),
     );
+  }
+
+  /* ── Filing: attachments sweep ──────────────────────────────────────── */
+
+  async sweepAttachments(): Promise<void> {
+    const { app } = this.deps;
+    const folder = this.deps.attachmentsFolder().replace(/\/+$/, "");
+    if (!folder) {
+      new Notice("Set an attachments folder in Ariadne settings first.");
+      return;
+    }
+    const files = app.vault.getFiles().map((f) => ({
+      path: f.path,
+      name: f.name,
+      extension: f.extension,
+      parentPath: f.parent?.path ?? "",
+    }));
+    const moves = planAttachmentSweep(files, folder, (p) => !!app.vault.getAbstractFileByPath(p));
+    if (moves.length === 0) {
+      new Notice("No root-level attachments to sweep.");
+      return;
+    }
+
+    new ListPreviewModal(
+      app,
+      {
+        title: `Move ${moves.length} attachment${moves.length === 1 ? "" : "s"} into "${folder}"`,
+        description: "Embeds and links are updated automatically.",
+        lines: moves.map((m) => `${m.name}  →  ${folder}/`),
+      },
+      () => void this.applyAttachmentSweep(folder, moves),
+    ).open();
+  }
+
+  private async applyAttachmentSweep(folder: string, moves: AttachmentMove[]): Promise<void> {
+    const { app } = this.deps;
+    try {
+      if (!app.vault.getAbstractFileByPath(folder)) {
+        await app.vault.createFolder(folder).catch(() => {
+          /* concurrent creation */
+        });
+      }
+      const done: AttachmentMove[] = [];
+      for (const m of moves) {
+        const file = app.vault.getAbstractFileByPath(m.fromPath);
+        if (file instanceof TFile) {
+          await app.fileManager.renameFile(file, m.toPath);
+          done.push(m);
+        }
+      }
+      // Register the reversal so the one Undo command covers the sweep.
+      this.deps.executor.pushExternalUndo(
+        `Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder}`,
+        async () => {
+          for (const m of [...done].reverse()) {
+            const moved = app.vault.getAbstractFileByPath(m.toPath);
+            if (moved instanceof TFile) await app.fileManager.renameFile(moved, m.fromPath);
+          }
+        },
+      );
+      new Notice(
+        `✓ Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder} — undoable via "Undo last action".`,
+      );
+    } catch (err) {
+      new Notice(`Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /* ── Filing: empty-note cleanup ─────────────────────────────────────── */
+
+  async cleanupEmptyNotes(): Promise<void> {
+    const { app } = this.deps;
+    // Only small files can be empty — bound the reads.
+    const candidates = app.vault.getMarkdownFiles().filter((f) => f.stat.size < 500);
+    const empties: Array<{ path: string; content: string }> = [];
+    for (const f of candidates) {
+      const content = await app.vault.read(f);
+      if (isEmptyNote(content)) empties.push({ path: f.path, content });
+    }
+    if (empties.length === 0) {
+      new Notice("No empty notes found.");
+      return;
+    }
+
+    const proposal = buildDeleteProposal(
+      `Clean up ${empties.length} empty note${empties.length === 1 ? "" : "s"}`,
+      empties,
+    );
+    new ListPreviewModal(
+      app,
+      {
+        title: proposal.title,
+        description: "These notes are empty (frontmatter/whitespace only). They go to trash.",
+        lines: empties.map((e) => e.path),
+        destructive: true,
+      },
+      () => {
+        void (async () => {
+          try {
+            await this.deps.executor.apply(proposal);
+            new Notice(`✓ ${proposal.title} — undoable via "Undo last action".`);
+          } catch (err) {
+            new Notice(`Not applied: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+      },
+    ).open();
   }
 
   /* ── Undo ───────────────────────────────────────────────────────────── */

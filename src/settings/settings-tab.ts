@@ -137,6 +137,18 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("Filing").setHeading();
+
+    new Setting(containerEl)
+      .setName("Attachments folder")
+      .setDesc("Where the attachments sweep moves root-dumped images, PDFs, and media.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.attachmentsFolder).onChange(async (v) => {
+          this.plugin.settings.attachmentsFolder = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName("Advanced").setHeading();
 
     new Setting(containerEl)

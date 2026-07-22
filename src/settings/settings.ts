@@ -16,6 +16,9 @@ export interface AriadneSettings {
   costLimitUsd: number;
   localEndpoint: string;
 
+  // Filing
+  attachmentsFolder: string;
+
   // UI
   showStatusGlyph: boolean;
 
@@ -44,6 +47,8 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   claudeModel: "claude-haiku-4-5",
   costLimitUsd: 2,
   localEndpoint: "http://localhost:1234/v1",
+
+  attachmentsFolder: "Supporting Files",
 
   showStatusGlyph: true,
 

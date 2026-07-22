@@ -104,6 +104,7 @@ export default class AriadnePlugin extends Plugin {
       router: this.router,
       executor: this.executor,
       lastMarkdown: () => this.resolveMarkdown(),
+      attachmentsFolder: () => this.settings.attachmentsFolder,
       log: this.log,
     });
     this.status.set({ brain: provider.available() ? "cloud" : "none" });
@@ -142,6 +143,18 @@ export default class AriadnePlugin extends Plugin {
       id: "merge-duplicate",
       name: "Merge near-duplicate into this note",
       callback: () => void this.actions.mergeNote(),
+    });
+
+    this.addCommand({
+      id: "sweep-attachments",
+      name: "Sweep root attachments into the attachments folder",
+      callback: () => void this.actions.sweepAttachments(),
+    });
+
+    this.addCommand({
+      id: "cleanup-empty-notes",
+      name: "Clean up empty notes",
+      callback: () => void this.actions.cleanupEmptyNotes(),
     });
 
     this.addCommand({

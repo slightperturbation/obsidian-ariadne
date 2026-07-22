@@ -18,8 +18,16 @@ index over a note's related neighborhood — pure creation, no preview), and
 **near-duplicate merge** (union a close duplicate into the current note and
 trash it, previewed). Commands: *Split this note*, *Generate Map of Content*,
 *Merge near-duplicate*. Manual test script:
-[tests/manual/phase-4.md](tests/manual/phase-4.md). **Deferred to 4b:** the
-filing subsystem (attachments sweep, Inbox/stub triage).
+[tests/manual/phase-4.md](tests/manual/phase-4.md).
+
+**Phase 4b — filing subsystem.** Batch, previewed, undoable filing actions:
+an **attachments sweep** (move root-dumped images/PDFs/media into the
+attachments folder via Obsidian's `fileManager`, which rewrites embeds;
+collision-safe) and **empty-note cleanup** (trash frontmatter/whitespace-only
+notes). Both share the one *Undo last action* command (the executor's undo now
+takes non-text ops too). Manual script:
+[tests/manual/phase-4b.md](tests/manual/phase-4b.md). **Deferred to 4c:** Inbox
+triage and `Untitled`-with-content renaming.
 
 Earlier: **Phase 3 — safe actions + Claude routing.** The first phase that writes to
 the vault, and edits to existing notes go through one path: **propose → preview (diff) →

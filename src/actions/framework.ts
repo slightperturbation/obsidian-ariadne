@@ -27,9 +27,14 @@ export interface ActionProposal {
 
 export interface ExecutedAction {
   title: string;
-  /** Changes that exactly reverse the action, in application order. */
-  inverse: FileChange[];
   at: number;
+  /**
+   * Reverse the action. For text actions this validates the inverse then
+   * applies it (aborting before any change on conflict); filing ops register
+   * their own reversal via pushExternalUndo. Called by undoLast; if it throws,
+   * the action stays on the stack so the user can resolve and retry.
+   */
+  undo: () => Promise<void>;
 }
 
 /** Minimal vault surface; Obsidian adapter + in-memory test double implement it. */
@@ -125,23 +130,46 @@ export class ActionExecutor {
       throw err;
     }
 
-    const executed: ExecutedAction = { title: proposal.title, inverse, at: Date.now() };
-    this.undoStack.push(executed);
-    if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+    // The text undo re-validates the inverse (so a file changed since the
+    // action aborts the undo) then applies it — same abort-before-commit
+    // guarantee as apply().
+    const executed: ExecutedAction = {
+      title: proposal.title,
+      at: Date.now(),
+      undo: async () => {
+        await this.validate(inverse);
+        for (const c of inverse) await this.applyChange(c);
+      },
+    };
+    this.push(executed);
     return executed;
   }
 
   /**
-   * Undo the most recent action in one step — including multi-file actions.
-   * The inverse gets the same conflict validation: if any touched file changed
-   * after the action, the undo aborts rather than destroying newer work.
+   * Register an externally-performed operation (e.g. a batch of file moves via
+   * Obsidian's fileManager, which the text VaultIO can't express) with its own
+   * reversal, so it shares the single "Undo last action" command and stack.
+   */
+  pushExternalUndo(title: string, undo: () => Promise<void>): void {
+    this.push({ title, at: Date.now(), undo });
+  }
+
+  private push(action: ExecutedAction): void {
+    this.undoStack.push(action);
+    if (this.undoStack.length > MAX_UNDO) this.undoStack.shift();
+  }
+
+  /**
+   * Undo the most recent action in one step. The reversal runs before the
+   * action is popped, so a validation failure (a touched file changed since)
+   * leaves it on the stack to resolve and retry, rather than destroying newer
+   * work or losing the undo.
    */
   async undoLast(): Promise<ExecutedAction | null> {
     const last = this.undoStack[this.undoStack.length - 1];
     if (!last) return null;
-    await this.validate(last.inverse);
+    await last.undo();
     this.undoStack.pop();
-    for (const c of last.inverse) await this.applyChange(c);
     return last;
   }
 
