@@ -7,24 +7,47 @@ split falls back to one-note-per-section and MoC to a flat list.
 
 ⚠️ Confirm you're in the **test-vault copy**, not real Syncd.
 
-## 1. Semantic split (the marquee feature)
-- [ ] Open a long note with several `##` sections (or a `#` title + `##`
-      sections). Run **Ariadne: Split this note into atomic notes**.
-- [ ] A **preview** shows: the original note becoming a Map-of-Content stub
-      (its intro kept, plus a `## Contents` list of `[[child]]` links), and one
-      new child note per group — each starting `Part of [[Original]].` and
-      carrying that group's sections verbatim.
-- [ ] **Content check:** every section from the original appears in exactly one
-      child (or, if the model left one out, back in the parent). Nothing is
-      lost — scan the diffs.
-- [ ] Accept → children are created (names auto-disambiguated if they collide),
-      the original becomes the MoC. Open a child: its backlink to the parent
-      resolves; the parent's Contents links resolve.
-- [ ] **Undo:** *Ariadne: Undo last action* reverts the whole split — children
-      removed (to trash), original restored — in one step.
-- [ ] A note with <2 sections → notice "too few sections to split", no preview.
-- [ ] With no key set: split still works via the per-section fallback (one
-      child per `##`).
+## 1. Semantic split — two passes
+
+Split now branches on whether the note is structured. **Command:
+Ariadne: Split this note into atomic notes.**
+
+### 1a. Structuring pass (unstructured note → editable sections)
+- [ ] Open a long, unstructured note (prose, few or no `##` headings) that
+      clearly holds several ideas. Run Split.
+- [ ] A **preview** shows the SAME note rewritten in place: a top callout
+      ("Proposed split — edit these sections…"), your framing/intro text kept,
+      and a `## <proposed title>` section per idea holding the clustered
+      paragraphs (with an italic one-line description).
+- [ ] **Content check:** every original paragraph is present — either under a
+      section or left in place as framing. Nothing paraphrased or dropped
+      (the model assigns paragraphs; it doesn't rewrite them).
+- [ ] Accept → the note now has the proposed sections. Edit them: rename
+      headings, move text between sections, delete a section you don't want.
+- [ ] Undo reverts the restructuring in one step.
+
+### 1b. Already atomic → refusal
+- [ ] Open a short, single-idea note and run Split → a notice says it reads as
+      a single atomic note and suggests adding `##` sections. No changes.
+
+### 1c. Extraction pass (structured note → atomic files)
+- [ ] On the note you structured in 1a (or any note with ≥2 `##` sections),
+      run Split **again**.
+- [ ] A **preview** shows the note becoming a Map-of-Content stub (intro kept,
+      the "Proposed split" callout removed, a `## Contents` list of `[[child]]`
+      links) plus one new child note per group — each `Part of [[Original]].`
+      carrying its sections verbatim.
+- [ ] **Content check:** every section lands in exactly one child (or back in
+      the parent). Accept → children created (names auto-disambiguated on
+      collision), original becomes the MoC. Child backlinks + Contents links
+      resolve.
+- [ ] **Undo** reverts the whole extraction — children trashed, original
+      restored — in one step.
+- [ ] Keyless: extraction still works via the per-section fallback; the
+      structuring pass (1a) requires a model and says so if none is set.
+
+**Typical flow:** unstructured note → Split (structure it) → edit the proposed
+sections → Split again (extract to files).
 
 ## 2. Map of Content
 - [ ] Open a note with a clear neighborhood of related notes. Run

@@ -10,6 +10,9 @@ import {
   segmentNote,
   buildSplitProposal,
   fallbackSplitGroups,
+  paragraphize,
+  buildStructureProposal,
+  stripProposedSplitCallout,
   type SplitGroup,
   type SplitChild,
 } from "./split";
@@ -29,8 +32,11 @@ import {
 import {
   SPLIT_SCHEMA,
   MOC_SCHEMA,
+  ANALYZE_SCHEMA,
   splitPrompt,
   parseSplitGroups,
+  analyzePrompt,
+  parseAnalysis,
   mocPrompt,
   parseMoc,
   fallbackMoc,
@@ -199,8 +205,15 @@ export class ActionsController {
     return take(normalized);
   }
 
-  /* ── Semantic split ─────────────────────────────────────────────────── */
+  /* ── Semantic split (two-pass) ──────────────────────────────────────── */
 
+  /**
+   * Split dispatches on structure. A note with ≥2 heading-sections is extracted
+   * into atomic child files now; an unstructured note is first analyzed — if it
+   * reads as one atomic idea we refuse and ask for sections, otherwise we
+   * restructure it in place into editable proposed sections. The second run on
+   * the now-structured note takes the extract path.
+   */
   async splitNote(): Promise<void> {
     const { app } = this.deps;
     const view = this.deps.lastMarkdown();
@@ -212,11 +225,20 @@ export class ActionsController {
     await view.save();
     const content = await app.vault.read(file);
     const seg = segmentNote(content);
-    if (seg.segments.length < 2) {
-      new Notice("This note has too few sections to split (needs ≥2 headings).");
-      return;
-    }
 
+    if (seg.segments.length >= 2) {
+      await this.extractSplit(file, content, seg);
+    } else {
+      await this.structureSplit(file, content);
+    }
+  }
+
+  /** Pass 2: an already-sectioned note → atomic child files + MoC stub. */
+  private async extractSplit(
+    file: TFile,
+    content: string,
+    seg: ReturnType<typeof segmentNote>,
+  ): Promise<void> {
     let groups: SplitGroup[];
     if (this.deps.router.available()) {
       try {
@@ -254,13 +276,69 @@ export class ActionsController {
       return { ...g, path };
     });
 
+    const proposal = buildSplitProposal({
+      originalPath: file.path,
+      originalContent: content,
+      parentTitle: file.basename,
+      children,
+      isoDate: new Date().toISOString().slice(0, 10),
+    });
+    // Drop the stale "proposed split" callout from the resulting MoC stub (only
+    // the produced `after`, never the conflict-check `before`).
+    for (const c of proposal.changes) {
+      if (c.type === "modify" && c.after) c.after = stripProposedSplitCallout(c.after);
+    }
+    this.preview(proposal);
+  }
+
+  /** Pass 1: an unstructured note → refuse if atomic, else restructure in place. */
+  private async structureSplit(file: TFile, content: string): Promise<void> {
+    if (!this.deps.router.available()) {
+      new Notice(
+        "Splitting an unstructured note needs a reasoning model. Add a Claude API key, or add ## sections marking the parts and run Split again.",
+      );
+      return;
+    }
+    const { paragraphs } = paragraphize(content);
+    if (paragraphs.length < 2) {
+      new Notice("This note is too short to split.");
+      return;
+    }
+
+    let analysis;
+    try {
+      const text = await this.deps.router.run(
+        "scaffold",
+        analyzePrompt({
+          title: file.basename,
+          paragraphs: paragraphs.map((p) => ({ index: p.index, text: p.text })),
+        }),
+        { schema: { ...ANALYZE_SCHEMA }, maxTokens: 2000, thinking: true },
+      );
+      analysis = parseAnalysis(text);
+    } catch (err) {
+      new Notice(`Split analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!analysis) {
+      new Notice("Couldn't analyze this note for splitting.");
+      return;
+    }
+    if (analysis.atomic || analysis.clusters.length < 2) {
+      new Notice(
+        analysis.reason
+          ? `Looks like a single atomic note: ${analysis.reason} Add ## sections to force a split.`
+          : "This reads as a single idea — add ## sections marking the parts you want, then run Split again.",
+      );
+      return;
+    }
+
     this.preview(
-      buildSplitProposal({
-        originalPath: file.path,
-        originalContent: content,
+      buildStructureProposal({
+        path: file.path,
+        content,
         parentTitle: file.basename,
-        children,
-        isoDate: new Date().toISOString().slice(0, 10),
+        clusters: analysis.clusters,
       }),
     );
   }

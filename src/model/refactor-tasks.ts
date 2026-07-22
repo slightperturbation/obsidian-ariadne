@@ -1,5 +1,90 @@
-import type { SplitGroup } from "../actions/split";
+import type { SplitGroup, StructureCluster } from "../actions/split";
 import type { MocSection } from "../actions/moc";
+
+/* ── Pass-1 analysis: atomic, or cluster an unstructured note ──────────── */
+
+export const ANALYZE_SCHEMA = {
+  type: "object",
+  properties: {
+    atomic: {
+      type: "boolean",
+      description: "true if the note already expresses a single atomic idea and should not be split",
+    },
+    reason: { type: "string", description: "one-line explanation (why atomic, or a note on the proposed clustering)" },
+    clusters: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "title of the proposed atomic note" },
+          description: { type: "string", description: "one-line description (≤12 words)" },
+          paragraphIndices: {
+            type: "array",
+            items: { type: "integer" },
+            description: "indices of the paragraphs whose text belongs in this note",
+          },
+        },
+        required: ["title", "description", "paragraphIndices"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["atomic", "reason", "clusters"],
+  additionalProperties: false,
+} as const;
+
+export function analyzePrompt(input: {
+  title: string;
+  paragraphs: Array<{ index: number; text: string }>;
+}): string {
+  return [
+    `Analyze the note "${input.title}" for splitting into atomic Zettelkasten notes (one idea per note).`,
+    ``,
+    `First: does this note already express a SINGLE atomic idea? If so, set atomic=true with a one-line reason — it should not be split, and you may return an empty clusters array.`,
+    ``,
+    `Otherwise it holds several separable ideas: set atomic=false and propose 2–6 clusters, each becoming one suggested atomic note. For each, give a title, a one-line description, and the indices of the paragraphs whose text belongs in it. Group only paragraphs that genuinely form one self-contained idea. You do NOT need to assign every paragraph — leave framing, connective, or introductory paragraphs out of all clusters so they stay in the original note. Do not invent or rewrite content; only reference the paragraph indices given.`,
+    ``,
+    `Paragraphs:`,
+    ...input.paragraphs.map((p) => `[${p.index}] ${p.text.replace(/\s+/g, " ").slice(0, 240)}`),
+  ].join("\n");
+}
+
+export interface AnalysisResult {
+  atomic: boolean;
+  reason: string;
+  clusters: StructureCluster[];
+}
+
+export function parseAnalysis(text: string): AnalysisResult | null {
+  let parsed: { atomic?: unknown; reason?: unknown; clusters?: unknown };
+  try {
+    parsed = JSON.parse(text) as typeof parsed;
+  } catch {
+    return null;
+  }
+  const clusters: StructureCluster[] = [];
+  if (Array.isArray(parsed.clusters)) {
+    for (const c of parsed.clusters) {
+      if (typeof c !== "object" || c === null) continue;
+      const obj = c as Record<string, unknown>;
+      const title = typeof obj.title === "string" ? obj.title.trim() : "";
+      const indices = Array.isArray(obj.paragraphIndices)
+        ? obj.paragraphIndices.filter((n): n is number => Number.isInteger(n))
+        : [];
+      if (!title || indices.length === 0) continue;
+      clusters.push({
+        title,
+        description: typeof obj.description === "string" ? obj.description.trim() : "",
+        paragraphIndices: indices,
+      });
+    }
+  }
+  return {
+    atomic: parsed.atomic === true,
+    reason: typeof parsed.reason === "string" ? parsed.reason.trim() : "",
+    clusters,
+  };
+}
 
 /* ── Semantic split: group segments into atomic notes ─────────────────── */
 

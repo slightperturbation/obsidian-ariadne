@@ -75,7 +75,10 @@ const workerContext = await esbuild.context({
 if (prod) {
   await context.rebuild();
   await workerContext.rebuild();
-  process.exit(0);
+  // Dispose so esbuild's service process shuts down cleanly (no goroutine dump
+  // on a hard process.exit); then let the event loop drain and exit naturally.
+  await context.dispose();
+  await workerContext.dispose();
 } else {
   await Promise.all([context.watch(), workerContext.watch()]);
 }

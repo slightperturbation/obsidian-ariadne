@@ -169,3 +169,108 @@ export function fallbackSplitGroups(seg: SegmentedNote): SplitGroup[] {
     .filter((s) => s.heading)
     .map((s) => ({ title: s.heading, description: "", segmentIndices: [s.index] }));
 }
+
+/* ── Pass 1: in-place structuring of an unstructured note ─────────────── */
+
+export interface Paragraph {
+  index: number;
+  text: string;
+}
+
+export interface ParagraphedNote {
+  /** Frontmatter + a leading `# Title`, kept out of clustering. */
+  intro: string;
+  paragraphs: Paragraph[];
+}
+
+/**
+ * Break a note's body into blank-line-delimited paragraph blocks, numbered for
+ * the model to reference. Frontmatter and a leading H1 title are pulled into
+ * `intro` so they're never clustered into a proposed section.
+ */
+export function paragraphize(content: string): ParagraphedNote {
+  const fm = FRONTMATTER.exec(content)?.[0] ?? "";
+  let rest = content.slice(fm.length);
+  let intro = fm.trimEnd();
+  const title = /^\s*(#\s+[^\n]+)\n?/.exec(rest);
+  if (title) {
+    intro = (intro ? `${intro}\n\n` : "") + title[1].trim();
+    rest = rest.slice(title[0].length);
+  }
+  const blocks = rest
+    .split(/\n\s*\n/)
+    .map((b) => b.trim())
+    .filter((b) => b.length > 0);
+  return { intro, paragraphs: blocks.map((text, index) => ({ index, text })) };
+}
+
+/** One proposed atomic note, as a grouping of the note's own paragraphs. */
+export interface StructureCluster {
+  title: string;
+  description: string;
+  paragraphIndices: number[];
+}
+
+export interface StructureInput {
+  path: string;
+  content: string;
+  parentTitle: string;
+  clusters: StructureCluster[];
+}
+
+const PROPOSAL_CALLOUT =
+  '> [!note] Proposed split — edit these sections (rename, move text between them, delete any you don\'t want), then run "Split this note into atomic notes" again to extract each `##` section as its own note.';
+
+/**
+ * Pass 1 result: the same note rewritten in place with a `##` section per
+ * proposed atomic note, holding that cluster's paragraphs. Content-preserving
+ * by construction — every paragraph is assigned to one section or kept as
+ * parent/framing text — so structuring never loses text, and the user edits
+ * the proposal before a second run extracts it into files.
+ */
+export function buildStructureProposal(input: StructureInput): ActionProposal {
+  const { intro, paragraphs } = paragraphize(input.content);
+  const byIndex = new Map(paragraphs.map((p) => [p.index, p]));
+  const assigned = new Set<number>();
+  const sections: string[] = [];
+
+  for (const cluster of input.clusters) {
+    const texts: string[] = [];
+    for (const idx of [...cluster.paragraphIndices].sort((a, b) => a - b)) {
+      const p = byIndex.get(idx);
+      if (p && !assigned.has(idx)) {
+        assigned.add(idx);
+        texts.push(p.text);
+      }
+    }
+    if (texts.length === 0) continue;
+    const parts = [`## ${cluster.title}`];
+    if (cluster.description) parts.push(`*${cluster.description}*`);
+    parts.push(texts.join("\n\n"));
+    sections.push(parts.join("\n\n"));
+  }
+
+  // Paragraphs no cluster claimed stay in the note as framing/connective text.
+  const leftover = paragraphs.filter((p) => !assigned.has(p.index)).map((p) => p.text);
+
+  const parts: string[] = [];
+  if (intro.trim()) parts.push(intro.trimEnd());
+  parts.push(PROPOSAL_CALLOUT);
+  if (leftover.length) parts.push(leftover.join("\n\n"));
+  parts.push(...sections);
+  const after = `${parts.join("\n\n").replace(/^\n+/, "")}\n`;
+
+  return {
+    title: `Structure "${input.parentTitle}" into ${sections.length} proposed sections`,
+    description: "adds editable sections in place — run Split again to extract them",
+    changes: [{ type: "modify", path: input.path, before: input.content, after }],
+  };
+}
+
+/** Remove the stale "Proposed split" callout once the note is actually extracted. */
+export function stripProposedSplitCallout(content: string): string {
+  return content
+    .replace(/^> \[!note\] Proposed split[^\n]*\n?/m, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+/, "");
+}

@@ -7,10 +7,13 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 ## Status
 
 **Phase 4a — refactoring engine.** Structural refactors on top of the Phase 3
-action framework: **semantic split** (break a long note into linked atomic
-child notes + turn the original into a Map-of-Content stub, as one atomic
-undoable op — content-preserving by construction, model-grouped with a
-per-section fallback), **Map-of-Content generation** (a themed, annotated
+action framework: **semantic split** — a two-pass flow: an *unstructured* note
+is first restructured in place into editable `##` sections (the model clusters
+its paragraphs; content-preserving — it assigns text, never rewrites it), or
+refused if it's already one atomic idea; running Split again on a *structured*
+note extracts each section into a linked atomic child note and turns the
+original into a Map-of-Content stub. All one atomic, undoable op. Then
+**Map-of-Content generation** (a themed, annotated
 index over a note's related neighborhood — pure creation, no preview), and
 **near-duplicate merge** (union a close duplicate into the current note and
 trash it, previewed). Commands: *Split this note*, *Generate Map of Content*,
