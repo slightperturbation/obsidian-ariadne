@@ -12,6 +12,8 @@ export interface AriadneStatus {
   /** Progress through the current indexing burst; both 0 when idle. */
   progressDone: number;
   progressTotal: number;
+  /** Cumulative reasoning-model spend this session (USD). */
+  sessionCostUsd: number;
   lastError?: string;
 }
 
@@ -30,6 +32,7 @@ export class StatusStore {
     indexedNotes: 0,
     progressDone: 0,
     progressTotal: 0,
+    sessionCostUsd: 0,
   };
   private listeners = new Set<Listener>();
 

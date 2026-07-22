@@ -13,6 +13,8 @@ export interface MarginDeps {
   manager: () => IndexManager | undefined;
   watcher: DraftWatcher;
   enabled: () => boolean;
+  /** ⇧-click: weave a bidirectional link with this card's note. */
+  onWeave?: (result: ScoredResult) => void;
 }
 
 /**
@@ -123,7 +125,8 @@ export class MarginView extends ItemView {
 
       card.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
-        if (ev.altKey) this.insertLink(r);
+        if (ev.shiftKey) this.deps.onWeave?.(r);
+        else if (ev.altKey) this.insertLink(r);
         else void this.app.workspace.openLinkText(r.path, "", ev.metaKey || ev.ctrlKey);
       });
       this.cardsEl.appendChild(card);

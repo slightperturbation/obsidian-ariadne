@@ -105,6 +105,27 @@ export class AriadneSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Claude model")
+      .setDesc("Model for reasoning tasks (scaffolds, connective phrasing).")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.claudeModel).onChange(async (v) => {
+          this.plugin.settings.claudeModel = v.trim() || "claude-opus-4-8";
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Session cost limit")
+      .setDesc("Reasoning calls stop once this much (USD) has been spent this session. 0 = no limit.")
+      .addText((t) =>
+        t.setValue(String(this.plugin.settings.costLimitUsd)).onChange(async (v) => {
+          const parsed = Number(v);
+          this.plugin.settings.costLimitUsd = Number.isFinite(parsed) && parsed >= 0 ? parsed : 2;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Local model endpoint")
       .setDesc("OpenAI-compatible endpoint (home-network only; used opportunistically, never required).")
       .addText((t) =>

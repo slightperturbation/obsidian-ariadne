@@ -11,6 +11,9 @@ export interface AriadneSettings {
   // Models
   brain: BrainPreference;
   claudeApiKey: string;
+  claudeModel: string;
+  /** Hard per-session spend cap for reasoning calls (USD); 0 disables the cap. */
+  costLimitUsd: number;
   localEndpoint: string;
 
   // UI
@@ -35,6 +38,8 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
 
   brain: "cloud-first",
   claudeApiKey: "",
+  claudeModel: "claude-opus-4-8",
+  costLimitUsd: 2,
   localEndpoint: "http://localhost:1234/v1",
 
   showStatusGlyph: true,

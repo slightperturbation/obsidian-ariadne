@@ -130,6 +130,60 @@
   pointer-events: none;
 }
 
+/* ── Layer 3 (Do) + previews ──────────────────────────────────────────── */
+
+.ariadne-do-row {
+  color: var(--ariadne-accent);
+  font-size: var(--font-ui-small);
+}
+
+.ariadne-preview-title {
+  font-weight: var(--font-semibold);
+  margin-bottom: var(--size-4-1);
+}
+.ariadne-preview-desc {
+  color: var(--ariadne-muted);
+  font-size: var(--font-ui-smaller);
+  margin-bottom: var(--size-4-2);
+}
+
+.ariadne-diff-card {
+  border: 1px solid var(--ariadne-hairline);
+  border-radius: var(--radius-s);
+  margin-bottom: var(--size-4-2);
+  overflow: hidden;
+}
+.ariadne-diff-head {
+  font-size: var(--font-ui-smaller);
+  color: var(--ariadne-muted);
+  padding: var(--size-4-1) var(--size-4-2);
+  border-bottom: 1px solid var(--ariadne-hairline);
+}
+.ariadne-diff-body {
+  margin: 0;
+  padding: var(--size-4-1) var(--size-4-2);
+  font-size: var(--font-smaller);
+  max-height: 40vh;
+  overflow: auto;
+}
+.ariadne-diff-add { color: var(--color-green); }
+.ariadne-diff-del { color: var(--color-red); opacity: 0.75; }
+.ariadne-diff-same { color: var(--ariadne-muted); }
+.ariadne-diff-skip { color: var(--ariadne-faint); font-style: italic; }
+
+.ariadne-preview-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}
+
+.ariadne-prompt-input {
+  width: 100%;
+  margin-top: var(--size-4-2);
+  resize: vertical;
+}
+
 /* Status glyph: one quiet line at the foot of the Line. */
 .ariadne-glyph {
   font-size: var(--font-ui-smaller);

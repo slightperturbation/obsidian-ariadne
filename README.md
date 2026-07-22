@@ -6,7 +6,20 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 2 — the Margin (read-only).** While you write, a right-sidebar panel
+**Phase 3 — safe actions + Claude routing.** The first phase that writes to
+the vault, and it does so only through one path: **propose → preview (diff) →
+accept → atomic undo**, with a hard invariant that nothing writes without an
+explicit accept and a conflict check that refuses if a file changed since the
+preview. Actions: **new-note scaffolding** (type-aware, Johnny-Decimal home,
+structure-and-key-ideas only — never prose in your voice) and **bidirectional
+link weaving** (⇧↵ in the Line / ⇧-click in the Margin, with model-generated
+connective phrasing). A Claude provider (`claude-opus-4-8` default) runs
+reasoning tasks off the typing path, with a visible session cost in the glyph
+and a hard per-session spend cap. Multi-file undo reverts a whole action in
+one step. Manual test script:
+[tests/manual/phase-3.md](tests/manual/phase-3.md).
+
+Earlier: **Phase 2 — the Margin.** While you write, a right-sidebar panel
 surfaces up to five related notes (typing-pause driven, confidence-scaled
 prominence, click to open / ⌥-click to insert a link), and a CodeMirror
 ghost-text extension offers faint inline `[[link]]` suggestions — Tab

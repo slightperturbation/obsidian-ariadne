@@ -1,4 +1,4 @@
-import { Plugin, Platform, TFile, normalizePath } from "obsidian";
+import { Plugin, Platform, TFile, normalizePath, requestUrl } from "obsidian";
 import { AriadneSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import { AriadneSettingTab } from "./settings/settings-tab";
 import { StatusStore } from "./core/status";
@@ -16,6 +16,35 @@ import { DraftWatcher } from "./margin/draft-watcher";
 import { GhostEngine } from "./margin/ghost/engine";
 import { ghostExtension } from "./margin/ghost/extension";
 import { MarkdownView } from "obsidian";
+import { ClaudeProvider } from "./model/providers/claude";
+import { ModelRouter } from "./model/router";
+import { ActionExecutor } from "./actions/framework";
+import { ObsidianVaultIO } from "./actions/vault-io";
+import { ActionsController } from "./actions/controller";
+import { PromptModal } from "./ui/prompt-modal";
+
+/**
+ * fetch over Obsidian's requestUrl: CORS-free (main-process request), which
+ * direct renderer fetch to api.anthropic.com is not guaranteed to be.
+ */
+const obsidianFetch: typeof fetch = async (input, init) => {
+  const url =
+    typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  const headers: Record<string, string> = {};
+  const h = init?.headers;
+  if (h instanceof Headers) h.forEach((v, k) => (headers[k] = v));
+  else if (Array.isArray(h)) for (const [k, v] of h) headers[k] = v;
+  else if (h) Object.assign(headers, h as Record<string, string>);
+
+  const resp = await requestUrl({
+    url,
+    method: init?.method ?? "GET",
+    headers,
+    body: typeof init?.body === "string" ? init.body : (init?.body as ArrayBuffer | undefined),
+    throw: false,
+  });
+  return new Response(resp.arrayBuffer, { status: resp.status, headers: resp.headers });
+};
 
 /** Debounce between the index going idle and a snapshot hitting disk. */
 const SAVE_DELAY_MS = 5_000;
@@ -45,6 +74,10 @@ export default class AriadnePlugin extends Plugin {
   private embedder?: WorkerEmbedder;
   private watcher?: DraftWatcher;
   private ghost?: GhostEngine;
+  private router!: ModelRouter;
+  private executor!: ActionExecutor;
+  private actions!: ActionsController;
+  private lastMarkdown: MarkdownView | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -53,12 +86,61 @@ export default class AriadnePlugin extends Plugin {
 
     this.addSettingTab(new AriadneSettingTab(this.app, this));
 
+    // ── Phase 3: reasoning + safe actions ────────────────────────────────
+    const provider = new ClaudeProvider({
+      apiKey: () => this.settings.claudeApiKey,
+      model: () => this.settings.claudeModel,
+      fetch: obsidianFetch,
+    });
+    this.router = new ModelRouter({
+      provider,
+      status: this.status,
+      costLimitUsd: () => this.settings.costLimitUsd,
+      log: this.log,
+    });
+    this.executor = new ActionExecutor(new ObsidianVaultIO(this.app));
+    this.actions = new ActionsController({
+      app: this.app,
+      manager: () => this.manager,
+      router: this.router,
+      executor: this.executor,
+      lastMarkdown: () => this.lastMarkdown,
+      log: this.log,
+    });
+    this.status.set({ brain: provider.available() ? "cloud" : "none" });
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => {
+        const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (mv) this.lastMarkdown = mv;
+      }),
+    );
+
+    this.addCommand({
+      id: "new-scaffolded-note",
+      name: "New scaffolded note",
+      callback: () => {
+        new PromptModal(
+          this.app,
+          { title: "What should this note capture?", placeholder: "One idea, a few phrases…" },
+          (seed) => void this.actions.createNote(seed),
+        ).open();
+      },
+    });
+
+    this.addCommand({
+      id: "undo-last-action",
+      name: "Undo last action",
+      callback: () => void this.actions.undoLast(),
+    });
+
     this.registerView(
       ARIADNE_VIEW_TYPE,
       (leaf) =>
         new LineView(leaf, {
           manager: () => this.manager,
           status: this.status,
+          onCreateNote: (seed) => void this.actions.createNote(seed),
+          onWeave: (result) => void this.actions.weave(result),
         }),
     );
 
@@ -75,6 +157,7 @@ export default class AriadnePlugin extends Plugin {
           manager: () => this.manager,
           watcher: this.getWatcher(),
           enabled: () => this.settings.enableMargin,
+          onWeave: (result) => void this.actions.weave(result),
         }),
     );
 
@@ -370,5 +453,7 @@ export default class AriadnePlugin extends Plugin {
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
     this.log?.setEnabled(this.settings.debugLogging);
+    // The brain glyph tracks whether a key is configured.
+    this.status?.set({ brain: this.settings.claudeApiKey.trim() ? "cloud" : "none" });
   }
 }

@@ -18,6 +18,12 @@ Source and license: https://github.com/  (set on publish)
 
 const prod = process.argv[2] === "production";
 
+// Node core modules, both bare (`fs`) and node:-prefixed (`node:fs`). The
+// Anthropic SDK's credential-chain code imports the node: forms; we never hit
+// that path at runtime (the API key is passed directly), so externalizing them
+// is safe — Electron's renderer resolves them if they were ever reached.
+const nodeBuiltins = [...builtins, ...builtins.map((m) => `node:${m}`)];
+
 const shared = {
   banner: { js: banner },
   bundle: true,
@@ -50,7 +56,7 @@ const context = await esbuild.context({
     "@lezer/common",
     "@lezer/highlight",
     "@lezer/lr",
-    ...builtins,
+    ...nodeBuiltins,
   ],
   outfile: "main.js",
 });

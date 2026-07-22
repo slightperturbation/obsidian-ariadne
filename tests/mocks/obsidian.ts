@@ -34,6 +34,16 @@ export class TFile {
   parent: { path: string } | null = null;
 }
 export class WorkspaceLeaf {}
+export class Modal {
+  contentEl = { replaceChildren() {}, classList: { add() {} } } as unknown as HTMLElement;
+  scope = { register() {} };
+  constructor(public app: App) {}
+  open(): void {}
+  close(): void {}
+}
+export class Notice {
+  constructor(public message?: string) {}
+}
 export const normalizePath = (p: string): string => p.replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
 export class ItemView {
   constructor(public leaf: WorkspaceLeaf) {}

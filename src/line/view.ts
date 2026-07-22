@@ -14,6 +14,10 @@ export interface LineDeps {
   /** Getter, not instance — the manager is created after layout-ready. */
   manager: () => IndexManager | undefined;
   status: StatusStore;
+  /** Layer 3 (Do): create a scaffolded note from the query. */
+  onCreateNote?: (seed: string) => void;
+  /** Layer 3 (Do): weave a bidirectional link with the selected result (⇧↵). */
+  onWeave?: (result: ScoredResult) => void;
 }
 
 /**
@@ -92,10 +96,16 @@ export class LineView extends ItemView {
             : s.semantic === "fallback"
               ? " · semantic fallback"
               : " · semantic on";
+      const brain =
+        s.brain === "cloud"
+          ? ` · brain ${
+              s.sessionCostUsd >= 0.005 ? `$${s.sessionCostUsd.toFixed(2)}` : "ready"
+            }`
+          : "";
       this.glyphEl.textContent =
         s.index === "error"
           ? `index error — ${s.lastError ?? "unknown"}`
-          : `${s.indexedNotes} notes · ${state}${semantic}`;
+          : `${s.indexedNotes} notes · ${state}${semantic}${brain}`;
       this.glyphEl.classList.toggle("is-error", s.index === "error");
     });
 
@@ -153,6 +163,15 @@ export class LineView extends ItemView {
     this.setResults(fused);
   }
 
+  /** Total selectable rows: results + the Layer-3 create row when present. */
+  private get rowCount(): number {
+    return this.results.length + (this.canCreate ? 1 : 0);
+  }
+
+  private get canCreate(): boolean {
+    return !!this.deps.onCreateNote && !!this.inputEl?.value.trim();
+  }
+
   private setResults(results: ScoredResult[]): void {
     // Display order: Layer 1 (Found) block, then Layer 2 (Related) block —
     // selection walks the same order, so keyboard and eyes agree.
@@ -160,7 +179,7 @@ export class LineView extends ItemView {
       ...results.filter((r) => !r.semanticOnly),
       ...results.filter((r) => r.semanticOnly),
     ];
-    this.selected = Math.max(0, Math.min(this.selected, this.results.length - 1));
+    this.selected = Math.max(0, Math.min(this.selected, this.rowCount - 1));
     this.renderNow();
   }
 
@@ -174,24 +193,48 @@ export class LineView extends ItemView {
           this.renderNow();
         }
       },
-    }, emptyHint);
+    }, this.canCreate ? undefined : emptyHint);
+
+    // Layer 3 (Do): the create row sits after the results, index rowCount-1.
+    if (this.canCreate) {
+      const doc = this.resultsEl.ownerDocument;
+      const label = doc.createElement("div");
+      label.classList.add("ariadne-section-label");
+      label.textContent = "Do";
+      this.resultsEl.appendChild(label);
+
+      const row = doc.createElement("div");
+      row.classList.add("ariadne-row", "ariadne-do-row");
+      if (this.selected === this.results.length) row.classList.add("is-selected");
+      row.textContent = `＋ Create note “${this.inputEl.value.trim()}”`;
+      row.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        this.deps.onCreateNote?.(this.inputEl.value.trim());
+      });
+      this.resultsEl.appendChild(row);
+    }
   }
 
   private onKeydown(ev: KeyboardEvent): void {
     if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
       ev.preventDefault();
-      if (this.results.length === 0) return;
+      if (this.rowCount === 0) return;
       const delta = ev.key === "ArrowDown" ? 1 : -1;
-      this.selected =
-        (this.selected + delta + this.results.length) % this.results.length;
+      this.selected = (this.selected + delta + this.rowCount) % this.rowCount;
       this.renderNow();
       return;
     }
     if (ev.key === "Enter") {
       ev.preventDefault();
+      // The Layer-3 create row.
+      if (this.canCreate && this.selected === this.results.length) {
+        this.deps.onCreateNote?.(this.inputEl.value.trim());
+        return;
+      }
       const result = this.results[this.selected];
       if (!result) return;
-      if (ev.altKey) this.insertLink(result);
+      if (ev.shiftKey) this.deps.onWeave?.(result);
+      else if (ev.altKey) this.insertLink(result);
       else this.openResult(result, ev.metaKey || ev.ctrlKey);
       return;
     }
