@@ -42,7 +42,14 @@ export class Modal {
   close(): void {}
 }
 export class Notice {
-  constructor(public message?: string) {}
+  constructor(
+    public message?: string | DocumentFragment,
+    public duration?: number,
+  ) {}
+  hide(): void {}
+  setMessage(): this {
+    return this;
+  }
 }
 export const normalizePath = (p: string): string => p.replace(/\/+/g, "/").replace(/^\/|\/$/g, "");
 export class ItemView {

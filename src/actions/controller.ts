@@ -97,15 +97,17 @@ export class ActionsController {
     let phrase: string | undefined;
     if (this.deps.router.available()) {
       try {
-        const text = await this.deps.router.run(
-          "connective",
-          connectivePrompt({
-            sourceTitle: sourceFile.basename,
-            sourceExcerpt: sourceContent.slice(0, EXCERPT_CHARS),
-            targetTitle: targetFile.basename,
-            targetExcerpt: targetContent.slice(0, EXCERPT_CHARS),
-          }),
-          { schema: { ...CONNECTIVE_SCHEMA }, maxTokens: 300 },
+        const text = await this.withWorkingNotice("Ariadne is drafting the connection…", () =>
+          this.deps.router.run(
+            "connective",
+            connectivePrompt({
+              sourceTitle: sourceFile.basename,
+              sourceExcerpt: sourceContent.slice(0, EXCERPT_CHARS),
+              targetTitle: targetFile.basename,
+              targetExcerpt: targetContent.slice(0, EXCERPT_CHARS),
+            }),
+            { schema: { ...CONNECTIVE_SCHEMA }, maxTokens: 300 },
+          ),
         );
         phrase = parseConnective(text) ?? undefined;
       } catch (err) {
@@ -138,14 +140,16 @@ export class ActionsController {
     let scaffold: ScaffoldResult;
     if (this.deps.router.available()) {
       try {
-        const text = await this.deps.router.run(
-          "scaffold",
-          scaffoldPrompt({
-            seed,
-            folders,
-            relatedTitles: related.map((r) => r.title),
-          }),
-          { schema: { ...SCAFFOLD_SCHEMA }, maxTokens: 1500, thinking: true },
+        const text = await this.withWorkingNotice("Ariadne is scaffolding the note…", () =>
+          this.deps.router.run(
+            "scaffold",
+            scaffoldPrompt({
+              seed,
+              folders,
+              relatedTitles: related.map((r) => r.title),
+            }),
+            { schema: { ...SCAFFOLD_SCHEMA }, maxTokens: 1500, thinking: true },
+          ),
         );
         scaffold = parseScaffold(text);
       } catch (err) {
@@ -242,17 +246,19 @@ export class ActionsController {
     let groups: SplitGroup[];
     if (this.deps.router.available()) {
       try {
-        const text = await this.deps.router.run(
-          "scaffold",
-          splitPrompt({
-            title: file.basename,
-            segments: seg.segments.map((s) => ({
-              index: s.index,
-              heading: s.heading,
-              preview: s.text.replace(/\s+/g, " ").slice(0, SEGMENT_PREVIEW_CHARS),
-            })),
-          }),
-          { schema: { ...SPLIT_SCHEMA }, maxTokens: 1500, thinking: true },
+        const text = await this.withWorkingNotice("Ariadne is grouping sections to split…", () =>
+          this.deps.router.run(
+            "scaffold",
+            splitPrompt({
+              title: file.basename,
+              segments: seg.segments.map((s) => ({
+                index: s.index,
+                heading: s.heading,
+                preview: s.text.replace(/\s+/g, " ").slice(0, SEGMENT_PREVIEW_CHARS),
+              })),
+            }),
+            { schema: { ...SPLIT_SCHEMA }, maxTokens: 1500, thinking: true },
+          ),
         );
         groups = parseSplitGroups(text);
         if (groups.length === 0) groups = fallbackSplitGroups(seg);
@@ -307,13 +313,15 @@ export class ActionsController {
 
     let analysis;
     try {
-      const text = await this.deps.router.run(
-        "scaffold",
-        analyzePrompt({
-          title: file.basename,
-          paragraphs: paragraphs.map((p) => ({ index: p.index, text: p.text })),
-        }),
-        { schema: { ...ANALYZE_SCHEMA }, maxTokens: 2000, thinking: true },
+      const text = await this.withWorkingNotice("Ariadne is analyzing this note to split…", () =>
+        this.deps.router.run(
+          "scaffold",
+          analyzePrompt({
+            title: file.basename,
+            paragraphs: paragraphs.map((p) => ({ index: p.index, text: p.text })),
+          }),
+          { schema: { ...ANALYZE_SCHEMA }, maxTokens: 2000, thinking: true },
+        ),
       );
       analysis = parseAnalysis(text);
     } catch (err) {
@@ -369,13 +377,15 @@ export class ActionsController {
     let moc = fallbackMoc(file.basename, titles);
     if (this.deps.router.available()) {
       try {
-        const text = await this.deps.router.run(
-          "scaffold",
-          mocPrompt({
-            seedTitle: file.basename,
-            neighborhood: neighborhood.map((r) => ({ title: r.title, excerpt: r.snippet })),
-          }),
-          { schema: { ...MOC_SCHEMA }, maxTokens: 1500, thinking: true },
+        const text = await this.withWorkingNotice("Ariadne is building the Map of Content…", () =>
+          this.deps.router.run(
+            "scaffold",
+            mocPrompt({
+              seedTitle: file.basename,
+              neighborhood: neighborhood.map((r) => ({ title: r.title, excerpt: r.snippet })),
+            }),
+            { schema: { ...MOC_SCHEMA }, maxTokens: 1500, thinking: true },
+          ),
         );
         moc = parseMoc(text, new Set(titles)) ?? moc;
       } catch (err) {
@@ -451,6 +461,21 @@ export class ActionsController {
   }
 
   /* ── Internals ──────────────────────────────────────────────────────── */
+
+  /**
+   * Run an async model task behind a persistent "working" notice, so the user
+   * gets immediate feedback that Ariadne is thinking instead of an apparent
+   * hang until the preview appears. The notice clears when the task settles
+   * (success or error), before the next UI step.
+   */
+  private async withWorkingNotice<T>(message: string, work: () => Promise<T>): Promise<T> {
+    const notice = new Notice(message, 0);
+    try {
+      return await work();
+    } finally {
+      notice.hide();
+    }
+  }
 
   /** Preview → accept gate for actions that edit existing notes (weaving). */
   private preview(proposal: ActionProposal): void {
