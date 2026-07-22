@@ -65,6 +65,28 @@ describe("buildStructureProposal", () => {
     expect(after).toContain("# My messy note");
   });
 
+  it("preserves quoted text and exact wording verbatim — never rewritten", () => {
+    const quoteNote = [
+      "Some framing.",
+      "",
+      'Korzybski wrote, "A map is not the territory," and it stuck.',
+      "",
+      "He also said: “the word is not the thing” — note the curly quotes, the em‑dash, and 1,234 exact digits.",
+    ].join("\n");
+    const proposal = buildStructureProposal({
+      path: "q.md",
+      content: quoteNote,
+      parentTitle: "Q",
+      clusters: [{ title: "General semantics", description: "map/territory", paragraphIndices: [1, 2] }],
+    });
+    const after = proposal.changes[0].after!;
+    // Both quoted paragraphs appear byte-for-byte, quotes and punctuation intact.
+    expect(after).toContain('Korzybski wrote, "A map is not the territory," and it stuck.');
+    expect(after).toContain(
+      "He also said: “the word is not the thing” — note the curly quotes, the em‑dash, and 1,234 exact digits.",
+    );
+  });
+
   it("de-dupes a paragraph claimed by two clusters (first wins)", () => {
     const proposal = buildStructureProposal({
       path: "n.md",

@@ -40,9 +40,17 @@ export function analyzePrompt(input: {
   return [
     `Analyze the note "${input.title}" for splitting into atomic Zettelkasten notes (one idea per note).`,
     ``,
-    `First: does this note already express a SINGLE atomic idea? If so, set atomic=true with a one-line reason — it should not be split, and you may return an empty clusters array.`,
+    `You are ONLY grouping the note's existing paragraphs by their index numbers. The paragraph text is preserved exactly and merely moved — you must NOT rewrite, rephrase, summarize, condense, translate, re-punctuate, or otherwise edit any of the note's words. Never reproduce the paragraph text back to me; reference paragraphs only by index.`,
     ``,
-    `Otherwise it holds several separable ideas: set atomic=false and propose 2–6 clusters, each becoming one suggested atomic note. For each, give a title, a one-line description, and the indices of the paragraphs whose text belongs in it. Group only paragraphs that genuinely form one self-contained idea. You do NOT need to assign every paragraph — leave framing, connective, or introductory paragraphs out of all clusters so they stay in the original note. Do not invent or rewrite content; only reference the paragraph indices given.`,
+    `First: does this note already express a SINGLE atomic idea? If so, set atomic=true with a one-line reason — it should not be split, and return an empty clusters array.`,
+    ``,
+    `Otherwise it holds several separable ideas: set atomic=false and propose 2–6 clusters, each becoming one suggested atomic note. For each, give the indices of the paragraphs that belong in it plus two short pieces of generated text:`,
+    `- title: terse, in the note's own voice and terminology (reuse the words the note already uses); a label, not a sentence.`,
+    `- description: ≤10 words, a plain topical label of what the cluster is about. It must NOT paraphrase, summarize, or quote the note's content — no phrases lifted or reworded from the text, and never anything in quotation marks from the note.`,
+    ``,
+    `Group only paragraphs that genuinely form one self-contained idea. You do NOT need to assign every paragraph — leave framing, connective, or introductory paragraphs out of all clusters so they stay in the original note.`,
+    ``,
+    `Treat any quoted passage in the note as immutable: it stays exactly as written, inside whatever paragraph it's in. Do not alter, re-punctuate, or echo quotes anywhere in your output.`,
     ``,
     `Paragraphs:`,
     ...input.paragraphs.map((p) => `[${p.index}] ${p.text.replace(/\s+/g, " ").slice(0, 240)}`),
@@ -123,7 +131,7 @@ export function splitPrompt(input: {
     `Segments:`,
     ...input.segments.map((s) => `[${s.index}] ${s.heading || "(no heading)"} — ${s.preview}`),
     ``,
-    `Every segment should be assigned to exactly one note. Prefer keeping tightly-related segments together; don't over-fragment. Titles name the single idea; descriptions are telegraphic.`,
+    `You are only grouping existing segments by index — the segment text is preserved exactly and moved unchanged; do not rewrite, rephrase, or edit any of it, and never alter quoted passages. Every segment should be assigned to exactly one note. Prefer keeping tightly-related segments together; don't over-fragment. Titles name the single idea in the note's own words; descriptions are telegraphic topical labels (≤10 words), never a paraphrase or quote of the content.`,
   ].join("\n");
 }
 

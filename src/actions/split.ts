@@ -222,11 +222,14 @@ const PROPOSAL_CALLOUT =
   '> [!note] Proposed split — edit these sections (rename, move text between them, delete any you don\'t want), then run "Split this note into atomic notes" again to extract each `##` section as its own note.';
 
 /**
- * Pass 1 result: the same note rewritten in place with a `##` section per
- * proposed atomic note, holding that cluster's paragraphs. Content-preserving
- * by construction — every paragraph is assigned to one section or kept as
- * parent/framing text — so structuring never loses text, and the user edits
- * the proposal before a second run extracts it into files.
+ * Pass 1 result: the same note reorganized in place with a `##` section per
+ * proposed atomic note, holding that cluster's paragraphs. The model supplies
+ * only the section titles/descriptions (generated); every line of the note's
+ * body is the ORIGINAL paragraph text, moved verbatim — never rewritten,
+ * rephrased, or re-punctuated, so quotes and exact wording are preserved.
+ * Content-preserving by construction: every paragraph is assigned to one
+ * section or kept as parent/framing text, so structuring never loses or
+ * alters text; the user edits the proposal before a second run extracts it.
  */
 export function buildStructureProposal(input: StructureInput): ActionProposal {
   const { intro, paragraphs } = paragraphize(input.content);
