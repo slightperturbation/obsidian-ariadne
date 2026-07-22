@@ -1,0 +1,13 @@
+node_modules/
+main.js
+embed-worker.js
+# Persisted search index — written here by the plugin when the plugin dir is
+# symlinked to this repo during development. Vault-specific; contains note text.
+/index/
+ort-wasm-simd-threaded.asyncify.mjs
+ort-wasm-simd-threaded.asyncify.wasm
+*.js.map
+data.json
+dist/
+coverage/
+.DS_Store

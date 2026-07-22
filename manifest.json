@@ -1,0 +1,10 @@
+{
+  "id": "ariadne",
+  "name": "Ariadne",
+  "version": "0.0.1",
+  "minAppVersion": "1.5.0",
+  "description": "One line to search and connect your notes; a margin that suggests links and structure as you write. Local-first, approval-first.",
+  "author": "Brian Allen (Dexter)",
+  "authorUrl": "",
+  "isDesktopOnly": false
+}
