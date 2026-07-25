@@ -67,6 +67,11 @@ cached after; the deterministic hash embedder is the offline fallback). The
 model loads in the background: lexical search is live immediately, and notes
 gain vectors as the backfill completes.
 
+**Both the model and the vector store live in a Web Worker** (`index-worker.js`),
+so neither the embedding nor the cosine scan can stall typing — and because
+they share a host, indexing a note and answering a query each take a single
+round trip, with vectors never crossing the thread boundary.
+
 The index persists to `.obsidian/plugins/ariadne/index/` as chunked files
 (JSON chunks + int8-quantized binary vectors, each part under Obsidian Sync's
 5 MB cap), so restarts warm-start from the snapshot and only re-index notes

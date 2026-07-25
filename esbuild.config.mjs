@@ -61,15 +61,15 @@ const context = await esbuild.context({
   outfile: "main.js",
 });
 
-// The embedding worker: bundled separately, loaded via a blob: URL at runtime.
+// The index worker (embedding model + vector store): bundled separately, loaded via a blob: URL at runtime.
 // IIFE (a worker has no module system); node-only optional deps stay external
 // and are never reached on the worker's browser-env code path.
 const workerContext = await esbuild.context({
   ...shared,
-  entryPoints: ["src/index/embeddings/embed-worker.ts"],
+  entryPoints: ["src/index/embeddings/index-worker.ts"],
   format: "iife",
   external: ["onnxruntime-node", "sharp", ...builtins],
-  outfile: "embed-worker.js",
+  outfile: "index-worker.js",
 });
 
 if (prod) {

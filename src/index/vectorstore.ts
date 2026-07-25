@@ -1,80 +1,176 @@
-export interface VectorHit {
-  id: string;
-  /** cosine similarity in [-1, 1]. */
-  score: number;
-}
+import type { IndexEntry, VectorIndex, VectorHit } from "./vector-index";
+
+export type { VectorHit } from "./vector-index";
+
+const INITIAL_SLOTS = 256;
 
 /**
  * Brute-force cosine vector store. Vectors are normalized on insert, so a query
- * reduces to a dot-product scan. Correct and fast below ~20k vectors, which is
- * well beyond this vault; avoids the extra WASM/ANN failure surface (especially
- * on iOS). Ids are chunk ids; note-path tracking allows whole-note removal.
+ * reduces to a dot-product scan.
+ *
+ * Storage is one contiguous Float32Array rather than a Map of small arrays:
+ * at ~50k chunks that is the difference between 50k separately-allocated
+ * typed arrays (poor cache locality, heavy object overhead) and a single
+ * sequential scan. Search selects the top-k against a running threshold
+ * instead of materializing and sorting a hit object per vector.
+ *
+ * No ANN index: exact search keeps the failure surface small (notably on iOS),
+ * and with the scan off the main thread the cost is affordable at this scale.
  */
-export class VectorStore {
-  private vectors = new Map<string, Float32Array>();
-  private pathIds = new Map<string, Set<string>>();
+export class VectorStore implements VectorIndex {
+  private data: Float32Array;
+  /** slot → id, or null for a freed slot. */
+  private slotIds: Array<string | null> = [];
+  private slotOf = new Map<string, number>();
+  private pathSlots = new Map<string, Set<number>>();
+  private freeSlots: number[] = [];
+  /** High-water mark of used slots (including freed holes below it). */
+  private used = 0;
 
-  constructor(public readonly dim: number) {}
+  constructor(public readonly dim: number) {
+    this.data = new Float32Array(INITIAL_SLOTS * dim);
+  }
 
-  private normalize(v: ArrayLike<number>): Float32Array {
-    const out = new Float32Array(this.dim);
+  private ensureCapacity(slot: number): void {
+    const needed = (slot + 1) * this.dim;
+    if (needed <= this.data.length) return;
+    let capacity = Math.max(this.data.length * 2, needed);
+    // Grow in whole slots.
+    capacity = Math.ceil(capacity / this.dim) * this.dim;
+    const grown = new Float32Array(capacity);
+    grown.set(this.data);
+    this.data = grown;
+  }
+
+  /** Write `vec` normalized into `slot`. */
+  private writeNormalized(slot: number, vec: ArrayLike<number>): void {
+    const base = slot * this.dim;
     let norm = 0;
     for (let i = 0; i < this.dim; i++) {
-      const x = v[i] ?? 0;
-      out[i] = x;
+      const x = vec[i] ?? 0;
+      this.data[base + i] = x;
       norm += x * x;
     }
     norm = Math.sqrt(norm);
-    if (norm > 0) for (let i = 0; i < this.dim; i++) out[i] /= norm;
-    return out;
+    if (norm > 0) {
+      for (let i = 0; i < this.dim; i++) this.data[base + i] /= norm;
+    }
   }
 
   upsert(id: string, path: string, vec: ArrayLike<number>): void {
     if (vec.length !== this.dim) {
       throw new Error(`vector dim ${vec.length} != store dim ${this.dim}`);
     }
-    this.vectors.set(id, this.normalize(vec));
-    let ids = this.pathIds.get(path);
-    if (!ids) {
-      ids = new Set<string>();
-      this.pathIds.set(path, ids);
+    let slot = this.slotOf.get(id);
+    if (slot === undefined) {
+      slot = this.freeSlots.pop();
+      if (slot === undefined) {
+        slot = this.used;
+        this.used += 1;
+      }
+      this.ensureCapacity(slot);
+      this.slotOf.set(id, slot);
+      this.slotIds[slot] = id;
     }
-    ids.add(id);
+    this.writeNormalized(slot, vec);
+
+    let slots = this.pathSlots.get(path);
+    if (!slots) {
+      slots = new Set<number>();
+      this.pathSlots.set(path, slots);
+    }
+    slots.add(slot);
   }
 
   removePath(path: string): void {
-    const ids = this.pathIds.get(path);
-    if (!ids) return;
-    for (const id of ids) this.vectors.delete(id);
-    this.pathIds.delete(path);
-  }
-
-  search(query: ArrayLike<number>, limit = 50): VectorHit[] {
-    const q = this.normalize(query);
-    const hits: VectorHit[] = [];
-    for (const [id, vec] of this.vectors) {
-      let dot = 0;
-      for (let i = 0; i < this.dim; i++) dot += q[i] * vec[i];
-      hits.push({ id, score: dot });
+    const slots = this.pathSlots.get(path);
+    if (!slots) return;
+    for (const slot of slots) {
+      const id = this.slotIds[slot];
+      if (id !== null && id !== undefined) this.slotOf.delete(id);
+      this.slotIds[slot] = null;
+      this.freeSlots.push(slot);
     }
-    hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-    return hits.slice(0, limit);
+    this.pathSlots.delete(path);
   }
 
-  rankedIds(query: ArrayLike<number>, limit = 50): string[] {
-    return this.search(query, limit).map((h) => h.id);
+  async search(query: ArrayLike<number>, limit = 50, floor = -1): Promise<VectorHit[]> {
+    return this.searchSync(query, limit, floor);
   }
 
-  /** All stored vectors (normalized), for persistence snapshots. */
-  entries(): IterableIterator<[string, Float32Array]> {
-    return this.vectors.entries();
+  /** The scan itself. Synchronous so the worker can call it directly. */
+  searchSync(query: ArrayLike<number>, limit = 50, floor = -1): VectorHit[] {
+    // Normalize the query once into a scratch buffer.
+    const q = new Float32Array(this.dim);
+    let qnorm = 0;
+    for (let i = 0; i < this.dim; i++) {
+      const x = query[i] ?? 0;
+      q[i] = x;
+      qnorm += x * x;
+    }
+    qnorm = Math.sqrt(qnorm);
+    if (qnorm > 0) for (let i = 0; i < this.dim; i++) q[i] /= qnorm;
+
+    // Top-k against a rising threshold: no per-vector allocation, no full sort.
+    const topScores: number[] = [];
+    const topSlots: number[] = [];
+    let threshold = floor;
+
+    for (let slot = 0; slot < this.used; slot++) {
+      if (this.slotIds[slot] == null) continue;
+      const base = slot * this.dim;
+      let dot = 0;
+      for (let i = 0; i < this.dim; i++) dot += q[i] * this.data[base + i];
+      if (dot < threshold) continue;
+
+      // Insertion into a k-sized descending list.
+      let pos = topScores.length;
+      while (pos > 0 && topScores[pos - 1] < dot) pos -= 1;
+      topScores.splice(pos, 0, dot);
+      topSlots.splice(pos, 0, slot);
+      if (topScores.length > limit) {
+        topScores.pop();
+        topSlots.pop();
+      }
+      if (topScores.length === limit) {
+        threshold = Math.max(floor, topScores[topScores.length - 1]);
+      }
+    }
+
+    const hits: VectorHit[] = [];
+    for (let i = 0; i < topSlots.length; i++) {
+      const id = this.slotIds[topSlots[i]];
+      if (id != null) hits.push({ id, score: topScores[i] });
+    }
+    return hits;
+  }
+
+  async entries(): Promise<Array<[string, Float32Array]>> {
+    return this.entriesSync();
+  }
+
+  entriesSync(): Array<[string, Float32Array]> {
+    const out: Array<[string, Float32Array]> = [];
+    for (let slot = 0; slot < this.used; slot++) {
+      const id = this.slotIds[slot];
+      if (id == null) continue;
+      const base = slot * this.dim;
+      out.push([id, this.data.slice(base, base + this.dim)]);
+    }
+    return out;
   }
 
   has(id: string): boolean {
-    return this.vectors.has(id);
+    return this.slotOf.has(id);
   }
 
   get size(): number {
-    return this.vectors.size;
+    return this.slotOf.size;
+  }
+
+  /** Replace one note's vectors wholesale (the worker's atomic index step). */
+  replacePath(path: string, entries: Array<IndexEntry & { vec: ArrayLike<number> }>): void {
+    this.removePath(path);
+    for (const e of entries) this.upsert(e.id, path, e.vec);
   }
 }

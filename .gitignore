@@ -1,6 +1,6 @@
 node_modules/
 main.js
-embed-worker.js
+index-worker.js
 # Persisted search index — written here by the plugin when the plugin dir is
 # symlinked to this repo during development. Vault-specific; contains note text.
 /index/

@@ -1,6 +1,7 @@
 import { chunkNote } from "./chunker";
 import { LexicalIndex } from "./lexical";
 import { VectorStore } from "./vectorstore";
+import type { VectorIndex, VectorHit } from "./vector-index";
 import { fuse } from "./fusion";
 import { confidence } from "./confidence";
 import { sparkValues } from "./spark";
@@ -65,7 +66,7 @@ function makeSnippet(text: string): string {
  */
 export class IndexManager {
   private lexical = new LexicalIndex();
-  private vectors?: VectorStore;
+  private vectors?: VectorIndex;
   private chunks = new Map<string, Chunk>();
   /** chunk ids per note path — keeps removeNote O(chunks in that note). */
   private pathChunks = new Map<string, Set<string>>();
@@ -90,10 +91,12 @@ export class IndexManager {
    * paths whose chunks lack vectors from this provider; the caller re-indexes
    * them to backfill. Swapping providers invalidates all stored vectors.
    */
-  setEmbedder(embedder: EmbeddingProvider): string[] {
+  setEmbedder(embedder: EmbeddingProvider, vectors?: VectorIndex): string[] {
     this.embedder = embedder;
-    if (this.embedderId !== embedder.id || !this.vectors || this.vectors.dim !== embedder.dim) {
-      this.vectors = new VectorStore(embedder.dim);
+    const changed =
+      this.embedderId !== embedder.id || !this.vectors || this.vectors.dim !== embedder.dim;
+    if (changed || vectors) {
+      this.vectors = vectors ?? new VectorStore(embedder.dim);
       this.embedderId = embedder.id;
       this.unembedded = new Set(
         [...this.meta.values()].filter((m) => m.chunkCount > 0).map((m) => m.path),
@@ -111,22 +114,32 @@ export class IndexManager {
    */
   async indexNote(note: SourceNote): Promise<void> {
     const chunks = chunkNote(note.path, note.content);
+    // Capture the store: setEmbedder() can swap it during an await below, and
+    // writing vectors from the old model into the new store would mix
+    // embedding spaces (or throw on a dim mismatch).
+    const store = this.vectors;
+    const generation = this.embedderId;
+    const superseded = () => this.vectors !== store || this.embedderId !== generation;
 
     let vecs: Float32Array[] | undefined;
-    if (chunks.length > 0 && this.embedder && this.vectors) {
-      // Capture the store: setEmbedder() can swap it during this await, and
-      // writing vectors from the old model into the new store would mix
-      // embedding spaces (or throw on a dim mismatch).
-      const store = this.vectors;
-      const generation = this.embedderId;
-      vecs = await this.embedder.embed(chunks.map((c) => c.text));
-      if (this.vectors !== store || this.embedderId !== generation) {
-        // Superseded mid-flight; the backfill for the new provider re-indexes.
-        return;
+    let storedByIndex = false;
+    if (chunks.length > 0 && store) {
+      if (store.indexTexts) {
+        // The worker embeds and stores in one step, so the vectors never cross
+        // the thread boundary — and the replace is atomic on its side.
+        await store.indexTexts(
+          note.path,
+          chunks.map((c) => ({ id: c.id, text: c.text })),
+        );
+        if (superseded()) return;
+        storedByIndex = true;
+      } else if (this.embedder) {
+        vecs = await this.embedder.embed(chunks.map((c) => c.text));
+        if (superseded()) return;
       }
     }
 
-    this.removeNote(note.path);
+    this.removeNote(note.path, { keepVectors: storedByIndex });
     this.revision++;
     if (chunks.length === 0) {
       // Still record metadata so the note is known, even if it has no body.
@@ -136,8 +149,8 @@ export class IndexManager {
     this.lexical.add(chunks);
     for (const c of chunks) this.addChunk(c);
     if (vecs) {
-      chunks.forEach((c, i) => this.vectors!.upsert(c.id, c.path, vecs![i]));
-    } else {
+      chunks.forEach((c, i) => store!.upsert(c.id, c.path, vecs![i]));
+    } else if (!storedByIndex) {
       this.unembedded.add(note.path);
     }
     this.recordMeta(note, chunks.length);
@@ -166,10 +179,12 @@ export class IndexManager {
     });
   }
 
-  removeNote(path: string): void {
+  removeNote(path: string, opts: { keepVectors?: boolean } = {}): void {
     if (this.meta.has(path)) this.revision++;
     this.lexical.removePath(path);
-    this.vectors?.removePath(path);
+    // indexTexts already replaced this path's vectors atomically; removing
+    // them here would delete what was just stored.
+    if (!opts.keepVectors) this.vectors?.removePath(path);
     // Indexed by path: scanning every chunk in the vault here (the previous
     // approach) made each note's re-index O(all chunks), so a full rebuild was
     // quadratic — ~8s at 4k notes and far worse beyond.
@@ -207,15 +222,7 @@ export class IndexManager {
     const useSemantic = (opts.semantic ?? true) && !!this.embedder && !!this.vectors;
     const cosineById = new Map<string, number>();
     if (useSemantic) {
-      const queryVec = this.embedder!.embedQuery
-        ? await this.embedder!.embedQuery(queryText)
-        : (await this.embedder!.embed([queryText]))[0];
-      // Floor first: an unrelated chunk at vector rank 1 would otherwise
-      // out-rank a strong lexical hit under RRF.
-      const floor = this.embedder!.floor ?? VECTOR_FLOOR;
-      const vhits = this.vectors!
-        .search(queryVec, CANDIDATES)
-        .filter((h) => h.score >= floor);
+      const vhits = await this.semanticHits(queryText, true);
       lists.push(vhits.map((h) => h.id));
       for (const h of vhits) cosineById.set(h.id, h.score);
     }
@@ -242,17 +249,34 @@ export class IndexManager {
     const lists: string[][] = [this.lexical.rankedIds(clean, CANDIDATES, "or")];
     const cosineById = new Map<string, number>();
     if (this.embedder && this.vectors) {
-      const [vec] = await this.embedder.embed([clean]);
-      const floor = this.embedder.floor ?? VECTOR_FLOOR;
-      const vhits = this.vectors
-        .search(vec, CANDIDATES)
-        .filter((h) => h.score >= floor);
+      const vhits = await this.semanticHits(clean, false);
       lists.push(vhits.map((h) => h.id));
       for (const h of vhits) cosineById.set(h.id, h.score);
     }
 
     const ranked = this.collapseToNotes(lists, (path) => path !== opts.excludePath);
     return this.buildResults(ranked, limit, cosineById);
+  }
+
+  /**
+   * Embed `text` and return its vector hits above the provider's floor.
+   *
+   * The floor is applied inside the search rather than after it: an unrelated
+   * chunk at vector rank 1 would otherwise out-rank a strong lexical hit under
+   * RRF. Where the store can embed and search in one step (the worker), that's
+   * a single round trip; otherwise it falls back to embed-then-search.
+   */
+  private async semanticHits(text: string, asQuery: boolean): Promise<VectorHit[]> {
+    const store = this.vectors!;
+    const floor = this.embedder!.floor ?? VECTOR_FLOOR;
+    if (store.embedAndSearch) {
+      return store.embedAndSearch(text, { asQuery, limit: CANDIDATES, floor });
+    }
+    const vec =
+      asQuery && this.embedder!.embedQuery
+        ? await this.embedder!.embedQuery(text)
+        : (await this.embedder!.embed([text]))[0];
+    return store.search(vec, CANDIDATES, floor);
   }
 
   /**
@@ -337,10 +361,10 @@ export class IndexManager {
     return [...this.meta.keys()];
   }
 
-  snapshot(): IndexSnapshot {
+  async snapshot(): Promise<IndexSnapshot> {
     const vectors: IndexSnapshot["vectors"] = [];
     if (this.vectors) {
-      for (const [id, vec] of this.vectors.entries()) vectors.push({ id, vec });
+      for (const [id, vec] of await this.vectors.entries()) vectors.push({ id, vec });
     }
     return {
       embedderId: this.embedderId,
@@ -355,8 +379,11 @@ export class IndexManager {
    * Replace all state from a snapshot (the warm start). The lexical index is
    * rebuilt from the chunks; vectors are restored as-is. Chunks with no stored
    * vector leave their note in the backfill set for when an embedder attaches.
+   *
+   * `into` lets the caller supply the (worker-hosted) store to load into;
+   * without it a plain in-process store is built.
    */
-  restore(snap: IndexSnapshot): void {
+  restore(snap: IndexSnapshot, into?: VectorIndex): void {
     this.lexical = new LexicalIndex();
     this.chunks = new Map();
     this.pathChunks = new Map();
@@ -370,15 +397,21 @@ export class IndexManager {
     for (const c of snap.chunks) this.addChunk(c);
     this.lexical.add(snap.chunks);
 
+    const withVectors = new Set<string>();
     if (snap.dim && snap.vectors.length > 0) {
-      this.vectors = new VectorStore(snap.dim);
+      this.vectors = into ?? new VectorStore(snap.dim);
       for (const { id, vec } of snap.vectors) {
         const path = this.chunks.get(id)?.path;
-        if (path) this.vectors.upsert(id, path, vec);
+        if (path) {
+          this.vectors.upsert(id, path, vec);
+          withVectors.add(id);
+        }
       }
     }
+    // Derived from the snapshot rather than by asking the store, so this works
+    // the same whether the store is in-process or across a worker boundary.
     for (const c of snap.chunks) {
-      if (!this.vectors?.has(c.id)) this.unembedded.add(c.path);
+      if (!withVectors.has(c.id)) this.unembedded.add(c.path);
     }
   }
 }

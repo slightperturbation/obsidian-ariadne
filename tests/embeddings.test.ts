@@ -41,6 +41,6 @@ describe("HashEmbedder", () => {
     store.upsert("a", "a.md", a);
     store.upsert("b", "b.md", b);
     const [q] = await e.embed(["planning agent tools"]);
-    expect(store.search(q)[0].id).toBe("a");
+    expect((await store.search(q, 10, -1))[0].id).toBe("a");
   });
 });

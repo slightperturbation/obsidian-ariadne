@@ -9,6 +9,8 @@ import { VaultNoteSource } from "./index/crawler";
 import { HashEmbedder } from "./index/embeddings/hash-embedder";
 import type { OrtWasmPaths } from "./index/embeddings/transformers-provider";
 import { WorkerEmbedder } from "./index/embeddings/worker-embedder";
+import { WorkerClient } from "./index/embeddings/worker-client";
+import { WorkerVectorIndex } from "./index/embeddings/worker-vector-index";
 import { saveIndex, loadIndex, type FileIO } from "./index/persistence";
 import { ARIADNE_VIEW_TYPE, AriadneView } from "./line/view";
 import { DraftWatcher } from "./margin/draft-watcher";
@@ -70,7 +72,7 @@ export default class AriadnePlugin extends Plugin {
   private lastSavedRevision = -1;
   private ortBlobUrls?: OrtWasmPaths;
   private workerBlobUrl?: string;
-  private embedder?: WorkerEmbedder;
+  private workerClient?: WorkerClient;
   private watcher?: DraftWatcher;
   private ghost?: GhostEngine;
   private router!: ModelRouter;
@@ -338,10 +340,14 @@ export default class AriadnePlugin extends Plugin {
     if (!this.manager || !this.scheduler) return;
     this.status.set({ semantic: "loading" });
     try {
-      const model = await this.makeWorkerEmbedder();
-      await model.ready();
-      this.embedder = model;
-      const backfill = this.manager.setEmbedder(model);
+      const client = await this.makeWorkerClient();
+      await client.ready();
+      this.workerClient = client;
+      const model = new WorkerEmbedder(this.settings.embeddingModel, client);
+      // The vector store lives in the same worker as the model, so the cosine
+      // scan never blocks typing and indexing/querying each take one hop.
+      const vectors = new WorkerVectorIndex(model.dim, client);
+      const backfill = this.manager.setEmbedder(model, vectors);
       this.status.set({ semantic: "on" });
       this.log.info(`embedder ready (${model.id}); backfilling ${backfill.length} notes`);
       if (backfill.length > 0) this.scheduler.enqueueAll(backfill);
@@ -361,11 +367,11 @@ export default class AriadnePlugin extends Plugin {
    * runtimes); and all embedding compute runs off the UI thread, upholding
    * the never-block-typing rule during backfills.
    */
-  private async makeWorkerEmbedder(): Promise<WorkerEmbedder> {
+  private async makeWorkerClient(): Promise<WorkerClient> {
     const adapter = this.app.vault.adapter;
-    const workerPath = normalizePath(`${this.manifest.dir}/embed-worker.js`);
+    const workerPath = normalizePath(`${this.manifest.dir}/index-worker.js`);
     if (!(await adapter.exists(workerPath))) {
-      throw new Error("embed-worker.js missing next to main.js — re-run `npm run build`");
+      throw new Error("index-worker.js missing next to main.js — re-run `npm run build`");
     }
     const workerSrc = await adapter.read(workerPath);
     this.workerBlobUrl = URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" }));
@@ -375,7 +381,11 @@ export default class AriadnePlugin extends Plugin {
         "ONNX runtime files not found next to main.js — trying the CDN path, which Obsidian may block. Re-run `npm run build` to restore them.",
       );
     }
-    return new WorkerEmbedder(this.settings.embeddingModel, this.workerBlobUrl, this.ortBlobUrls);
+    return new WorkerClient({
+      workerUrl: this.workerBlobUrl,
+      model: this.settings.embeddingModel,
+      wasmPaths: this.ortBlobUrls,
+    });
   }
 
   private makeFileIO(): FileIO {
@@ -410,7 +420,7 @@ export default class AriadnePlugin extends Plugin {
     this.saving = true;
     const revision = this.manager.revision;
     try {
-      await saveIndex(this.io, this.indexDir, this.manager.snapshot());
+      await saveIndex(this.io, this.indexDir, await this.manager.snapshot());
       this.lastSavedRevision = revision;
       this.log.info(`index saved (${this.manager.noteCount} notes)`);
     } catch (err) {
@@ -454,7 +464,7 @@ export default class AriadnePlugin extends Plugin {
 
   onunload(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);
-    this.embedder?.dispose();
+    this.workerClient?.dispose();
     if (this.workerBlobUrl) URL.revokeObjectURL(this.workerBlobUrl);
     if (this.ortBlobUrls) {
       URL.revokeObjectURL(this.ortBlobUrls.mjs);

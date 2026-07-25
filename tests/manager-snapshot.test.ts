@@ -36,7 +36,7 @@ describe("IndexManager snapshot/restore", () => {
     const before = await original.query("carnivorous mammals");
 
     const restored = new IndexManager();
-    restored.restore(original.snapshot());
+    restored.restore(await original.snapshot());
     // No embedder attached yet → lexical-only compare.
     const afterLexical = await restored.query("carnivorous mammals", { semantic: false });
     const beforeLexical = await original.query("carnivorous mammals", { semantic: false });

@@ -4,7 +4,7 @@ export default tseslint.config(
   {
     ignores: [
       "main.js",
-      "embed-worker.js",
+      "index-worker.js",
       "ort-wasm-simd-threaded.asyncify.mjs",
       "node_modules/",
       "dist/",
