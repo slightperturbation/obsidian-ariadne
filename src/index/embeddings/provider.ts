@@ -10,6 +10,14 @@ export interface EmbeddingProvider {
   readonly id: string;
   /** Output dimensionality. */
   readonly dim: number;
+  /**
+   * Minimum cosine for a hit to be worth fusing, in THIS provider's own
+   * distribution. Different embedders occupy different similarity ranges — a
+   * true semantic model separates related (~0.7+) from unrelated (~0.3–0.5),
+   * while the hashing fallback is bag-of-words overlap and sits lower — so the
+   * floor belongs to the provider, not to the index.
+   */
+  readonly floor: number;
   /** Resolve once the provider is usable (model loaded, etc.). */
   ready(): Promise<void>;
   /** Embed a batch of texts, preserving order. */

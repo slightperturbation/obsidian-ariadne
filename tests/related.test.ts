@@ -20,14 +20,34 @@ async function build(): Promise<IndexManager> {
 }
 
 describe("IndexManager.related", () => {
-  it("ranks contextually similar notes first and carries cosine", async () => {
+  it("surfaces contextually similar notes", async () => {
     const manager = await build();
     const results = await manager.related("My pet mammals sleep all day", {});
     expect(results.length).toBeGreaterThan(0);
-    const paths = results.map((r) => r.path);
-    expect(paths).toContain("cats.md");
-    expect(paths.indexOf("cats.md")).toBeLessThan(paths.indexOf("taxes.md"));
-    expect(results[0].cosine).toBeTypeOf("number");
+    expect(results.map((r) => r.path)).toContain("cats.md");
+  });
+
+  it("carries a raw cosine (not a [0,1]-remapped one) when a vector matched", async () => {
+    const manager = await build();
+    // Near-verbatim context, so the hit clears the embedder's floor.
+    const results = await manager.related(
+      "Cats are small carnivorous mammals often kept as pets.",
+      {},
+    );
+    const cats = results.find((r) => r.path === "cats.md");
+    expect(cats?.cosine).toBeTypeOf("number");
+    // A remap of [-1,1]→[0,1] would floor every value at 0.5; raw values run
+    // the full range, which is what every suggestion threshold assumes.
+    expect(cats!.cosine!).toBeGreaterThan(0.5);
+    expect(cats!.cosine!).toBeLessThanOrEqual(1);
+  });
+
+  it("drops notes below the embedder's similarity floor instead of ranking them last", async () => {
+    const manager = await build();
+    const results = await manager.related("My pet mammals sleep all day", {});
+    // "Quarterly estimated tax payments…" shares no meaning with the context.
+    // Before the floor it still came back (as noise) at the bottom of the list.
+    expect(results.map((r) => r.path)).not.toContain("taxes.md");
   });
 
   it("excludes the note being written", async () => {

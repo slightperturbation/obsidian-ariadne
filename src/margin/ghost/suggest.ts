@@ -15,7 +15,7 @@ export interface GhostDecisionInput {
   lineBefore: string;
   /** Note paths the writer dismissed (scoped per paragraph by the caller). */
   dismissed: ReadonlySet<string>;
-  /** Minimum semantic closeness (raw cosine, 0..1). */
+  /** Minimum raw cosine (bge-small: ~0.3–0.5 unrelated, ~0.7+ related). */
   minCosine: number;
 }
 
@@ -41,6 +41,10 @@ export function decideGhost(input: GhostDecisionInput): GhostDecision | null {
   // Inside an unclosed wikilink the writer is typing themselves.
   if (/\[\[[^\]]*$/.test(input.lineBefore)) return null;
 
+  // Offer the semantically *closest* eligible note, not merely the first one
+  // past the bar — `results` is ordered by fused rank, which blends lexical
+  // overlap and can put a weaker-but-wordier match first.
+  let best: ScoredResult | undefined;
   for (const r of input.results) {
     if (r.cosine === undefined || r.cosine < input.minCosine) continue;
     if (input.dismissed.has(r.path)) continue;
@@ -49,13 +53,14 @@ export function decideGhost(input: GhostDecisionInput): GhostDecision | null {
     const linked =
       input.noteText.includes(`[[${r.title}`) || input.noteText.includes(`[[${basename}`);
     if (linked) continue;
-
-    const needsSpace = input.charBefore !== "" && !/\s/.test(input.charBefore);
-    return {
-      targetPath: r.path,
-      title: r.title,
-      insertText: `${needsSpace ? " " : ""}[[${r.title}]]`,
-    };
+    if (!best || r.cosine > best.cosine!) best = r;
   }
-  return null;
+  if (!best) return null;
+
+  const needsSpace = input.charBefore !== "" && !/\s/.test(input.charBefore);
+  return {
+    targetPath: best.path,
+    title: best.title,
+    insertText: `${needsSpace ? " " : ""}[[${best.title}]]`,
+  };
 }

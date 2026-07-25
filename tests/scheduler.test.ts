@@ -114,6 +114,105 @@ describe("IncrementalScheduler", () => {
     expect(manager.noteCount).toBe(1);
   });
 
+  it("keeps a note indexed when its re-index throws, and retries it", async () => {
+    const manager = new IndexManager();
+    const status = new StatusStore();
+    // Index it successfully once, then make loads fail.
+    const store = new Map([["a.md", note("a.md", "alpha content")]]);
+    let failing = false;
+    const scheduler = new IncrementalScheduler(
+      manager,
+      async (path) => {
+        if (failing) throw new Error("transient read failure");
+        return store.get(path) ?? null;
+      },
+      status,
+      { debounceMs: 5, batchBudgetMs: 50 },
+    );
+
+    scheduler.markDirty("a.md");
+    await scheduler.flush();
+    expect(manager.noteCount).toBe(1);
+
+    // A failing re-index must NOT drop the note from the index...
+    failing = true;
+    scheduler.markDirty("a.md");
+    await scheduler.flush();
+    expect(manager.noteCount).toBe(1);
+    expect((await manager.query("alpha"))[0]?.path).toBe("a.md");
+    expect(status.get().index).toBe("error");
+
+    // ...and once the failure clears, the retry succeeds.
+    failing = false;
+    await scheduler.flush();
+    expect(manager.noteCount).toBe(1);
+    expect(status.get().index).toBe("idle");
+  });
+
+  it("gives up on a path after repeated failures instead of looping forever", async () => {
+    const manager = new IndexManager();
+    let attempts = 0;
+    const scheduler = new IncrementalScheduler(
+      manager,
+      async () => {
+        attempts++;
+        throw new Error("always fails");
+      },
+      new StatusStore(),
+      { debounceMs: 5, batchBudgetMs: 50 },
+    );
+    scheduler.markDirty("bad.md");
+    await scheduler.flush();
+    await scheduler.flush();
+    await scheduler.flush();
+    await scheduler.flush();
+    expect(attempts).toBeLessThanOrEqual(3);
+    expect(scheduler.pending).toBe(0);
+  });
+
+  it("still persists (onIdle) after an error, so an errored session saves", async () => {
+    const manager = new IndexManager();
+    let idleCalls = 0;
+    const scheduler = new IncrementalScheduler(
+      manager,
+      async () => {
+        throw new Error("boom");
+      },
+      new StatusStore(),
+      { debounceMs: 5, batchBudgetMs: 50, onIdle: () => idleCalls++ },
+    );
+    scheduler.markDirty("a.md");
+    await scheduler.flush();
+    expect(idleCalls).toBeGreaterThan(0);
+  });
+
+  it("resets burst progress after an error so the next burst counts from zero", async () => {
+    const manager = new IndexManager();
+    const status = new StatusStore();
+    let failing = true;
+    const scheduler = new IncrementalScheduler(
+      manager,
+      async (path) => {
+        if (failing) throw new Error("boom");
+        return note(path, "content");
+      },
+      status,
+      { debounceMs: 5, batchBudgetMs: 50 },
+    );
+    scheduler.markDirty("a.md");
+    await scheduler.flush();
+    expect(status.get().progressDone).toBe(0);
+    expect(status.get().progressTotal).toBe(0);
+
+    failing = false;
+    const seen: Array<[number, number]> = [];
+    status.subscribe((s) => seen.push([s.progressDone, s.progressTotal]));
+    scheduler.enqueueAll(["b.md", "c.md"]);
+    await scheduler.flush();
+    // Progress never exceeds its total (the old counters carried across bursts).
+    expect(seen.every(([done, total]) => total === 0 || done <= total)).toBe(true);
+  });
+
   it("ignores marks after dispose", async () => {
     const { manager, scheduler } = setup([note("a.md", "alpha")]);
     scheduler.dispose();

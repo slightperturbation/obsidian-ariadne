@@ -53,7 +53,8 @@ describe("IndexManager snapshot/restore", () => {
     await indexAll(manager);
 
     const backfill = manager.setEmbedder(new HashEmbedder(64));
-    expect(backfill.sort()).toEqual(["cats.md", "taxes.md"]); // empty.md has no chunks
+    // empty.md now yields a title-only chunk, so it needs embedding too.
+    expect(backfill.sort()).toEqual(["cats.md", "empty.md", "taxes.md"]);
 
     for (const n of NOTES) await manager.indexNote(n);
     expect(manager.setEmbedder(new HashEmbedder(64))).toEqual([]);
@@ -63,7 +64,7 @@ describe("IndexManager snapshot/restore", () => {
     const manager = new IndexManager(new HashEmbedder(64));
     await indexAll(manager);
     const backfill = manager.setEmbedder(new HashEmbedder(128));
-    expect(backfill.sort()).toEqual(["cats.md", "taxes.md"]);
+    expect(backfill.sort()).toEqual(["cats.md", "empty.md", "taxes.md"]);
   });
 
   it("prefers embedQuery for the query vector when the provider has one", async () => {

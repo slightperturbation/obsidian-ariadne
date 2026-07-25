@@ -1,29 +1,49 @@
 import type { ScoredResult } from "../core/types";
+import { prominence } from "../index/confidence";
 import { sparklineEl } from "./sparkline";
 
+/** What the user asked for, independent of which surface they clicked. */
+export interface ActivateModifiers {
+  /** ⇧ — weave a bidirectional link. */
+  weave: boolean;
+  /** ⌥ — insert a [[link]] at the cursor. */
+  insertLink: boolean;
+  /** ⌘/⌃ — open in a new pane. */
+  newLeaf: boolean;
+}
+
 export interface RenderHandlers {
-  onOpen(result: ScoredResult, newLeaf: boolean): void;
+  onActivate(result: ScoredResult, mods: ActivateModifiers): void;
   onHoverSelect(index: number): void;
 }
 
-function confidenceClass(confidence: number): string {
-  if (confidence >= 0.66) return "ariadne-confidence-prominent";
-  if (confidence >= 0.33) return "ariadne-confidence-quiet";
-  return "ariadne-confidence-faint";
-}
+export const modifiersOf = (ev: MouseEvent | KeyboardEvent): ActivateModifiers => ({
+  weave: ev.shiftKey,
+  insertLink: ev.altKey,
+  newLeaf: ev.metaKey || ev.ctrlKey,
+});
 
-function rowEl(
+/**
+ * One result row, shared by the search results and the Margin cards so the
+ * same modifier means the same thing in both halves of the panel.
+ */
+export function rowEl(
   doc: Document,
   result: ScoredResult,
   index: number,
   selected: boolean,
   handlers: RenderHandlers,
+  variant: "row" | "card" = "row",
 ): HTMLElement {
   const row = doc.createElement("div");
-  row.classList.add("ariadne-row", confidenceClass(result.confidence));
+  row.classList.add("ariadne-row", `ariadne-confidence-${prominence(result.confidence)}`);
+  if (variant === "card") row.classList.add("ariadne-card");
   if (selected) row.classList.add("is-selected");
   row.dataset.index = String(index);
   row.dataset.path = result.path;
+  row.setAttribute("role", "option");
+  row.setAttribute("aria-selected", String(selected));
+  row.id = `ariadne-opt-${variant}-${index}`;
 
   const head = doc.createElement("div");
   head.classList.add("ariadne-row-head");
@@ -31,6 +51,8 @@ function rowEl(
   const title = doc.createElement("span");
   title.classList.add("ariadne-row-title");
   title.textContent = result.title;
+  // Titles ellipsize in a narrow sidebar; the full path is the disambiguator.
+  title.title = result.path;
   head.appendChild(title);
 
   if (result.spark) head.appendChild(sparklineEl(result.spark, doc));
@@ -46,7 +68,7 @@ function rowEl(
   row.addEventListener("mousedown", (ev) => {
     // mousedown (not click) so the editor's selection/focus isn't lost first.
     ev.preventDefault();
-    handlers.onOpen(result, ev.metaKey || ev.ctrlKey);
+    handlers.onActivate(result, modifiersOf(ev));
   });
   row.addEventListener("mousemove", () => handlers.onHoverSelect(index));
 

@@ -50,3 +50,54 @@ describe("chunkNote", () => {
     expect(chunks.map((c) => c.id)).toEqual(["p.md#0", "p.md#1", "p.md#2"]);
   });
 });
+
+describe("code fences", () => {
+  it("does not treat comments inside a fenced block as headings", () => {
+    const md = [
+      "Intro paragraph.",
+      "",
+      "```bash",
+      "# install the deps",
+      "npm install",
+      "# run it",
+      "npm start",
+      "```",
+      "",
+      "Outro paragraph.",
+    ].join("\n");
+    const chunks = chunkNote("code.md", md);
+
+    // The comment lines must survive as indexed text, not vanish into headings.
+    const all = chunks.map((c) => c.text).join("\n");
+    expect(all).toContain("# install the deps");
+    expect(all).toContain("npm start");
+    expect(chunks.every((c) => c.heading === undefined)).toBe(true);
+  });
+
+  it("still detects real headings after a fence closes", () => {
+    const md = "```\ncode\n```\n\n## Real heading\n\nBody text here.";
+    const chunks = chunkNote("c.md", md);
+    expect(chunks.some((c) => c.heading === "Real heading")).toBe(true);
+  });
+});
+
+describe("stub notes", () => {
+  it("emits a title chunk for a heading-only note so it is findable by name", () => {
+    const chunks = chunkNote("Zettel/Ariadne's Thread.md", "# Ariadne's Thread");
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toContain("Ariadne's Thread");
+  });
+
+  it("emits a title chunk for an empty note", () => {
+    const chunks = chunkNote("Untitled.md", "");
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toContain("Untitled");
+  });
+
+  it("includes headings in the fallback chunk", () => {
+    const chunks = chunkNote("Map.md", "# Map\n\n## Alpha\n\n## Beta");
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toContain("Alpha");
+    expect(chunks[0].text).toContain("Beta");
+  });
+});

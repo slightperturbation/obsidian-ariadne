@@ -45,10 +45,22 @@ describe("planAttachmentSweep", () => {
 });
 
 describe("isEmptyNote", () => {
-  it("treats frontmatter-only / whitespace-only notes as empty", () => {
+  it("treats blank and bookkeeping-frontmatter-only notes as empty", () => {
     expect(isEmptyNote("")).toBe(true);
     expect(isEmptyNote("   \n\n")).toBe(true);
     expect(isEmptyNote("---\ntype: note\n---\n")).toBe(true);
+    expect(isEmptyNote("---\ntype: note\ncreated: 2026-07-22\n---\n")).toBe(true);
+  });
+
+  it("never treats a metadata-only note as empty", () => {
+    // A Dataview/Bases row is content, even with no prose body.
+    expect(
+      isEmptyNote("---\ntype: book\nauthor: Frank Herbert\nrating: 5\n---\n"),
+    ).toBe(false);
+    expect(isEmptyNote("---\naliases: [the loop]\n---\n")).toBe(false);
+  });
+
+  it("never treats a note with a body as empty", () => {
     expect(isEmptyNote("---\ntype: note\n---\n\nreal content")).toBe(false);
     expect(isEmptyNote("body")).toBe(false);
   });

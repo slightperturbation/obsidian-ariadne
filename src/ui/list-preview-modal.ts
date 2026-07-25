@@ -66,11 +66,17 @@ export class ListPreviewModal extends Modal {
     buttons.append(cancel, confirm);
     root.appendChild(buttons);
 
-    this.scope.register([], "Enter", () => {
-      this.accept();
-      return false;
-    });
-    confirm.focus();
+    // A destructive gate whose default action is destruction isn't a gate:
+    // the user just pressed ↵ in the command palette, so ↵ must not delete.
+    if (this.options.destructive) {
+      cancel.focus();
+    } else {
+      this.scope.register([], "Enter", () => {
+        this.accept();
+        return false;
+      });
+      confirm.focus();
+    }
   }
 
   private accept(): void {

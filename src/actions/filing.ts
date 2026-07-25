@@ -60,9 +60,30 @@ export function planAttachmentSweep(
   return moves;
 }
 
-/** A note whose body (excluding frontmatter) is empty or whitespace-only. */
+/** Frontmatter keys that carry no information beyond "a note was created". */
+const TRIVIAL_KEYS = new Set(["created", "updated", "modified", "date", "type", "tags"]);
+
+/**
+ * A note with no body AND no meaningful frontmatter.
+ *
+ * Metadata-only notes are real notes for anyone using Properties/Dataview/Bases
+ * — a book note that is nothing but `author`/`rating`/`read` fields is content,
+ * not clutter — so a note is only "empty" if its frontmatter is absent, blank,
+ * or purely bookkeeping.
+ */
 export function isEmptyNote(content: string): boolean {
-  return content.replace(FRONTMATTER, "").trim().length === 0;
+  const body = content.replace(FRONTMATTER, "").trim();
+  if (body.length > 0) return false;
+
+  const fm = FRONTMATTER.exec(content)?.[0];
+  if (!fm) return true;
+  for (const line of fm.split("\n")) {
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line.trim());
+    if (!m) continue;
+    const [, key, value] = m;
+    if (!TRIVIAL_KEYS.has(key.toLowerCase()) && value.trim() !== "") return false;
+  }
+  return true;
 }
 
 /** A delete-only proposal (goes through the executor → trash + one-step undo). */

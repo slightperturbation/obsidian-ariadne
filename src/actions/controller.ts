@@ -1,6 +1,7 @@
 import { App, MarkdownView, Notice, TFile, normalizePath } from "obsidian";
 import type { IndexManager } from "../index/manager";
 import type { ModelRouter } from "../model/router";
+import { BudgetExceededError } from "../model/router";
 import type { Logger } from "../util/logger";
 import type { ScoredResult } from "../core/types";
 import { ActionExecutor, type ActionProposal } from "./framework";
@@ -55,8 +56,12 @@ import { ListPreviewModal } from "../ui/list-preview-modal";
 
 const EXCERPT_CHARS = 600;
 const SEGMENT_PREVIEW_CHARS = 200;
-/** Notes at least this semantically close are offered as merge candidates. */
-const MERGE_COSINE = 0.9;
+/**
+ * Raw cosine at which two notes are treated as near-duplicates. Deliberately
+ * high: merge is destructive, and 0.8 is merely "clearly related" for
+ * bge-small — that would routinely propose merging distinct adjacent notes.
+ */
+const MERGE_COSINE = 0.95;
 const MOC_NEIGHBORHOOD = 12;
 
 /**
@@ -123,6 +128,7 @@ export class ActionsController {
         phrase = parseConnective(text) ?? undefined;
       } catch (err) {
         this.deps.log.warn(`connective phrasing unavailable: ${String(err)}`);
+        if (err instanceof BudgetExceededError) new Notice(err.message);
       }
     }
 
@@ -165,7 +171,13 @@ export class ActionsController {
         scaffold = parseScaffold(text);
       } catch (err) {
         this.deps.log.warn(`scaffold model call failed, using template: ${String(err)}`);
-        new Notice("Model unavailable — using a plain template.");
+        // Distinguish "you hit your spend cap" from "the model is down" —
+        // they call for completely different user responses.
+        new Notice(
+          err instanceof BudgetExceededError
+            ? `${err.message} Using a plain template for now.`
+            : "Model unavailable — using a plain template.",
+        );
         scaffold = fallbackScaffold(seed);
       }
     } else {
@@ -189,7 +201,7 @@ export class ActionsController {
     change.path = this.uniquePath(change.path);
     try {
       await this.deps.executor.apply(proposal);
-      new Notice(`✓ Created “${scaffold.title}” — ⌘Z-style undo via "Undo last action".`);
+      new Notice(`✓ Created “${scaffold.title}” · reversible with "Undo last Ariadne action".`);
       await this.deps.app.workspace.openLinkText(change.path, "", false);
     } catch (err) {
       new Notice(`Not created: ${err instanceof Error ? err.message : String(err)}`);
@@ -439,7 +451,7 @@ export class ActionsController {
     // Pure creation → no preview gate (same as scaffolding); open it after.
     try {
       await this.deps.executor.apply(proposal);
-      new Notice(`✓ Created MoC “${moc.title}” — undoable via "Undo last action".`);
+      new Notice(`✓ Created MoC “${moc.title}” — undoable via "Undo last Ariadne action".`);
       await app.workspace.openLinkText(path, "", false);
     } catch (err) {
       new Notice(`MoC not created: ${err instanceof Error ? err.message : String(err)}`);
@@ -471,6 +483,19 @@ export class ActionsController {
       return;
     }
     const otherContent = await app.vault.read(otherFile);
+
+    // Deleting a note does NOT rewrite links to it (Obsidian only auto-updates
+    // on rename), so say so plainly before the user accepts.
+    const inbound = Object.entries(app.metadataCache.resolvedLinks)
+      .filter(([from, targets]) => from !== file.path && !!targets[otherFile.path])
+      .map(([from]) => from);
+    if (inbound.length > 0) {
+      new Notice(
+        `Heads up: ${inbound.length} note${inbound.length === 1 ? "" : "s"} link to “${otherFile.basename}”. ` +
+          `Those links will not resolve after the merge.`,
+        8000,
+      );
+    }
 
     this.preview(
       buildMergeProposal({
@@ -518,35 +543,67 @@ export class ActionsController {
 
   private async applyAttachmentSweep(folder: string, moves: AttachmentMove[]): Promise<void> {
     const { app } = this.deps;
+    // Declared outside the try: a partial failure must still register an undo
+    // for the moves that DID land, or those files (and their rewritten embeds)
+    // become unrevertable and "Undo last Ariadne action" reverses something unrelated.
+    const done: Array<AttachmentMove & { size: number; mtime: number }> = [];
+    let failure: unknown;
     try {
       if (!app.vault.getAbstractFileByPath(folder)) {
         await app.vault.createFolder(folder).catch(() => {
           /* concurrent creation */
         });
       }
-      const done: AttachmentMove[] = [];
       for (const m of moves) {
         const file = app.vault.getAbstractFileByPath(m.fromPath);
-        if (file instanceof TFile) {
-          await app.fileManager.renameFile(file, m.toPath);
-          done.push(m);
-        }
+        if (!(file instanceof TFile)) continue;
+        // Re-check at apply time: the target may have been taken while the
+        // preview was open.
+        if (app.vault.getAbstractFileByPath(m.toPath)) continue;
+        await app.fileManager.renameFile(file, m.toPath);
+        done.push({ ...m, size: file.stat.size, mtime: file.stat.mtime });
       }
-      // Register the reversal so the one Undo command covers the sweep.
+    } catch (err) {
+      failure = err;
+    }
+
+    if (done.length > 0) {
       this.deps.executor.pushExternalUndo(
         `Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder}`,
         async () => {
+          const problems: string[] = [];
           for (const m of [...done].reverse()) {
             const moved = app.vault.getAbstractFileByPath(m.toPath);
-            if (moved instanceof TFile) await app.fileManager.renameFile(moved, m.fromPath);
+            // Identity check: the file at that path may be a different one the
+            // user put there since the sweep — moving it would be destructive.
+            if (!(moved instanceof TFile)) continue;
+            if (moved.stat.size !== m.size) {
+              problems.push(m.name);
+              continue;
+            }
+            if (app.vault.getAbstractFileByPath(m.fromPath)) {
+              problems.push(m.name);
+              continue;
+            }
+            await app.fileManager.renameFile(moved, m.fromPath);
+          }
+          if (problems.length > 0) {
+            new Notice(`Left in place (changed since the sweep): ${problems.join(", ")}`);
           }
         },
       );
+    }
+
+    if (failure) {
       new Notice(
-        `✓ Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder} — undoable via "Undo last action".`,
+        `Sweep stopped after ${done.length} file${done.length === 1 ? "" : "s"}: ` +
+          `${failure instanceof Error ? failure.message : String(failure)}` +
+          (done.length ? ` — those moves are undoable.` : ""),
       );
-    } catch (err) {
-      new Notice(`Sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+    } else {
+      new Notice(
+        `✓ Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder} — undoable via "Undo last Ariadne action".`,
+      );
     }
   }
 
@@ -582,7 +639,7 @@ export class ActionsController {
         void (async () => {
           try {
             await this.deps.executor.apply(proposal);
-            new Notice(`✓ ${proposal.title} — undoable via "Undo last action".`);
+            new Notice(`✓ ${proposal.title} — undoable via "Undo last Ariadne action".`);
           } catch (err) {
             new Notice(`Not applied: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -619,13 +676,33 @@ export class ActionsController {
     }
   }
 
+  /**
+   * Flush any open editor holding a note this proposal touches.
+   *
+   * The conflict check compares against disk, but a model call takes seconds —
+   * long enough for the writer to type a paragraph that is still sitting in the
+   * CodeMirror buffer (continuous typing means Obsidian's idle autosave never
+   * fires). Without this, validate() reads stale-but-matching disk content and
+   * the write silently destroys what they just typed.
+   */
+  private async flushEditorsFor(proposal: ActionProposal): Promise<void> {
+    const paths = new Set(proposal.changes.map((c) => c.path));
+    for (const leaf of this.deps.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file && paths.has(view.file.path)) {
+        await view.save();
+      }
+    }
+  }
+
   /** Preview → accept gate for actions that edit existing notes (weaving). */
   private preview(proposal: ActionProposal): void {
     new PreviewModal(this.deps.app, proposal, () => {
       void (async () => {
         try {
+          await this.flushEditorsFor(proposal);
           await this.deps.executor.apply(proposal);
-          new Notice(`✓ ${proposal.title} — undoable via "Undo last action".`);
+          new Notice(`✓ ${proposal.title} — undoable via "Undo last Ariadne action".`);
         } catch (err) {
           new Notice(
             `Not applied: ${err instanceof Error ? err.message : String(err)}`,

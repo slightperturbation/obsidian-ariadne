@@ -22,6 +22,8 @@ function hashToken(token: string): number {
  */
 export class HashEmbedder implements EmbeddingProvider {
   readonly id: string;
+  /** Term-overlap cosines run lower than a real model's; see provider docs. */
+  readonly floor = 0.3;
 
   constructor(public readonly dim = 256) {
     this.id = `hash-${dim}`;

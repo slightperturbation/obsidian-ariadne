@@ -1,5 +1,3 @@
-import { Platform } from "obsidian";
-
 /**
  * Run a callback when the UI is idle. `requestIdleCallback` is absent on
  * iOS/WebKit, so feature-detect and fall back to a macrotask.
@@ -19,5 +17,3 @@ export function yieldToUI(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-export const isMobile = (): boolean => Platform.isMobile;
-export const isIos = (): boolean => Platform.isIosApp;

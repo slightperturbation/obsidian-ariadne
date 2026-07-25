@@ -1,11 +1,5 @@
 /** Shared domain types used across the index, search, and UI layers. */
 
-export interface NoteRef {
-  path: string;
-  title: string;
-  mtime: number;
-}
-
 /** An atomic unit of a note (roughly a heading section or paragraph group). */
 export interface Chunk {
   id: string; // `${path}#${ordinal}`
@@ -27,12 +21,16 @@ export interface ScoredResult {
   path: string;
   title: string;
   snippet: string;
-  score: number; // fused relevance, 0..1
+  score: number; // fused relevance relative to the best hit, 0..1
   confidence: number; // drives UI prominence, 0..1
   /** Surfaced by the vector list but not the lexical one → Layer 2 (Related). */
   semanticOnly?: boolean;
-  /** Raw cosine similarity (0..1-mapped) when a vector matched — the purest
-   * "how close in meaning" signal, used for suggestion thresholds. */
+  /**
+   * Raw cosine similarity to the query (-1..1, in practice ~0.3–1.0 for
+   * bge-small) when a vector matched — the purest "how close in meaning"
+   * signal, and the one suggestion thresholds compare against. Absent when
+   * only the lexical index matched.
+   */
   cosine?: number;
   spark?: SparkValues;
 }

@@ -49,6 +49,8 @@ export interface TransformersOptions {
 export class TransformersEmbedder implements EmbeddingProvider {
   readonly id: string;
   readonly dim: number;
+  /** bge-small: unrelated text ~0.3–0.5, genuinely related ~0.7+. */
+  readonly floor = 0.6;
 
   private readonly modelId: string;
   private extractor?: FeatureExtractionPipeline;

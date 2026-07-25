@@ -11,10 +11,19 @@
   --ariadne-gap: var(--size-4-2);
 }
 
-/* Confidence-driven prominence, used by the Line and the Margin. */
-.ariadne-confidence-faint { opacity: 0.45; }
-.ariadne-confidence-quiet { opacity: 0.8; }
-.ariadne-confidence-prominent { opacity: 1; font-weight: var(--font-semibold); }
+/*
+  Confidence-driven prominence. Expressed as ink on the CONTENT (title colour
+  and weight), not opacity on the row: fading the container also faded the
+  selection marker and the sparkline, so low-confidence rows became hard to
+  see exactly when you were arrowing onto them.
+*/
+.ariadne-confidence-faint .ariadne-row-title { color: var(--text-faint); }
+.ariadne-confidence-faint .ariadne-row-snippet { opacity: 0.6; }
+.ariadne-confidence-quiet .ariadne-row-title { color: var(--text-muted); }
+.ariadne-confidence-prominent .ariadne-row-title {
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
 
 /* ── The Line ─────────────────────────────────────────────────────────── */
 
@@ -39,6 +48,16 @@
   outline: none;
   border-bottom-color: var(--ariadne-accent);
   box-shadow: none;
+}
+
+/* The keyboard legend: quiet, one line, always available. */
+.ariadne-keys {
+  flex: none;
+  font-size: var(--font-ui-smaller);
+  color: var(--ariadne-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Search results: collapse to nothing when idle; cap at 2/3 when active. */
@@ -211,10 +230,15 @@
 
 /* Status glyph: one quiet line at the foot of the Line. */
 .ariadne-glyph {
+  flex: none;
   font-size: var(--font-ui-smaller);
   color: var(--ariadne-faint);
   border-top: 1px solid var(--ariadne-hairline);
   padding-top: var(--size-4-1);
+  /* An error string is arbitrary length; never let it eat the panel. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ariadne-glyph.is-error {
   color: var(--text-error);

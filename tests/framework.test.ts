@@ -111,6 +111,61 @@ describe("ActionExecutor", () => {
     expect(executor.undoCount).toBe(1);
   });
 
+  it("a failed undo rolls back and stays retryable", async () => {
+    const vault = memVault({ "a.md": "v1", "b.md": "w1" });
+    const executor = new ActionExecutor(vault);
+    await executor.apply({
+      title: "two-file edit",
+      changes: [
+        { type: "modify", path: "a.md", before: "v1", after: "v2" },
+        { type: "modify", path: "b.md", before: "w1", after: "w2" },
+      ],
+    });
+
+    // Make the second step of the undo fail.
+    const realModify = vault.modify;
+    let failNext = true;
+    vault.modify = async (p, c) => {
+      if (failNext && p === "a.md") {
+        failNext = false;
+        throw new Error("locked by another process");
+      }
+      return realModify(p, c);
+    };
+
+    await expect(executor.undoLast()).rejects.toThrow("locked");
+    // Rolled back: neither file is left half-reverted.
+    expect(vault.files.get("a.md")).toBe("v2");
+    expect(vault.files.get("b.md")).toBe("w2");
+    // Still on the stack, and now it succeeds.
+    expect(executor.undoCount).toBe(1);
+    await executor.undoLast();
+    expect(vault.files.get("a.md")).toBe("v1");
+    expect(vault.files.get("b.md")).toBe("w1");
+  });
+
+  it("serializes concurrent undo so two calls can't discard an entry", async () => {
+    const vault = memVault({ "a.md": "v1" });
+    const executor = new ActionExecutor(vault);
+    await executor.apply({
+      title: "first",
+      changes: [{ type: "modify", path: "a.md", before: "v1", after: "v2" }],
+    });
+    await executor.apply({
+      title: "second",
+      changes: [{ type: "modify", path: "a.md", before: "v2", after: "v3" }],
+    });
+    expect(executor.undoCount).toBe(2);
+
+    // Double-tapped hotkey: both must not reverse the same entry.
+    const [a, b] = await Promise.allSettled([executor.undoLast(), executor.undoLast()]);
+    expect(a.status).toBe("fulfilled");
+    // Whatever the second call did, exactly two undos' worth of state remains.
+    void b;
+    expect(executor.undoCount).toBeLessThanOrEqual(1);
+    if (executor.undoCount === 0) expect(vault.files.get("a.md")).toBe("v1");
+  });
+
   it("undo of a delete restores content; undo of a create deletes", async () => {
     const vault = memVault({ "gone.md": "precious" });
     const executor = new ActionExecutor(vault);

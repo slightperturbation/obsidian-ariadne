@@ -4,8 +4,8 @@ import type { VaultIO } from "./framework";
 /**
  * VaultIO over Obsidian's typed vault API. Reads are fresh (vault.read, not
  * cachedRead) because conflict checks must see the truth on disk. Deletes go
- * to Obsidian's trash, never a hard delete — the framework's undo can restore
- * content, but the trash is the belt-and-suspenders layer beneath it.
+ * to the trash unconditionally — never a hard delete — since the framework's
+ * in-memory undo doesn't survive a restart and the trash does.
  */
 export class ObsidianVaultIO implements VaultIO {
   constructor(private app: App) {}
@@ -45,6 +45,11 @@ export class ObsidianVaultIO implements VaultIO {
   async delete(path: string): Promise<void> {
     const f = this.file(path);
     if (!f) throw new Error(`not found: ${path}`);
-    await this.app.fileManager.trashFile(f);
+    // vault.trash(f, true) — system trash with a fallback to the vault's local
+    // .trash. Deliberately NOT fileManager.trashFile(), which honors the
+    // vault's "Deleted files" preference and will hard-delete for anyone who
+    // set it to "Permanently delete". Our undo stack is in-memory and gone
+    // after a restart, so the trash is the only durable safety net.
+    await this.app.vault.trash(f, true);
   }
 }

@@ -159,7 +159,7 @@ export default class AriadnePlugin extends Plugin {
 
     this.addCommand({
       id: "undo-last-action",
-      name: "Undo last action",
+      name: "Undo last Ariadne action",
       callback: () => void this.actions.undoLast(),
     });
 
@@ -468,7 +468,23 @@ export default class AriadnePlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const stored = (await this.loadData()) as Partial<AriadneSettings> & {
+      cosineScale?: number;
+    };
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+
+    // Migration: ghostMinCosine used to be compared against a [-1,1]→[0,1]
+    // remapped cosine, so a stored 0.7 actually meant raw 0.4. Convert once
+    // (raw = 2v-1, floored at the new slider minimum) and stamp the scale so
+    // we don't convert twice.
+    if (stored && stored.cosineScale !== 2 && typeof stored.ghostMinCosine === "number") {
+      const converted = Math.max(0.6, 2 * stored.ghostMinCosine - 1);
+      this.settings.ghostMinCosine = Number(converted.toFixed(2));
+      this.settings.cosineScale = 2;
+      await this.saveData(this.settings);
+    } else {
+      this.settings.cosineScale = 2;
+    }
   }
 
   async saveSettings(): Promise<void> {

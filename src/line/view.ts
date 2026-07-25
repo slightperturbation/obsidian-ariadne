@@ -3,14 +3,14 @@ import type { IndexManager } from "../index/manager";
 import type { StatusStore } from "../core/status";
 import type { ScoredResult } from "../core/types";
 import type { DraftWatcher, DraftContext } from "../margin/draft-watcher";
-import { renderResults } from "./render";
-import { prominence } from "../index/confidence";
-import { sparklineEl } from "./sparkline";
+import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
 export const ARIADNE_VIEW_TYPE = "ariadne-line";
 
 const DEBOUNCE_MS = 120;
 const WARMING_HINT = "Index is warming up…";
+const SEARCHING_HINT = "Searching…";
+const KEY_LEGEND = "↑↓ move · ↵ open · ⌘↵ pane · ⌥↵ link · ⇧↵ weave";
 const MARGIN_HINT = "Write, and related notes appear here.";
 const CARD_LIMIT = 5;
 
@@ -52,6 +52,8 @@ export class AriadneView extends ItemView {
   private queryToken = 0;
   private marginToken = 0;
   private debounce: ReturnType<typeof setTimeout> | null = null;
+  /** Kept so re-renders (selection moves) don't drop the current status line. */
+  private lastStatusHint?: string;
   private unsubscribeStatus: (() => void) | null = null;
   private unsubscribeWatcher: (() => void) | null = null;
   private lastMarkdown: MarkdownView | null = null;
@@ -88,7 +90,16 @@ export class AriadneView extends ItemView {
     this.inputEl.classList.add("ariadne-input");
     this.inputEl.addEventListener("input", () => this.onInput(this.inputEl.value));
     this.inputEl.addEventListener("keydown", (ev) => this.onKeydown(ev));
+    this.inputEl.setAttribute("aria-label", "Search notes");
+    this.inputEl.setAttribute("role", "combobox");
+    this.inputEl.setAttribute("aria-expanded", "false");
     root.appendChild(this.inputEl);
+
+    // The keyboard model is otherwise undiscoverable — ⇧↵ especially.
+    const legend = doc.createElement("div");
+    legend.classList.add("ariadne-keys");
+    legend.textContent = KEY_LEGEND;
+    root.appendChild(legend);
 
     // Search results — shown only while a query is active, capped at 2/3 height.
     this.resultsEl = doc.createElement("div");
@@ -168,7 +179,7 @@ export class AriadneView extends ItemView {
     // Fast lexical paint first…
     const lexical = await manager.query(raw, { semantic: false });
     if (token !== this.queryToken) return;
-    this.setResults(lexical);
+    this.setResults(lexical, SEARCHING_HINT);
 
     // …then the semantic merge when it lands.
     const fused = await manager.query(raw);
@@ -184,16 +195,16 @@ export class AriadneView extends ItemView {
     return !!this.deps.onCreateNote && this.hasQuery;
   }
 
-  private setResults(results: ScoredResult[]): void {
+  private setResults(results: ScoredResult[], statusHint?: string): void {
     this.results = [
       ...results.filter((r) => !r.semanticOnly),
       ...results.filter((r) => r.semanticOnly),
     ];
     this.selected = Math.max(0, Math.min(this.selected, this.rowCount - 1));
-    this.renderResults();
+    this.renderResults(statusHint);
   }
 
-  private renderResults(emptyHint?: string): void {
+  private renderResults(statusHint?: string): void {
     if (!this.resultsEl) return;
     // Collapse the search section entirely when there's nothing to show, so
     // the Margin gets the full panel.
@@ -204,21 +215,27 @@ export class AriadneView extends ItemView {
       return;
     }
 
-    renderResults(
-      this.resultsEl,
-      this.results,
-      this.selected,
-      {
-        onOpen: (result, newLeaf) => this.openResult(result, newLeaf),
-        onHoverSelect: (index) => {
-          if (index !== this.selected) {
-            this.selected = index;
-            this.renderResults();
-          }
-        },
+    renderResults(this.resultsEl, this.results, this.selected, {
+      onActivate: (result, mods) => this.activate(result, mods),
+      onHoverSelect: (index) => {
+        if (index !== this.selected) {
+          this.selected = index;
+          this.renderResults(this.lastStatusHint);
+        }
       },
-      this.canCreate ? undefined : emptyHint,
-    );
+    });
+
+    // A status line above the Do row: without it, "index still warming",
+    // "searching", and "no matches" were all indistinguishable from each other
+    // (the old empty-hint was routed through canCreate and never rendered).
+    this.lastStatusHint = statusHint;
+    const hint = statusHint ?? (this.results.length === 0 ? "No matches." : undefined);
+    if (hint) {
+      const el = this.resultsEl.ownerDocument.createElement("div");
+      el.classList.add("ariadne-empty");
+      el.textContent = hint;
+      this.resultsEl.appendChild(el);
+    }
 
     if (this.canCreate) {
       const doc = this.resultsEl.ownerDocument;
@@ -235,8 +252,30 @@ export class AriadneView extends ItemView {
         ev.preventDefault();
         this.deps.onCreateNote?.(this.inputEl.value.trim());
       });
+      row.addEventListener("mousemove", () => {
+        if (this.selected !== this.results.length) {
+          this.selected = this.results.length;
+          this.renderResults(this.lastStatusHint);
+        }
+      });
       this.resultsEl.appendChild(row);
     }
+
+    this.scrollSelectionIntoView();
+  }
+
+  /** Keep the keyboard selection visible — the pane scrolls at 2/3 height. */
+  private scrollSelectionIntoView(): void {
+    this.resultsEl
+      .querySelector(".is-selected")
+      ?.scrollIntoView({ block: "nearest" });
+  }
+
+  /** Route a result activation by modifier, identically from any surface. */
+  private activate(result: ScoredResult, mods: ActivateModifiers): void {
+    if (mods.weave) this.deps.onWeave?.(result);
+    else if (mods.insertLink) this.insertLink(result);
+    else this.openResult(result, mods.newLeaf);
   }
 
   private onKeydown(ev: KeyboardEvent): void {
@@ -245,7 +284,7 @@ export class AriadneView extends ItemView {
       if (this.rowCount === 0) return;
       const delta = ev.key === "ArrowDown" ? 1 : -1;
       this.selected = (this.selected + delta + this.rowCount) % this.rowCount;
-      this.renderResults();
+      this.renderResults(this.lastStatusHint);
       return;
     }
     if (ev.key === "Enter") {
@@ -256,9 +295,7 @@ export class AriadneView extends ItemView {
       }
       const result = this.results[this.selected];
       if (!result) return;
-      if (ev.shiftKey) this.deps.onWeave?.(result);
-      else if (ev.altKey) this.insertLink(result);
-      else this.openResult(result, ev.metaKey || ev.ctrlKey);
+      this.activate(result, modifiersOf(ev));
       return;
     }
     if (ev.key === "Escape") {
@@ -297,36 +334,32 @@ export class AriadneView extends ItemView {
   private renderMargin(results: ScoredResult[]): void {
     const doc = this.marginEl.ownerDocument;
     this.marginEl.replaceChildren();
+
+    if (!this.deps.marginEnabled()) {
+      this.marginHintEl.style.display = "";
+      this.marginHintEl.textContent = "Margin is off — enable it in Ariadne settings.";
+      return;
+    }
+    this.marginHintEl.textContent = MARGIN_HINT;
     this.marginHintEl.style.display = results.length === 0 ? "" : "none";
 
-    for (const r of results) {
-      const card = doc.createElement("div");
-      card.classList.add("ariadne-card", `ariadne-confidence-${prominence(r.confidence)}`);
-
-      const head = doc.createElement("div");
-      head.classList.add("ariadne-row-head");
-      const title = doc.createElement("span");
-      title.classList.add("ariadne-row-title");
-      title.textContent = r.title;
-      head.appendChild(title);
-      if (r.spark) head.appendChild(sparklineEl(r.spark, doc));
-      card.appendChild(head);
-
-      if (r.snippet) {
-        const snippet = doc.createElement("div");
-        snippet.classList.add("ariadne-row-snippet");
-        snippet.textContent = r.snippet;
-        card.appendChild(snippet);
-      }
-
-      card.addEventListener("mousedown", (ev) => {
-        ev.preventDefault();
-        if (ev.shiftKey) this.deps.onWeave?.(r);
-        else if (ev.altKey) this.insertLink(r);
-        else void this.app.workspace.openLinkText(r.path, "", ev.metaKey || ev.ctrlKey);
-      });
-      this.marginEl.appendChild(card);
-    }
+    // Same row component as the search results, so ⇧/⌥/⌘ mean the same thing
+    // in both halves of the panel.
+    results.forEach((r, i) => {
+      this.marginEl.appendChild(
+        rowEl(
+          doc,
+          r,
+          i,
+          false,
+          {
+            onActivate: (result, mods) => this.activate(result, mods),
+            onHoverSelect: () => {},
+          },
+          "card",
+        ),
+      );
+    });
   }
 
   /* ── Status glyph ───────────────────────────────────────────────────── */

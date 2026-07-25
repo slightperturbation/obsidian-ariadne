@@ -3,9 +3,13 @@
 Prereq: Phase 1 passing (`semantic on` in the Line's glyph). Reload the
 plugin after building so the new views and editor extension register.
 
+> **Note:** written before the Line and Margin were merged into one panel.
+> The Margin is now the lower section of the single Ariadne panel, not a
+> separate view — everything below still applies to that section.
+
 ## 1. The Margin (related cards)
-- [ ] Command **Ariadne: Open the Margin** → a card panel opens in the right
-      sidebar (tabbed alongside the Line is fine).
+- [ ] Command **Ariadne: Open Ariadne** → the panel opens in the right
+      sidebar; its lower section is the Margin.
 - [ ] Open a substantial note and click into a paragraph → within ~a second
       the Margin shows up to 5 related notes. The current note itself never
       appears.

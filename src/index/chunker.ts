@@ -22,12 +22,22 @@ export function stripFrontmatter(markdown: string): string {
   return markdown.replace(FRONTMATTER, "");
 }
 
-/** Group a note's lines into sections keyed by their nearest preceding heading. */
+const FENCE = /^\s*(```|~~~)/;
+
+/**
+ * Group a note's lines into sections keyed by their nearest preceding heading.
+ *
+ * Fenced code blocks are tracked so a shell/Python comment (`# install deps`)
+ * isn't mistaken for a heading — which used to shred code blocks apart, drop
+ * the comment lines from the indexed text entirely, and boost the fragments in
+ * BM25 as if they were real headings.
+ */
 function toSections(markdown: string): Section[] {
   const lines = stripFrontmatter(markdown).split(/\r?\n/);
   const sections: Section[] = [];
   let heading: string | undefined;
   let buffer: string[] = [];
+  let fence: string | null = null;
 
   const flush = () => {
     const text = buffer.join("\n").trim();
@@ -36,7 +46,16 @@ function toSections(markdown: string): Section[] {
   };
 
   for (const line of lines) {
-    const m = ATX_HEADING.exec(line);
+    const fenceMatch = FENCE.exec(line);
+    if (fenceMatch) {
+      // Opening or closing a fence; either way the line is content.
+      if (fence && line.trim().startsWith(fence)) fence = null;
+      else if (!fence) fence = fenceMatch[1];
+      buffer.push(line);
+      continue;
+    }
+
+    const m = fence ? null : ATX_HEADING.exec(line);
     if (m) {
       flush();
       heading = m[2].trim();
@@ -111,7 +130,8 @@ export function chunkNote(
 ): Chunk[] {
   const chunks: Chunk[] = [];
   let ordinal = 0;
-  for (const section of toSections(markdown)) {
+  const sections = toSections(markdown);
+  for (const section of sections) {
     for (const text of packSection(section.text, opts)) {
       chunks.push({
         id: `${path}#${ordinal}`,
@@ -123,5 +143,36 @@ export function chunkNote(
       ordinal += 1;
     }
   }
+
+  // A note whose body is only headings (a fresh stub, a heading-only MoC)
+  // otherwise yields no chunks at all — and since titles are indexed as a
+  // field OF a chunk, that made such notes unfindable by their own name.
+  // Emit one chunk carrying the title and any headings.
+  if (chunks.length === 0) {
+    const title = (path.split("/").pop() ?? path).replace(/\.md$/i, "");
+    const headings = headingsOf(markdown);
+    const text = [title, ...headings].filter(Boolean).join("\n").trim();
+    if (text) {
+      chunks.push({ id: `${path}#0`, path, ordinal: 0, heading: headings[0], text });
+    }
+  }
   return chunks;
+}
+
+/** Heading texts in document order (used for the title-only fallback chunk). */
+function headingsOf(markdown: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of stripFrontmatter(markdown).split(/\r?\n/)) {
+    const fenceMatch = FENCE.exec(line);
+    if (fenceMatch) {
+      if (fence && line.trim().startsWith(fence)) fence = null;
+      else if (!fence) fence = fenceMatch[1];
+      continue;
+    }
+    if (fence) continue;
+    const m = ATX_HEADING.exec(line);
+    if (m) out.push(m[2].trim());
+  }
+  return out;
 }

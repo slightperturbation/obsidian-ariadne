@@ -19,6 +19,8 @@ interface Pending {
 export class WorkerEmbedder implements EmbeddingProvider {
   readonly id: string;
   readonly dim: number;
+  /** Same model as TransformersEmbedder, just hosted in the worker. */
+  readonly floor = 0.6;
 
   private worker?: Worker;
   private loading?: Promise<void>;

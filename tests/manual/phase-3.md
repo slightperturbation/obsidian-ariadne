@@ -41,7 +41,7 @@ any write.
       nothing.
 
 ## 3. Undo (the load-bearing safety net)
-- [ ] After accepting a weave, run **Ariadne: Undo last action** → BOTH files
+- [ ] After accepting a weave, run **Ariadne: Undo last Ariadne action** → BOTH files
       revert in one step. A notice confirms.
 - [ ] Undo again → "Nothing to undo."
 - [ ] Create a note, then edit it by hand, then Undo the creation → it should
@@ -51,9 +51,14 @@ any write.
       newer edit). The action stays undoable once you revert your manual edit.
 
 ## 4. Stale-preview guard
-- [ ] Open the New-note preview, and (in another pane, before accepting)
-      create a note at the same path the scaffold would use. Accept → the
-      action is refused with a notice ("already exists"), no overwrite.
+- [ ] Start a weave (⇧↵) to open its preview. Before accepting, edit one of
+      the two notes in another pane. Accept → the action is REFUSED with a
+      notice ("changed since the preview"), nothing is overwritten.
+- [ ] Same, but instead of switching panes keep typing in the source note
+      right up until you accept → your typing is flushed first, so the guard
+      still fires rather than silently discarding what you just wrote.
+- [ ] Run "New scaffolded note" twice with the same seed → the second note
+      auto-disambiguates (`Title 2.md`); neither overwrites the other.
 
 ## 5. Cost cap
 - [ ] Set the session cost limit low (Settings → Ariadne → Session cost limit

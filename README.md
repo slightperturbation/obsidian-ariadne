@@ -112,12 +112,16 @@ src/
   index/             # crawler, chunker, lexical (BM25), embeddings, vectors,
                      # fusion (RRF), confidence, spark, scheduler, manager
   search/            # query grammar (type:, in:, since:)
-  line/              # the Line: ItemView, result renderer, sparkline
+  line/              # the unified Ariadne panel: view, result rows, sparkline
+  margin/            # draft watcher + CM6 ghost-text extension
+  model/             # Claude provider, router, task prompts/schemas
+  actions/           # the write path: framework, split, moc, merge, filing
+  ui/                # preview modals, diff rendering
   util/              # logger
 tests/               # Vitest + hand-written obsidian mock; manual/ scripts
 ```
 
-Later phases add `margin/`, `model/`, and `actions/` per the implementation plan.
+All phases through 4b are implemented; see Status above.
 
 ## License
 

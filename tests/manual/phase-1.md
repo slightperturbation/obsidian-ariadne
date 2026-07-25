@@ -6,7 +6,7 @@ Run against a **copy** of Syncd with Sync off. Build with `npm run build` (or
 
 ## 1. Load & index
 - [ ] Enable Ariadne → no console errors on load.
-- [ ] Open the Line (command: **Ariadne: Focus the Line**). The status glyph
+- [ ] Open the Line (command: **Ariadne: Open Ariadne**). The status glyph
       counts up (`N/M notes · indexing`) and settles at `M notes · idle`.
 - [ ] While the initial index runs, type in a note — **no typing lag**.
 - [ ] First run only: glyph shows `semantic loading…` while bge-small

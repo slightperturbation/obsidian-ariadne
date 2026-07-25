@@ -14,6 +14,9 @@ export interface SchedulerOptions {
 
 type LoadNote = (path: string) => Promise<SourceNote | null>;
 
+/** Attempts before a path is left out of the queue and reported as failed. */
+const MAX_ATTEMPTS = 3;
+
 /**
  * Incremental indexer: vault events mark paths dirty; after a debounce the
  * queue drains in time-boxed batches, yielding to the UI between batches so
@@ -31,6 +34,8 @@ export class IncrementalScheduler {
   /** Progress through the current burst (everything queued since last idle). */
   private burstDone = 0;
   private burstTotal = 0;
+  /** Consecutive failures per path, so a poison note can't loop forever. */
+  private failures = new Map<string, number>();
 
   private readonly debounceMs: number;
   private readonly batchBudgetMs: number;
@@ -95,27 +100,52 @@ export class IncrementalScheduler {
     }, this.debounceMs);
   }
 
-  /** Drain the queue now. Safe to call concurrently; only one drain runs. */
+  /**
+   * Drain the queue now. Safe to call concurrently; only one drain runs.
+   *
+   * Each path is isolated: a note that throws is retried a bounded number of
+   * times and then reported, rather than taking down the whole drain. That
+   * matters because indexNote() removes a note before re-adding it — an
+   * unhandled throw there used to leave the note deleted from the index and
+   * never re-queued, silently making it unsearchable for the session.
+   */
   async flush(): Promise<void> {
     if (this.running || this.disposed) return;
     this.running = true;
+    let lastError: unknown;
     try {
       while (this.pending > 0 && !this.disposed) {
         const batchStart = Date.now();
 
-        // Deletions are cheap — clear them all first.
+        // Deletions are cheap individually, but a folder delete can queue
+        // thousands — so they respect the time budget too.
         for (const path of [...this.deleted]) {
           this.deleted.delete(path);
-          this.manager.removeNote(path);
+          try {
+            this.manager.removeNote(path);
+          } catch (err) {
+            lastError = err;
+          }
           this.burstDone++;
+          if (Date.now() - batchStart > this.batchBudgetMs) break;
         }
 
         // Index dirty paths until the time budget is spent, then yield.
         for (const path of [...this.dirty]) {
           this.dirty.delete(path);
-          const note = await this.load(path);
-          if (note) await this.manager.indexNote(note);
-          else this.manager.removeNote(path);
+          try {
+            const note = await this.load(path);
+            if (note) await this.manager.indexNote(note);
+            else this.manager.removeNote(path);
+            this.failures.delete(path);
+          } catch (err) {
+            lastError = err;
+            const attempts = (this.failures.get(path) ?? 0) + 1;
+            this.failures.set(path, attempts);
+            // Re-queue transient failures (a file mid-write, a worker hiccup)
+            // instead of dropping the note out of the index for good.
+            if (attempts < MAX_ATTEMPTS) this.dirty.add(path);
+          }
           this.burstDone++;
           if (Date.now() - batchStart > this.batchBudgetMs) break;
         }
@@ -127,23 +157,40 @@ export class IncrementalScheduler {
           progressTotal: this.burstTotal,
         });
         await yieldToUI();
+        // A path re-queued above would otherwise spin this loop immediately;
+        // let the debounce reschedule it instead.
+        if (this.pending > 0 && this.dirty.size > 0 && lastError && this.allPendingFailed()) break;
       }
+    } finally {
+      // Always reset progress and persist, even after errors — the save hook
+      // is the only persistence trigger, so skipping it on error meant an
+      // errored session never wrote its index at all. Anything still queued
+      // (a re-queued failure) becomes the next burst's baseline, so progress
+      // can't exceed its own total.
       this.burstDone = 0;
-      this.burstTotal = 0;
+      this.burstTotal = this.pending;
       this.status?.set({
-        index: "idle",
+        index: lastError ? "error" : "idle",
         indexedNotes: this.manager.noteCount,
         progressDone: 0,
         progressTotal: 0,
+        ...(lastError ? { lastError: String(lastError) } : {}),
       });
-      this.onIdle?.();
-    } catch (err) {
-      this.status?.set({ index: "error", lastError: String(err) });
-    } finally {
       this.running = false;
+      try {
+        this.onIdle?.();
+      } catch {
+        /* persistence failures are reported by the caller */
+      }
     }
-    // Changes that arrived while an error unwound: try again on the next tick.
+    // Changes that arrived (or were re-queued) while draining: try again.
     if (this.pending > 0 && !this.disposed && this.timer === null) this.schedule();
+  }
+
+  /** True when every still-queued path has already failed at least once. */
+  private allPendingFailed(): boolean {
+    for (const path of this.dirty) if (!this.failures.has(path)) return false;
+    return true;
   }
 
   dispose(): void {

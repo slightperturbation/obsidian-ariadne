@@ -2,11 +2,17 @@
  * The action framework: every vault mutation flows through
  * propose → preview → accept → atomic undo.
  *
- * HARD INVARIANT: nothing in Ariadne writes to the vault except
- * ActionExecutor.apply()/undoLast(), and apply() is only ever called after an
- * explicit user accept. Proposals are pure data (FileChange[]) so previews
- * show exactly what will happen — the executor validates at accept time that
- * the vault still matches what was previewed, and refuses on any drift.
+ * HARD INVARIANT: no EXISTING note content is modified or deleted without an
+ * explicit user accept. Proposals are pure data (FileChange[]) so previews show
+ * exactly what will happen — the executor validates at accept time that the
+ * vault still matches what was previewed, and refuses on any drift.
+ *
+ * Two deliberate exceptions, both non-destructive and both still undoable:
+ * creating a scaffolded note and generating a Map of Content write a NEW file
+ * on command without a preview (you asked for a note; here it is — read it and
+ * undo if unwanted). The attachment sweep also writes outside the executor,
+ * via Obsidian's fileManager so embeds get rewritten, registering its reversal
+ * through pushExternalUndo.
  */
 
 export interface FileChange {
@@ -60,6 +66,8 @@ const MAX_UNDO = 20;
 
 export class ActionExecutor {
   private undoStack: ExecutedAction[] = [];
+  /** Serializes undo so concurrent invocations can't pop the same entry twice. */
+  private busy: Promise<void> = Promise.resolve();
 
   constructor(private io: VaultIO) {}
 
@@ -136,19 +144,67 @@ export class ActionExecutor {
     const executed: ExecutedAction = {
       title: proposal.title,
       at: Date.now(),
-      undo: async () => {
-        await this.validate(inverse);
-        for (const c of inverse) await this.applyChange(c);
-      },
+      undo: async () => this.applyReversible(inverse),
     };
     this.push(executed);
     return executed;
   }
 
   /**
+   * Apply changes with rollback and idempotency — used by undo. A mid-undo
+   * failure (a locked file, a sync client holding a handle) must not leave the
+   * vault half-reverted with a retry that can never validate again, so steps
+   * whose effect is already present are skipped and applied steps are unwound
+   * on failure.
+   */
+  private async applyReversible(changes: FileChange[]): Promise<void> {
+    await this.validate(changes.filter((c) => !this.mayBeAlreadyApplied(c)));
+    const undoSteps: Array<() => Promise<void>> = [];
+    try {
+      for (const c of changes) {
+        if (await this.alreadySatisfied(c)) continue;
+        if (c.type === "create") {
+          await this.io.create(c.path, c.after ?? "");
+          undoSteps.unshift(() => this.io.delete(c.path));
+        } else if (c.type === "modify") {
+          const previous = await this.io.read(c.path);
+          await this.io.modify(c.path, c.after ?? "");
+          undoSteps.unshift(() => this.io.modify(c.path, previous));
+        } else {
+          const previous = await this.io.read(c.path);
+          await this.io.delete(c.path);
+          undoSteps.unshift(() => this.io.create(c.path, previous));
+        }
+      }
+    } catch (err) {
+      for (const step of undoSteps) {
+        try {
+          await step();
+        } catch {
+          /* best-effort */
+        }
+      }
+      throw err;
+    }
+  }
+
+  /** A change we might be re-applying after a partial undo — skip validation. */
+  private mayBeAlreadyApplied(c: FileChange): boolean {
+    return c.type === "create" || c.type === "delete";
+  }
+
+  /** True when a change's effect is already present (so undo is retryable). */
+  private async alreadySatisfied(c: FileChange): Promise<boolean> {
+    const exists = await this.io.exists(c.path);
+    if (c.type === "delete") return !exists;
+    if (!exists) return false;
+    return (await this.io.read(c.path)) === (c.after ?? "");
+  }
+
+  /**
    * Register an externally-performed operation (e.g. a batch of file moves via
    * Obsidian's fileManager, which the text VaultIO can't express) with its own
-   * reversal, so it shares the single "Undo last action" command and stack.
+   * reversal, so it shares the single "Undo last Ariadne action" command and stack.
    */
   pushExternalUndo(title: string, undo: () => Promise<void>): void {
     this.push({ title, at: Date.now(), undo });
@@ -166,11 +222,21 @@ export class ActionExecutor {
    * work or losing the undo.
    */
   async undoLast(): Promise<ExecutedAction | null> {
-    const last = this.undoStack[this.undoStack.length - 1];
-    if (!last) return null;
-    await last.undo();
-    this.undoStack.pop();
-    return last;
+    // Serialize: a double-tapped hotkey would otherwise let two calls read the
+    // same top-of-stack entry, run it twice, and pop two — silently discarding
+    // the entry underneath without ever reversing it.
+    const run = this.busy.then(async () => {
+      const last = this.undoStack[this.undoStack.length - 1];
+      if (!last) return null;
+      await last.undo();
+      this.undoStack.pop();
+      return last;
+    });
+    this.busy = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   get undoCount(): number {

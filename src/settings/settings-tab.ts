@@ -1,6 +1,5 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type AriadnePlugin from "../main";
-import type { BrainPreference } from "./settings";
 
 export class AriadneSettingTab extends PluginSettingTab {
   private plugin: AriadnePlugin;
@@ -18,7 +17,9 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Enable semantic search")
-      .setDesc("Use local embeddings alongside lexical (BM25) search. Lexical always works even without a model.")
+      .setDesc(
+        "Use local embeddings alongside lexical (BM25) search. Lexical always works even without a model. Takes effect after reloading the plugin.",
+      )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.enableSemantic).onChange(async (v) => {
           this.plugin.settings.enableSemantic = v;
@@ -32,6 +33,18 @@ export class AriadneSettingTab extends PluginSettingTab {
       .addToggle((t) =>
         t.setValue(this.plugin.settings.indexOnStartup).onChange(async (v) => {
           this.plugin.settings.indexOnStartup = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Embedding model")
+      .setDesc(
+        "Local model used for semantic search, downloaded once on first use. Takes effect after reloading the plugin.",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.embeddingModel).onChange(async (v) => {
+          this.plugin.settings.embeddingModel = v.trim() || "bge-small-en-v1.5";
           await this.plugin.saveSettings();
         }),
       );
@@ -60,10 +73,12 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Suggestion reticence")
-      .setDesc("How semantically close a note must be before a ghost link is offered. Higher = quieter.")
+      .setDesc(
+        "How semantically close a note must be before a ghost link is offered (raw cosine). ~0.75 is chatty, ~0.85 is quiet, ~0.9+ is near-silent.",
+      )
       .addSlider((s) =>
         s
-          .setLimits(0.5, 0.9, 0.01)
+          .setLimits(0.6, 0.95, 0.01)
           .setValue(this.plugin.settings.ghostMinCosine)
           .setDynamicTooltip()
           .onChange(async (v) => {
@@ -74,22 +89,6 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName("Models").setHeading();
 
-    new Setting(containerEl)
-      .setName("Reasoning brain")
-      .setDesc("Which model handles MoCs, splits, scaffolding, and connective phrasing.")
-      .addDropdown((d) =>
-        d
-          .addOptions({
-            "cloud-first": "Claude API first",
-            "local-first": "Local first",
-            smart: "Smart per-task",
-          })
-          .setValue(this.plugin.settings.brain)
-          .onChange(async (v) => {
-            this.plugin.settings.brain = v as BrainPreference;
-            await this.plugin.saveSettings();
-          }),
-      );
 
     new Setting(containerEl)
       .setName("Claude API key")
@@ -127,15 +126,6 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl)
-      .setName("Local model endpoint")
-      .setDesc("OpenAI-compatible endpoint (home-network only; used opportunistically, never required).")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.localEndpoint).onChange(async (v) => {
-          this.plugin.settings.localEndpoint = v.trim();
-          await this.plugin.saveSettings();
-        }),
-      );
 
     new Setting(containerEl).setName("Filing").setHeading();
 
