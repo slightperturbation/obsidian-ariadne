@@ -17,11 +17,23 @@ export interface RenderHandlers {
   onHoverSelect(index: number): void;
 }
 
+export interface RowOptions {
+  variant?: "row" | "card";
+  /**
+   * Touch device: no modifier keys exist, so every capability normally gated
+   * behind ⇧/⌥ needs a visible control instead. Without this, weave and
+   * insert-link are simply unreachable on a phone.
+   */
+  touch?: boolean;
+}
+
 export const modifiersOf = (ev: MouseEvent | KeyboardEvent): ActivateModifiers => ({
   weave: ev.shiftKey,
   insertLink: ev.altKey,
   newLeaf: ev.metaKey || ev.ctrlKey,
 });
+
+const NO_MODIFIERS: ActivateModifiers = { weave: false, insertLink: false, newLeaf: false };
 
 /**
  * One result row, shared by the search results and the Margin cards so the
@@ -33,8 +45,9 @@ export function rowEl(
   index: number,
   selected: boolean,
   handlers: RenderHandlers,
-  variant: "row" | "card" = "row",
+  opts: RowOptions = {},
 ): HTMLElement {
+  const { variant = "row", touch = false } = opts;
   const row = doc.createElement("div");
   row.classList.add("ariadne-row", `ariadne-confidence-${prominence(result.confidence)}`);
   if (variant === "card") row.classList.add("ariadne-card");
@@ -65,14 +78,57 @@ export function rowEl(
     row.appendChild(snippet);
   }
 
-  row.addEventListener("mousedown", (ev) => {
-    // mousedown (not click) so the editor's selection/focus isn't lost first.
-    ev.preventDefault();
+  // Pointer events rather than mouse events: one path covers mouse, touch and
+  // pen. preventDefault is applied only for a mouse, where it stops the editor
+  // losing its selection before the handler runs; doing it for touch would
+  // interfere with scrolling the list.
+  row.addEventListener("pointerdown", (ev) => {
+    if (ev.pointerType === "mouse") {
+      ev.preventDefault();
+      handlers.onActivate(result, modifiersOf(ev));
+    }
+  });
+  row.addEventListener("click", (ev) => {
+    // Touch and keyboard-activated clicks land here; a mouse already fired.
+    if ((ev as PointerEvent).pointerType === "mouse") return;
     handlers.onActivate(result, modifiersOf(ev));
   });
   row.addEventListener("mousemove", () => handlers.onHoverSelect(index));
 
+  if (touch) row.appendChild(touchActionsEl(doc, result, handlers));
+
   return row;
+}
+
+/**
+ * The touch stand-in for ⌥↵ and ⇧↵. Tapping the row opens the note; these two
+ * cover the capabilities a phone has no modifier key to reach.
+ */
+function touchActionsEl(
+  doc: Document,
+  result: ScoredResult,
+  handlers: RenderHandlers,
+): HTMLElement {
+  const bar = doc.createElement("div");
+  bar.classList.add("ariadne-row-actions");
+
+  const button = (label: string, mods: ActivateModifiers, aria: string): HTMLElement => {
+    const el = doc.createElement("button");
+    el.type = "button";
+    el.classList.add("ariadne-row-action");
+    el.textContent = label;
+    el.setAttribute("aria-label", `${aria} ${result.title}`);
+    el.addEventListener("click", (ev) => {
+      // Otherwise the row's own click handler opens the note as well.
+      ev.stopPropagation();
+      handlers.onActivate(result, mods);
+    });
+    return el;
+  };
+
+  bar.appendChild(button("Link", { ...NO_MODIFIERS, insertLink: true }, "Insert a link to"));
+  bar.appendChild(button("Weave", { ...NO_MODIFIERS, weave: true }, "Weave a link with"));
+  return bar;
 }
 
 function sectionEl(doc: Document, label: string): HTMLElement {
@@ -94,6 +150,7 @@ export function renderResults(
   selectedIndex: number,
   handlers: RenderHandlers,
   emptyHint?: string,
+  touch = false,
 ): void {
   const doc = container.ownerDocument;
   container.replaceChildren();
@@ -118,13 +175,17 @@ export function renderResults(
   if (found.length > 0) {
     container.appendChild(sectionEl(doc, "Found"));
     for (const r of found) {
-      container.appendChild(rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers));
+      container.appendChild(
+        rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers, { touch }),
+      );
     }
   }
   if (related.length > 0) {
     container.appendChild(sectionEl(doc, "Related"));
     for (const r of related) {
-      container.appendChild(rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers));
+      container.appendChild(
+        rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers, { touch }),
+      );
     }
   }
 }

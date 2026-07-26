@@ -131,6 +131,17 @@ self.onmessage = (ev: MessageEvent) => {
           break;
         }
 
+        case "vec:ofPath": {
+          const s = requireStore();
+          const vecs = s.vectorsOfPathSync(msg.path);
+          const buffer = pack(vecs, s.dim);
+          self.postMessage(
+            { type: "entries", id: msg.id, ids: vecs.map((_, i) => String(i)), dim: s.dim, buffer },
+            [buffer],
+          );
+          break;
+        }
+
         case "vec:entries": {
           const s = requireStore();
           const all = s.entriesSync();

@@ -26,6 +26,8 @@ export interface AriadneViewDeps {
   marginMinCosine?: () => number | undefined;
   /** Link-graph neighbourhood of the note being written (backlinks + 2-hop). */
   marginNeighbors?: (path: string) => ReadonlySet<string>;
+  /** Touch device: show tap targets instead of a modifier-key legend. */
+  touch?: () => boolean;
   /** Layer 3 (Do): create a scaffolded note from the query. */
   onCreateNote?: (seed: string) => void;
   /** Layer 3 (Do): weave a bidirectional link with a result (⇧↵ / ⇧-click). */
@@ -99,11 +101,15 @@ export class AriadneView extends ItemView {
     this.inputEl.setAttribute("aria-expanded", "false");
     root.appendChild(this.inputEl);
 
-    // The keyboard model is otherwise undiscoverable — ⇧↵ especially.
-    const legend = doc.createElement("div");
-    legend.classList.add("ariadne-keys");
-    legend.textContent = KEY_LEGEND;
-    root.appendChild(legend);
+    // The keyboard model is otherwise undiscoverable — ⇧↵ especially. On a
+    // touch device it would describe keys that don't exist, so the rows carry
+    // their own Link/Weave buttons instead (see rowEl).
+    if (!this.touch) {
+      const legend = doc.createElement("div");
+      legend.classList.add("ariadne-keys");
+      legend.textContent = KEY_LEGEND;
+      root.appendChild(legend);
+    }
 
     // Search results — shown only while a query is active, capped at 2/3 height.
     this.resultsEl = doc.createElement("div");
@@ -155,6 +161,11 @@ export class AriadneView extends ItemView {
   }
 
   /* ── Search half ────────────────────────────────────────────────────── */
+
+  /** Whether this device has no modifier keys to gate actions behind. */
+  private get touch(): boolean {
+    return this.deps.touch?.() ?? false;
+  }
 
   private get hasQuery(): boolean {
     return !!this.inputEl?.value.trim();
@@ -219,15 +230,22 @@ export class AriadneView extends ItemView {
       return;
     }
 
-    renderResults(this.resultsEl, this.results, this.selected, {
-      onActivate: (result, mods) => this.activate(result, mods),
-      onHoverSelect: (index) => {
-        if (index !== this.selected) {
-          this.selected = index;
-          this.renderResults(this.lastStatusHint);
-        }
+    renderResults(
+      this.resultsEl,
+      this.results,
+      this.selected,
+      {
+        onActivate: (result, mods) => this.activate(result, mods),
+        onHoverSelect: (index) => {
+          if (index !== this.selected) {
+            this.selected = index;
+            this.renderResults(this.lastStatusHint);
+          }
+        },
       },
-    });
+      undefined,
+      this.touch,
+    );
 
     // A status line above the Do row: without it, "index still warming",
     // "searching", and "no matches" were all indistinguishable from each other
@@ -336,13 +354,20 @@ export class AriadneView extends ItemView {
     const linked = new Set(
       [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) => m[1].trim()),
     );
-    const results = await manager.related(contextText, {
+    const opts = {
       excludePath: ctx.path,
       limit: CARD_LIMIT,
       excludeTitles: linked,
       minCosine: this.deps.marginMinCosine?.(),
       neighbors: this.deps.marginNeighbors?.(ctx.path),
-    });
+    };
+    // Without a local model, free text can't be embedded — but the note being
+    // written was embedded by whichever device owns the index, so asking in
+    // terms of the note keeps the Margin semantic instead of lexical-only.
+    const results =
+      manager.canEmbedText() || !manager.hasStoredVectors()
+        ? await manager.related(contextText, opts)
+        : await manager.relatedToPath(ctx.path, opts);
     if (token !== this.marginToken) return;
     this.renderMargin(results);
   }
@@ -372,7 +397,7 @@ export class AriadneView extends ItemView {
             onActivate: (result, mods) => this.activate(result, mods),
             onHoverSelect: () => {},
           },
-          "card",
+          { variant: "card", touch: this.touch },
         ),
       );
     });
@@ -392,15 +417,21 @@ export class AriadneView extends ItemView {
           ? " · semantic loading…"
           : s.semantic === "fallback"
             ? " · semantic fallback"
-            : " · semantic on";
+            : s.semantic === "synced"
+              ? " · semantic synced"
+              : " · semantic on";
     const brain =
       s.brain === "cloud"
         ? ` · brain ${s.sessionCostUsd >= 0.005 ? `$${s.sessionCostUsd.toFixed(2)}` : "ready"}`
         : "";
+    // A reader device can't embed notes edited since the owner last indexed,
+    // so say how many are in that state rather than quietly ranking them worse.
+    const stale =
+      s.role === "consumer" && s.staleNotes > 0 ? ` · ${s.staleNotes} awaiting desktop` : "";
     this.glyphEl.textContent =
       s.index === "error"
         ? `index error — ${s.lastError ?? "unknown"}`
-        : `${s.indexedNotes} notes · ${state}${semantic}${brain}`;
+        : `${s.indexedNotes} notes · ${state}${semantic}${stale}${brain}`;
     this.glyphEl.classList.toggle("is-error", s.index === "error");
   }
 }

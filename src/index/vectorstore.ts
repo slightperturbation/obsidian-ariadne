@@ -98,6 +98,30 @@ export class VectorStore implements VectorIndex {
     return this.searchSync(query, limit, floor);
   }
 
+  /**
+   * The stored (already normalized) vectors for one note's chunks.
+   *
+   * This is what lets a device with no embedding model still ask a semantic
+   * question: the note you're reading was embedded by whichever device owns
+   * the index, so "what else is like this note" needs no new inference — only
+   * the vectors already on disk.
+   */
+  vectorsOfPathSync(path: string): Float32Array[] {
+    const slots = this.pathSlots.get(path);
+    if (!slots) return [];
+    const out: Float32Array[] = [];
+    for (const slot of slots) {
+      if (this.slotIds[slot] == null) continue;
+      const base = slot * this.dim;
+      out.push(this.data.slice(base, base + this.dim));
+    }
+    return out;
+  }
+
+  async vectorsOfPath(path: string): Promise<Float32Array[]> {
+    return this.vectorsOfPathSync(path);
+  }
+
   /** The scan itself. Synchronous so the worker can call it directly. */
   searchSync(query: ArrayLike<number>, limit = 50, floor = -1): VectorHit[] {
     // Normalize the query once into a scratch buffer.

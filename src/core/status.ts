@@ -1,7 +1,11 @@
 export type BrainKind = "none" | "local" | "cloud";
 export type IndexState = "idle" | "indexing" | "error";
-/** off = disabled; loading = model download/init; on = real model; fallback = hash embedder. */
-export type SemanticState = "off" | "loading" | "on" | "fallback";
+/**
+ * off = disabled; loading = model download/init; on = real model;
+ * fallback = hash embedder; synced = reading another device's vectors with no
+ * local model (a consumer device — see core/platform.ts).
+ */
+export type SemanticState = "off" | "loading" | "on" | "fallback" | "synced";
 
 export interface AriadneStatus {
   index: IndexState;
@@ -14,6 +18,14 @@ export interface AriadneStatus {
   progressTotal: number;
   /** Cumulative reasoning-model spend this session (USD). */
   sessionCostUsd: number;
+  /** Whether this device writes the index or reads a synced one. */
+  role: "owner" | "consumer";
+  /**
+   * Notes changed since the owner last wrote the index. A consumer can search
+   * these lexically but has no vectors for them until the owner catches up, so
+   * the glyph says so rather than quietly returning worse results.
+   */
+  staleNotes: number;
   lastError?: string;
 }
 
@@ -33,6 +45,8 @@ export class StatusStore {
     progressDone: 0,
     progressTotal: 0,
     sessionCostUsd: 0,
+    role: "owner",
+    staleNotes: 0,
   };
   private listeners = new Set<Listener>();
 

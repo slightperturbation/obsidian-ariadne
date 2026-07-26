@@ -25,6 +25,20 @@ const PART_BUDGET_BYTES = 3_000_000;
 /** Reshard when a part outgrows the budget; also the initial part count. */
 const MIN_PARTS = 4;
 
+/**
+ * Roughly how many bytes a chunk costs as JSON, without serializing it.
+ *
+ * Deliberately an over-estimate: the 1.15 factor covers escape sequences and
+ * multi-byte characters, and erring high only means resharding slightly
+ * sooner than strictly necessary — whereas erring low means writing a file
+ * that Sync refuses.
+ */
+function estimateChunkJson(c: Chunk): number {
+  const fields = c.id.length + c.path.length + c.text.length + (c.heading?.length ?? 0);
+  // Key names, quotes, commas, braces, and the numeric ordinal.
+  return Math.ceil(fields * 1.15) + 80;
+}
+
 interface Manifest {
   schemaVersion: number;
   embedderId?: string;
@@ -181,11 +195,22 @@ export async function saveIndex(
 
   // Group chunks into shards, and grow the shard count if any shard would
   // exceed the per-file budget (a reshard rewrites everything, but is rare).
+  //
+  // Shard size is estimated rather than measured: JSON.stringify-ing every
+  // shard purely to read .length threw away megabytes of strings on every
+  // save, on the main thread, and the answer only has to be good enough to
+  // pick a shard count well under Sync's file cap.
+  const sizeOf = new Map(snap.chunks.map((c) => [c.id, estimateChunkJson(c)] as const));
   let shards: Chunk[][] = [];
   for (;;) {
     shards = Array.from({ length: parts }, () => [] as Chunk[]);
     for (const chunk of snap.chunks) shards[partOf(chunk.path, parts)].push(chunk);
-    const worst = shards.reduce((max, s) => Math.max(max, JSON.stringify(s).length), 0);
+    let worst = 0;
+    for (const shard of shards) {
+      let total = 2; // the enclosing []
+      for (const c of shard) total += sizeOf.get(c.id)!;
+      if (total > worst) worst = total;
+    }
     if (worst <= budget || parts >= 1024) break;
     parts *= 2;
   }

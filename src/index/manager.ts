@@ -239,7 +239,22 @@ export class IndexManager {
     this.unembedded.delete(path);
   }
 
+  /**
+   * Index an entire source. Prefers the streaming path — `all()` materializes
+   * every note's text at once, which on a phone is a straightforward way to
+   * get the app killed on a large vault.
+   *
+   * Production uses the incremental scheduler instead; this is for rebuilds
+   * and tests.
+   */
   async buildAll(source: NoteSource): Promise<void> {
+    if (source.paths && source.loadPath) {
+      for (const path of source.paths()) {
+        const note = await source.loadPath(path);
+        if (note) await this.indexNote(note);
+      }
+      return;
+    }
     for (const note of await source.all()) await this.indexNote(note);
   }
 
@@ -308,6 +323,69 @@ export class IndexManager {
         opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
     );
     return this.buildResults(ranked, limit, cosineById, undefined, opts.neighbors);
+  }
+
+  /**
+   * Notes related to an already-indexed note, using that note's **stored**
+   * vectors as the query.
+   *
+   * No embedder required — which is the whole point. A phone reading a synced
+   * index has every note's vectors but no model to embed anything new with, so
+   * this is the one semantic question it can still answer, and happens to be
+   * the one the Margin asks. On a device that does have a model it's also
+   * simply cheaper than re-embedding text the owner already embedded.
+   *
+   * Each chunk votes independently and a note keeps its best score: a long
+   * source note is a bag of several ideas, and averaging its chunks into one
+   * centroid would blur them all into a vector that matches nothing well.
+   */
+  async relatedToPath(path: string, opts: RelatedOptions = {}): Promise<ScoredResult[]> {
+    const limit = opts.limit ?? 8;
+    const store = this.vectors;
+    if (!store?.vectorsOfPath) return [];
+    const queries = await store.vectorsOfPath(path);
+    if (queries.length === 0) return [];
+
+    const floor = this.embedder?.floor ?? VECTOR_FLOOR;
+    const bestById = new Map<string, number>();
+    for (const q of queries) {
+      for (const hit of await store.search(q, CANDIDATES, floor)) {
+        const prior = bestById.get(hit.id);
+        if (prior === undefined || hit.score > prior) bestById.set(hit.id, hit.score);
+      }
+    }
+    const ordered = [...bestById.entries()].sort((a, b) => b[1] - a[1]);
+
+    // Lexical still contributes: the note's own title and headings catch
+    // notes that share vocabulary the embedder happened to place elsewhere.
+    const meta = this.meta.get(path);
+    const lists: string[][] = [ordered.map(([id]) => id)];
+    if (meta) lists.push(this.lexical.rankedIds(meta.title, CANDIDATES, "or"));
+
+    const cosineById = new Map(ordered);
+    const ranked = this.collapseToNotes(lists, (candidate) => {
+      if (candidate === path || candidate === opts.excludePath) return false;
+      if (opts.excludeTitles?.has(this.meta.get(candidate)?.title ?? "")) return false;
+      return true;
+    }).filter(
+      (entry) =>
+        opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
+    );
+    return this.buildResults(ranked, limit, cosineById, undefined, opts.neighbors);
+  }
+
+  /** Whether relatedToPath() can answer at all (vectors on hand). */
+  hasStoredVectors(): boolean {
+    return !!this.vectors?.vectorsOfPath;
+  }
+
+  /**
+   * Whether arbitrary text can be embedded — false on a device that reads a
+   * synced index without a local model. Retrieval still works there; it just
+   * has to be asked in terms of an indexed note rather than free text.
+   */
+  canEmbedText(): boolean {
+    return !!this.embedder && !!this.vectors;
   }
 
   /**

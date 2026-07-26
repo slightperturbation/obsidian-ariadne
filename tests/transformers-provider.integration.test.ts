@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { TransformersEmbedder, resolveModelId } from "../src/index/embeddings/transformers-provider";
+import { TransformersEmbedder } from "../src/index/embeddings/transformers-provider";
+import { resolveModelId } from "../src/index/embeddings/model-ids";
 
 describe("resolveModelId", () => {
   it("prefixes bare names with Xenova/ and passes repo ids through", () => {

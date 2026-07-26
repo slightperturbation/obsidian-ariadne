@@ -243,3 +243,48 @@
 .ariadne-glyph.is-error {
   color: var(--text-error);
 }
+
+/* ── Touch affordances (Phase 5) ─────────────────────────────────────────
+   On a phone there are no modifier keys, so the two capabilities that ⌥ and
+   ⇧ gate get visible controls. Obsidian sets .is-mobile on <body>. */
+
+.ariadne-row-actions {
+  display: flex;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-1);
+}
+
+.ariadne-row-action {
+  /* Deliberately quiet: these sit under every card, so they must read as
+     available-if-needed rather than competing with the note title. */
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  /* 44px is the platform's minimum comfortable tap target. */
+  min-height: 44px;
+  padding: 0 var(--size-4-3);
+  box-shadow: none;
+}
+
+.ariadne-row-action:active {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* Rows are tap targets themselves on touch; give them room and kill the
+   tap-highlight flash that makes a custom row look like a broken link. */
+.is-mobile .ariadne-row {
+  padding-top: var(--size-4-2);
+  padding-bottom: var(--size-4-2);
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ghost text is tappable on touch (there is no Tab key) — underline it so
+   that reads as an offer rather than as text already inserted. */
+.is-mobile .ariadne-ghost {
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  padding: 0 2px;
+}

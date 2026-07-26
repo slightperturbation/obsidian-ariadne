@@ -1,6 +1,13 @@
+import type { DeviceRoleSetting } from "../core/device";
+
 export interface AriadneSettings {
   // Indexing
   enableSemantic: boolean;
+  /**
+   * Whether this device owns the index (runs the model, writes the shards) or
+   * consumes the owner's index over Sync. "auto" = desktop owns, mobile reads.
+   */
+  deviceRole: DeviceRoleSetting;
   indexOnStartup: boolean;
   embeddingModel: string;
 
@@ -29,6 +36,7 @@ export interface AriadneSettings {
 
 export const DEFAULT_SETTINGS: AriadneSettings = {
   enableSemantic: true,
+  deviceRole: "auto",
   indexOnStartup: true,
   embeddingModel: "bge-small-en-v1.5",
 

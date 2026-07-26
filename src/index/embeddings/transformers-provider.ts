@@ -1,32 +1,11 @@
 import { pipeline, env, type FeatureExtractionPipeline } from "@huggingface/transformers";
 import type { EmbeddingProvider } from "./provider";
+import { embedderId, modelDim, resolveModelId, type OrtWasmPaths } from "./model-ids";
 
-/**
- * Where ONNX Runtime loads its engine from. By default that's a CDN, whose
- * dynamic module import Obsidian blocks — so inside the app we hand in blob:
- * URLs built from the runtime files shipped alongside main.js.
- */
-export interface OrtWasmPaths {
-  mjs: string;
-  wasm: string;
-}
+
 
 /** BGE retrieval instruction — queries get it, documents must not. */
 const BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
-
-const DIMS: Record<string, number> = {
-  "Xenova/bge-small-en-v1.5": 384,
-  "Snowflake/snowflake-arctic-embed-xs": 384,
-};
-
-/** Map a bare settings value ("bge-small-en-v1.5") to a hub repo id. */
-export function resolveModelId(model: string): string {
-  return model.includes("/") ? model : `Xenova/${model}`;
-}
-
-export function modelDim(model: string): number {
-  return DIMS[resolveModelId(model)] ?? 384;
-}
 
 export interface TransformersOptions {
   ortWasmPaths?: OrtWasmPaths;
@@ -61,8 +40,8 @@ export class TransformersEmbedder implements EmbeddingProvider {
     private opts: TransformersOptions = {},
   ) {
     this.modelId = resolveModelId(model);
-    this.id = `transformers:${this.modelId}`;
-    this.dim = DIMS[this.modelId] ?? 384;
+    this.id = embedderId(model);
+    this.dim = modelDim(model);
   }
 
   ready(): Promise<void> {

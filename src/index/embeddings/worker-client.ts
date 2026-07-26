@@ -1,4 +1,4 @@
-import type { OrtWasmPaths } from "./transformers-provider";
+import type { OrtWasmPaths } from "./model-ids";
 import type { WorkerRequest, WorkerResponse } from "./worker-protocol";
 
 interface Pending {

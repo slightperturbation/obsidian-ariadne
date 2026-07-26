@@ -3,6 +3,12 @@ import { keymap, type EditorView } from "@codemirror/view";
 import { ghostField, setGhost } from "./state";
 
 export interface GhostKeymapOptions {
+  /**
+   * Touch device: the soft keyboard has no Tab or Escape, so the suggestion
+   * would be un-acceptable and un-dismissable. Tapping it accepts instead;
+   * dismissal needs no affordance because any further typing clears it.
+   */
+  touch?(): boolean;
   /** Vim mode active? Esc then dismisses but still falls through to vim. */
   isVim(): boolean;
   /** Called after a suggestion is accepted (for dismissal memory, logging). */
@@ -11,7 +17,7 @@ export interface GhostKeymapOptions {
   onDismiss?(targetPath: string): void;
 }
 
-function acceptGhost(view: EditorView, opts: GhostKeymapOptions): boolean {
+export function acceptGhost(view: EditorView, opts: GhostKeymapOptions): boolean {
   const ghost = view.state.field(ghostField, false);
   if (!ghost) return false; // no suggestion → Tab falls through (indentation)
   if (view.composing) return false; // never fight the IME

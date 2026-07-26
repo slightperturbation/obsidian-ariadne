@@ -30,6 +30,12 @@ export interface VectorIndex {
   entries(): Promise<Array<[string, Float32Array]>>;
 
   /**
+   * The stored vectors for one note's chunks. Lets a host with no embedder ask
+   * "what is like this note" using vectors another device already computed.
+   */
+  vectorsOfPath?(path: string): Promise<Float32Array[]>;
+
+  /**
    * Embed and store a note's chunks in one step, replacing whatever that path
    * had before. Present only where the embedder and the store share a host
    * (the worker), so vectors never cross the thread boundary during indexing.

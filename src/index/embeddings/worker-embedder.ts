@@ -1,5 +1,5 @@
 import type { EmbeddingProvider } from "./provider";
-import { modelDim, resolveModelId } from "./transformers-provider";
+import { embedderId, modelDim } from "./model-ids";
 import type { WorkerClient } from "./worker-client";
 
 /**
@@ -23,7 +23,7 @@ export class WorkerEmbedder implements EmbeddingProvider {
     model: string,
     private client: WorkerClient,
   ) {
-    this.id = `transformers:${resolveModelId(model)}`;
+    this.id = embedderId(model);
     this.dim = modelDim(model);
   }
 

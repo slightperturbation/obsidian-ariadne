@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from "obsidian";
 import type AriadnePlugin from "../main";
+import type { AriadneSettings } from "./settings";
 
 export class AriadneSettingTab extends PluginSettingTab {
   private plugin: AriadnePlugin;
@@ -25,6 +26,24 @@ export class AriadneSettingTab extends PluginSettingTab {
           this.plugin.settings.enableSemantic = v;
           await this.plugin.saveSettings();
         }),
+      );
+
+    new Setting(containerEl)
+      .setName("This device's role")
+      .setDesc(
+        "One device should own the index: it runs the embedding model and writes the index files, which the others read over Sync. " +
+          "Automatic makes desktops owners and phones/tablets readers — a reader still searches and still shows related notes, " +
+          "it just never downloads a model or writes index files. Set an iPad to Owner if you have no desktop. " +
+          "Takes effect after reloading the plugin.",
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ auto: "Automatic", owner: "Owner (indexes)", consumer: "Reader (synced index)" })
+          .setValue(this.plugin.settings.deviceRole)
+          .onChange(async (v) => {
+            this.plugin.settings.deviceRole = v as AriadneSettings["deviceRole"];
+            await this.plugin.saveSettings();
+          }),
       );
 
     new Setting(containerEl)
@@ -63,7 +82,9 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Ghost link suggestions")
-      .setDesc("Faint inline [[link]] suggestions after a typing pause. Tab accepts, Esc dismisses.")
+      .setDesc(
+        "Faint inline [[link]] suggestions after a typing pause. Tab accepts, Esc dismisses; on a phone, tap the suggestion to accept and keep typing to dismiss.",
+      )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.enableGhostText).onChange(async (v) => {
           this.plugin.settings.enableGhostText = v;

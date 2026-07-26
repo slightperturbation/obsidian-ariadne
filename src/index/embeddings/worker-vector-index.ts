@@ -96,6 +96,13 @@ export class WorkerVectorIndex implements VectorIndex {
     ]);
   }
 
+  async vectorsOfPath(path: string): Promise<Float32Array[]> {
+    const msg = await this.client.request((id) => ({ type: "vec:ofPath", id, path }));
+    if (msg.type !== "entries") return [];
+    const flat = new Float32Array(msg.buffer);
+    return msg.ids.map((_, i) => flat.slice(i * msg.dim, (i + 1) * msg.dim));
+  }
+
   dispose(): void {
     this.client.dispose();
   }

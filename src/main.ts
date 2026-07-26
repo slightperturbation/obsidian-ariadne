@@ -2,12 +2,13 @@ import { Plugin, Platform, TFile, normalizePath, requestUrl } from "obsidian";
 import { AriadneSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import { AriadneSettingTab } from "./settings/settings-tab";
 import { StatusStore } from "./core/status";
+import { devicePolicy, type DevicePolicy } from "./core/device";
 import { Logger } from "./util/logger";
 import { IndexManager } from "./index/manager";
 import { IncrementalScheduler } from "./index/scheduler";
 import { VaultNoteSource } from "./index/crawler";
 import { HashEmbedder } from "./index/embeddings/hash-embedder";
-import type { OrtWasmPaths } from "./index/embeddings/transformers-provider";
+import type { OrtWasmPaths } from "./index/embeddings/model-ids";
 import { WorkerEmbedder } from "./index/embeddings/worker-embedder";
 import { WorkerClient } from "./index/embeddings/worker-client";
 import { WorkerVectorIndex } from "./index/embeddings/worker-vector-index";
@@ -79,11 +80,20 @@ export default class AriadnePlugin extends Plugin {
   private executor!: ActionExecutor;
   private actions!: ActionsController;
   private lastMarkdown: MarkdownView | null = null;
+  private policy!: DevicePolicy;
+  /** Reverse link graph, invalidated on metadata changes (see backlinks()). */
+  private backlinkIndex?: Map<string, Set<string>>;
 
   async onload(): Promise<void> {
     await this.loadSettings();
     this.log = new Logger("Ariadne", this.settings.debugLogging);
     this.status = new StatusStore();
+    this.policy = devicePolicy({
+      isMobile: Platform.isMobile,
+      deviceRole: this.settings.deviceRole,
+      enableSemantic: this.settings.enableSemantic,
+    });
+    this.status.set({ role: this.policy.role });
 
     this.addSettingTab(new AriadneSettingTab(this.app, this));
 
@@ -177,6 +187,7 @@ export default class AriadnePlugin extends Plugin {
           // suggestion interrupts, so the Margin can afford to be less certain.
           marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
           marginNeighbors: (path) => this.linkNeighborhood(path),
+          touch: () => this.policy.touch,
           onCreateNote: (seed) => void this.actions.createNote(seed),
           onWeave: (result) => void this.actions.weave(result),
         }),
@@ -200,6 +211,7 @@ export default class AriadnePlugin extends Plugin {
 
     this.registerEditorExtension(
       ghostExtension({
+        touch: () => this.policy.touch,
         isVim: () =>
           (this.app.vault as unknown as { getConfig?: (k: string) => unknown }).getConfig?.(
             "vimMode",
@@ -236,7 +248,8 @@ export default class AriadnePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => void this.startIndexing());
 
     this.log.info(
-      `loaded (v${this.manifest.version}) on ${Platform.isMobile ? "mobile" : "desktop"}`,
+      `loaded (v${this.manifest.version}) on ${Platform.isMobile ? "mobile" : "desktop"} ` +
+        `as index ${this.policy.role}`,
     );
   }
 
@@ -292,7 +305,13 @@ export default class AriadnePlugin extends Plugin {
     );
     // Re-index when Obsidian finishes parsing a note (frontmatter/links ready).
     this.registerEvent(
-      this.app.metadataCache.on("changed", (file: TFile) => markIfNote(file.path)),
+      this.app.metadataCache.on("changed", (file: TFile) => {
+        this.backlinkIndex = undefined;
+        markIfNote(file.path);
+      }),
+    );
+    this.registerEvent(
+      this.app.metadataCache.on("resolved", () => (this.backlinkIndex = undefined)),
     );
 
     if (this.settings.indexOnStartup) {
@@ -310,6 +329,10 @@ export default class AriadnePlugin extends Plugin {
         for (const path of this.manager.indexedPaths()) {
           if (!currentPaths.has(path)) this.scheduler.markDeleted(path);
         }
+        // On a consumer these re-index lexically only — there's no model to
+        // embed them with — so they stay findable by word but not by meaning
+        // until the owner next writes the index. The glyph reports the gap.
+        if (!this.policy.writesIndex) this.status.set({ staleNotes: dirty });
         this.log.info(`stale diff: ${dirty} changed, ${this.scheduler.pending} queued`);
       } else {
         this.scheduler.enqueueAll(this.source.paths());
@@ -317,7 +340,32 @@ export default class AriadnePlugin extends Plugin {
       }
     }
 
-    if (this.settings.enableSemantic) void this.startSemantic();
+    if (this.policy.loadsModel) void this.startSemantic();
+    else this.adoptSyncedVectors(snapshot);
+  }
+
+  /**
+   * Consumer path: use the vectors the owner already computed, with no model
+   * on this device at all.
+   *
+   * `restore()` has already loaded them into an in-process store, so there is
+   * nothing to build here — the job is to report honestly. Free-text semantic
+   * search does need a model (something has to embed the query), so it stays
+   * unavailable; but the Margin's "related to what I'm reading" runs entirely
+   * off stored vectors, which is the mobile feature that actually matters.
+   */
+  private adoptSyncedVectors(snapshot: { vectors: unknown[] } | null): void {
+    if (!this.settings.enableSemantic) {
+      this.status.set({ semantic: "off" });
+      return;
+    }
+    const synced = !!snapshot && snapshot.vectors.length > 0;
+    this.status.set({ semantic: synced ? "synced" : "off" });
+    this.log.info(
+      synced
+        ? `synced index adopted: ${this.manager?.noteCount ?? 0} notes, no local model`
+        : "no synced vectors found — lexical only (index this vault on a desktop first)",
+    );
   }
 
   /**
@@ -403,16 +451,25 @@ export default class AriadnePlugin extends Plugin {
     });
   }
 
+  /**
+   * Index file access. A consumer device gets the reads and no-op writes: two
+   * devices writing the same shards is exactly the shape Sync resolves by
+   * picking one and discarding the other, which would silently corrupt the
+   * index. The no-ops sit here rather than at each call site so persistence
+   * stays oblivious to who is running it.
+   */
   private makeFileIO(): FileIO {
     const adapter = this.app.vault.adapter;
+    const readOnly = !this.policy.writesIndex;
+    const refuse = async (): Promise<void> => {};
     return {
       exists: (p) => adapter.exists(p),
-      mkdir: (p) => adapter.mkdir(p),
+      mkdir: (p) => (readOnly ? refuse() : adapter.mkdir(p)),
       read: (p) => adapter.read(p),
-      write: (p, data) => adapter.write(p, data),
+      write: (p, data) => (readOnly ? refuse() : adapter.write(p, data)),
       readBinary: (p) => adapter.readBinary(p),
-      writeBinary: (p, data) => adapter.writeBinary(p, data),
-      remove: (p) => adapter.remove(p),
+      writeBinary: (p, data) => (readOnly ? refuse() : adapter.writeBinary(p, data)),
+      remove: (p) => (readOnly ? refuse() : adapter.remove(p)),
       list: async (dir) => {
         if (!(await adapter.exists(dir))) return [];
         const listing = await adapter.list(dir);
@@ -422,6 +479,9 @@ export default class AriadnePlugin extends Plugin {
   }
 
   private scheduleSave(): void {
+    // Short-circuit before the timer, not inside saveIndexNow: the expensive
+    // part is snapshot(), which materializes every vector.
+    if (!this.policy.writesIndex) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -482,16 +542,37 @@ export default class AriadnePlugin extends Plugin {
   private linkNeighborhood(path: string): Set<string> {
     const graph = this.app.metadataCache.resolvedLinks;
     const out = new Set<string>();
-    const direct = Object.keys(graph[path] ?? {});
-    for (const target of direct) {
+    for (const target of Object.keys(graph[path] ?? {})) {
       for (const second of Object.keys(graph[target] ?? {})) {
         if (second !== path) out.add(second);
       }
     }
-    for (const [source, links] of Object.entries(graph)) {
-      if (source !== path && links[path]) out.add(source);
-    }
+    for (const source of this.backlinks().get(path) ?? []) out.add(source);
     return out;
+  }
+
+  /**
+   * Reverse link index, rebuilt only when the metadata cache changes.
+   *
+   * Finding backlinks by scanning every note's outbound links is O(all links
+   * in the vault), and the Margin asks for them after every typing pause —
+   * cheap enough to miss on a desktop, plainly wasteful on a phone.
+   */
+  private backlinks(): Map<string, Set<string>> {
+    if (this.backlinkIndex) return this.backlinkIndex;
+    const index = new Map<string, Set<string>>();
+    for (const [source, links] of Object.entries(this.app.metadataCache.resolvedLinks)) {
+      for (const target of Object.keys(links)) {
+        let sources = index.get(target);
+        if (!sources) {
+          sources = new Set<string>();
+          index.set(target, sources);
+        }
+        sources.add(source);
+      }
+    }
+    this.backlinkIndex = index;
+    return index;
   }
 
   private async activateLine(): Promise<void> {

@@ -1,4 +1,4 @@
-import type { OrtWasmPaths } from "./transformers-provider";
+import type { OrtWasmPaths } from "./model-ids";
 import type { IndexEntry, VectorHit } from "../vector-index";
 
 /**
@@ -24,7 +24,8 @@ export type WorkerRequest =
       limit: number;
       floor: number;
     }
-  | { type: "vec:entries"; id: number };
+  | { type: "vec:entries"; id: number }
+  | { type: "vec:ofPath"; id: number; path: string };
 
 export type WorkerResponse =
   | { type: "ready"; id: number }

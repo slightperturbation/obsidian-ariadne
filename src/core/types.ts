@@ -53,4 +53,11 @@ export interface SourceNote {
 
 export interface NoteSource {
   all(): Promise<SourceNote[]>;
+  /**
+   * Cheap path listing + per-path load, so a full build never has to hold the
+   * whole vault in memory at once. Optional: test doubles may implement only
+   * all().
+   */
+  paths?(): string[];
+  loadPath?(path: string): Promise<SourceNote | null>;
 }
