@@ -6,7 +6,28 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Pre-Phase-5 review pass.** A full code/behavior/UI review of everything
+**Phase 5 — iOS parity, synced index, Bases.** A vault has one **index owner**
+(runs the embedding model, writes the index shards) and any number of
+**readers** that consume those shards over Sync. Desktops own and phones read
+by default; either can be pinned per device in settings. That one decision
+removes most of what made mobile hazardous — no 23 MB ONNX runtime read into
+memory on the main thread, no ~30 MB model download over cellular, no
+full-index snapshot crossing the worker boundary every few seconds, and no two
+devices writing the same files for Sync to resolve by discarding one.
+
+What a reader keeps is the point: lexical search is fully local, and **semantic
+relatedness still works with no model at all**, because the note you're reading
+was already embedded by the owner — the Margin queries with those stored
+vectors instead of embedding new text. Only free-text semantic search genuinely
+needs a local model, and the glyph says which mode you're in, including how
+many notes have been edited since the owner last indexed them. Touch gets what
+modifier keys used to gate: rows carry **Link** and **Weave** buttons, ghost
+text accepts on tap (the iOS keyboard has no Tab), and the key legend is hidden
+where those keys don't exist. Also a **Bases view** — *Related (Ariadne)* —
+which re-orders a base's results by relatedness to the note you have open.
+Manual script: [tests/manual/phase-5.md](tests/manual/phase-5.md).
+
+Earlier: **pre-Phase-5 review pass.** A full code/behavior/UI review of everything
 through 4b, then the fixes it found. The substantive ones: the vector search
 now runs **in a Web Worker** (which already hosted the embedder), so a 30k-vector
 query never blocks typing — and the store itself went from per-vector objects to

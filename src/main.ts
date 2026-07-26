@@ -24,6 +24,7 @@ import { ActionExecutor } from "./actions/framework";
 import { ObsidianVaultIO } from "./actions/vault-io";
 import { ActionsController } from "./actions/controller";
 import { PromptModal } from "./ui/prompt-modal";
+import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
  * fetch over Obsidian's requestUrl: CORS-free (main-process request), which
@@ -198,6 +199,8 @@ export default class AriadnePlugin extends Plugin {
       name: "Open Ariadne",
       callback: () => void this.activateLine(),
     });
+
+    this.registerAriadneBasesView();
 
     // The Margin section + ghost text listen to the writing via one shared watcher.
     this.ghost = new GhostEngine({
@@ -508,6 +511,34 @@ export default class AriadnePlugin extends Plugin {
     } finally {
       this.saving = false;
     }
+  }
+
+  /**
+   * Register the Bases view, if this Obsidian has Bases.
+   *
+   * Guarded rather than pinned via manifest.minAppVersion: Bases arrived in
+   * 1.10, and everything else here works well before that. Requiring 1.10 to
+   * gain one optional view would lock out users for no reason.
+   */
+  private registerAriadneBasesView(): void {
+    const register = (
+      this as unknown as {
+        registerBasesView?: (id: string, reg: Record<string, unknown>) => boolean;
+      }
+    ).registerBasesView;
+    if (typeof register !== "function") {
+      this.log.info("Bases API not available in this Obsidian — skipping the Bases view");
+      return;
+    }
+    const View = makeAriadneRelatedView({
+      manager: () => this.manager,
+      openPath: (path, newLeaf) => void this.app.workspace.openLinkText(path, "", newLeaf),
+    });
+    register.call(this, ARIADNE_BASES_VIEW, {
+      name: "Related (Ariadne)",
+      icon: "search",
+      factory: (controller: never, containerEl: HTMLElement) => new View(controller, containerEl),
+    });
   }
 
   private getWatcher(): DraftWatcher {
