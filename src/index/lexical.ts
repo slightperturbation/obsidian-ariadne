@@ -7,6 +7,8 @@ interface LexicalDoc {
   title: string;
   heading: string;
   text: string;
+  /** Frontmatter aliases/tags — a standard Obsidian retrieval affordance. */
+  meta: string;
 }
 
 export interface LexicalHit {
@@ -27,13 +29,15 @@ export class LexicalIndex {
   private engine: MiniSearch<LexicalDoc>;
   /** chunk ids belonging to each note path, so a note can be fully removed. */
   private pathIds = new Map<string, Set<string>>();
+  /** Per-note searchable frontmatter (aliases, tags). */
+  private metaByPath = new Map<string, string>();
 
   constructor() {
     this.engine = new MiniSearch<LexicalDoc>({
-      fields: ["title", "heading", "text"],
+      fields: ["title", "heading", "meta", "text"],
       storeFields: ["path"],
       searchOptions: {
-        boost: { title: 2, heading: 1.5 },
+        boost: { title: 2, meta: 2, heading: 1.5 },
         prefix: true,
         fuzzy: 0.2,
         combineWith: "AND",
@@ -47,8 +51,18 @@ export class LexicalIndex {
       path: chunk.path,
       title: titleFromPath(chunk.path),
       heading: chunk.heading ?? "",
+      meta: this.metaByPath.get(chunk.path) ?? "",
       text: chunk.text,
     };
+  }
+
+  /**
+   * Searchable frontmatter for a note (aliases, tags). Set before adding the
+   * note's chunks; stored per path since it belongs to the note, not a chunk.
+   */
+  setMeta(path: string, meta: string): void {
+    if (meta) this.metaByPath.set(path, meta);
+    else this.metaByPath.delete(path);
   }
 
   /** Add or replace all chunks for a set (idempotent per chunk id). */
@@ -67,6 +81,7 @@ export class LexicalIndex {
 
   /** Remove every chunk belonging to a note path. */
   removePath(path: string): void {
+    this.metaByPath.delete(path);
     const ids = this.pathIds.get(path);
     if (!ids) return;
     for (const id of ids) {
@@ -79,18 +94,35 @@ export class LexicalIndex {
    * Ranked hits for a query (best first). mode "and" (default) is the search
    * behavior — every term must match; mode "or" suits long free-text contexts
    * (a draft paragraph) where any strong term overlap is a signal.
+   *
+   * `keepPath` filters DURING retrieval rather than after it: a scoped query
+   * (`in:Research`) that filtered afterwards could come back empty simply
+   * because none of the globally-top hits happened to live in that folder.
    */
-  search(query: string, limit = 50, mode: "and" | "or" = "and"): LexicalHit[] {
+  search(
+    query: string,
+    limit = 50,
+    mode: "and" | "or" = "and",
+    keepPath?: (path: string) => boolean,
+  ): LexicalHit[] {
     if (!query.trim()) return [];
     return this.engine
-      .search(query, mode === "or" ? { combineWith: "OR" } : undefined)
+      .search(query, {
+        ...(mode === "or" ? { combineWith: "OR" as const } : {}),
+        ...(keepPath ? { filter: (r) => keepPath(r.path as string) } : {}),
+      })
       .slice(0, limit)
       .map((r) => ({ id: r.id as string, path: r.path as string, score: r.score }));
   }
 
   /** Ranked chunk ids only — the shape RRF consumes. */
-  rankedIds(query: string, limit = 50, mode: "and" | "or" = "and"): string[] {
-    return this.search(query, limit, mode).map((h) => h.id);
+  rankedIds(
+    query: string,
+    limit = 50,
+    mode: "and" | "or" = "and",
+    keepPath?: (path: string) => boolean,
+  ): string[] {
+    return this.search(query, limit, mode, keepPath).map((h) => h.id);
   }
 
   get size(): number {

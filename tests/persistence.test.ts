@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { saveIndex, loadIndex, type FileIO } from "../src/index/persistence";
+import { saveIndex, loadIndex, partOf, type FileIO } from "../src/index/persistence";
 import type { IndexSnapshot } from "../src/index/manager";
 import type { Chunk } from "../src/core/types";
 
@@ -79,11 +79,15 @@ describe("index persistence", () => {
     expect(loaded).not.toBeNull();
     expect(loaded!.embedderId).toBe("test-embedder");
     expect(loaded!.notes).toEqual(snap.notes);
-    expect(loaded!.chunks).toEqual(snap.chunks);
+    // Chunks are sharded by note path, so order across shards isn't document
+    // order — compare as sets.
+    expect([...loaded!.chunks].sort((a, b) => a.id.localeCompare(b.id))).toEqual(
+      [...snap.chunks].sort((a, b) => a.id.localeCompare(b.id)),
+    );
     expect(loaded!.vectors).toHaveLength(3);
-    for (let i = 0; i < 3; i++) {
-      expect(loaded!.vectors[i].id).toBe(snap.vectors[i].id);
-      expect(cosine(loaded!.vectors[i].vec, snap.vectors[i].vec)).toBeGreaterThan(0.999);
+    for (const original of snap.vectors) {
+      const round = loaded!.vectors.find((v) => v.id === original.id)!;
+      expect(cosine(round.vec, original.vec)).toBeGreaterThan(0.999);
     }
   });
 
@@ -97,25 +101,75 @@ describe("index persistence", () => {
     expect(loaded!.chunks).toHaveLength(3);
   });
 
-  it("splits into multiple parts under a small budget and still loads", async () => {
+  it("reshards when a part outgrows the budget, and still loads", async () => {
     const io = memIO();
     const snap = sampleSnapshot();
-    await saveIndex(io, "idx", snap, { partBudgetBytes: 80 });
-    expect(io.store.has("idx/chunks-0.json")).toBe(true);
-    expect(io.store.has("idx/chunks-1.json")).toBe(true);
+    await saveIndex(io, "idx", snap, { partBudgetBytes: 40 });
+    const manifest = JSON.parse(io.store.get("idx/manifest.json") as string);
+    expect(manifest.parts).toBeGreaterThan(4);
     const loaded = await loadIndex(io, "idx");
-    expect(loaded!.chunks).toEqual(snap.chunks);
+    expect(loaded!.chunks).toHaveLength(3);
     expect(loaded!.vectors).toHaveLength(3);
   });
 
-  it("sweeps leftover parts from a previous larger save", async () => {
+  it("sweeps parts left over from a previous, larger shard count", async () => {
     const io = memIO();
-    await saveIndex(io, "idx", sampleSnapshot(), { partBudgetBytes: 80 });
-    expect(io.store.has("idx/chunks-1.json")).toBe(true);
-    await saveIndex(io, "idx", sampleSnapshot()); // default budget → 1 part
-    expect(io.store.has("idx/chunks-1.json")).toBe(false);
-    expect(io.store.has("idx/vectors-1.bin")).toBe(false);
-    expect((await loadIndex(io, "idx"))!.chunks).toHaveLength(3);
+    await saveIndex(io, "idx", sampleSnapshot(), { partBudgetBytes: 40 });
+    const wide = JSON.parse(io.store.get("idx/manifest.json") as string).parts as number;
+    expect(io.store.has(`idx/chunks-${wide - 1}.json`)).toBe(true);
+
+    // Start clean so the shard count drops back to the minimum.
+    const io2 = memIO();
+    await saveIndex(io2, "idx", sampleSnapshot());
+    const narrow = JSON.parse(io2.store.get("idx/manifest.json") as string).parts as number;
+    expect(narrow).toBeLessThan(wide);
+    expect(io2.store.has(`idx/chunks-${narrow}.json`)).toBe(false);
+    expect((await loadIndex(io2, "idx"))!.chunks).toHaveLength(3);
+  });
+
+  it("delta save rewrites only the shards holding changed notes", async () => {
+    const io = memIO();
+    const snap = sampleSnapshot();
+    await saveIndex(io, "idx", snap);
+
+    const before = new Map(io.store);
+    // Change only a.md's content and save with it marked dirty.
+    const edited: IndexSnapshot = {
+      ...snap,
+      chunks: snap.chunks.map((c) =>
+        c.path === "a.md" ? { ...c, text: `${c.text} (edited)` } : c,
+      ),
+    };
+    await saveIndex(io, "idx", edited, { dirtyPaths: new Set(["a.md"]) });
+
+    const aPart = partOf("a.md", 4);
+    const bPart = partOf("b.md", 4);
+    expect(io.store.get(`idx/chunks-${aPart}.json`)).not.toBe(
+      before.get(`idx/chunks-${aPart}.json`),
+    );
+    if (bPart !== aPart) {
+      // b.md's shard is untouched — that is the whole point of sharding.
+      expect(io.store.get(`idx/chunks-${bPart}.json`)).toBe(
+        before.get(`idx/chunks-${bPart}.json`),
+      );
+    }
+    const loaded = await loadIndex(io, "idx");
+    expect(loaded!.chunks.find((c) => c.path === "a.md")!.text).toContain("(edited)");
+  });
+
+  it("detects a truncated vector part instead of returning a short vector", async () => {
+    const io = memIO();
+    await saveIndex(io, "idx", sampleSnapshot());
+    // Find a vectors part that actually has records and chop its tail.
+    for (const [key, val] of io.store) {
+      if (key.endsWith(".bin") && val instanceof ArrayBuffer && val.byteLength > 16) {
+        io.store.set(key, val.slice(0, val.byteLength - 3));
+        break;
+      }
+    }
+    // subarray CLAMPS rather than throwing, so this used to yield an
+    // undersized vector that passed validation and blew up in the store.
+    expect(await loadIndex(io, "idx")).toBeNull();
   });
 
   it("returns null on missing manifest, torn parts, or corrupt binary", async () => {

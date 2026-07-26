@@ -22,6 +22,10 @@ export interface AriadneViewDeps {
   watcher: DraftWatcher;
   /** Whether the Margin section is active. */
   marginEnabled: () => boolean;
+  /** Raw-cosine floor for Margin cards; undefined shows everything ranked. */
+  marginMinCosine?: () => number | undefined;
+  /** Link-graph neighbourhood of the note being written (backlinks + 2-hop). */
+  marginNeighbors?: (path: string) => ReadonlySet<string>;
   /** Layer 3 (Do): create a scaffolded note from the query. */
   onCreateNote?: (seed: string) => void;
   /** Layer 3 (Do): weave a bidirectional link with a result (⇧↵ / ⇧-click). */
@@ -326,7 +330,19 @@ export class AriadneView extends ItemView {
     const token = ++this.marginToken;
     // On a blank line, fall back to whole-note context (title + opening).
     const contextText = ctx.text.trim() || `${ctx.title}\n${ctx.noteText.slice(0, 600)}`;
-    const results = await manager.related(contextText, { excludePath: ctx.path, limit: CARD_LIMIT });
+    // Already-linked notes are not news; and the Margin holds itself to a
+    // (looser than ghost text) semantic bar, so an empty section is a valid,
+    // honest outcome rather than five cards of noise.
+    const linked = new Set(
+      [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) => m[1].trim()),
+    );
+    const results = await manager.related(contextText, {
+      excludePath: ctx.path,
+      limit: CARD_LIMIT,
+      excludeTitles: linked,
+      minCosine: this.deps.marginMinCosine?.(),
+      neighbors: this.deps.marginNeighbors?.(ctx.path),
+    });
     if (token !== this.marginToken) return;
     this.renderMargin(results);
   }

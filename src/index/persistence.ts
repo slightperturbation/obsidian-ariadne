@@ -18,10 +18,12 @@ export interface FileIO {
   list(dir: string): Promise<string[]>;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAGIC = 0x41524941; // "ARIA"
 /** Per-part JSON budget — comfortably under Obsidian Sync's 5 MB/file cap. */
 const PART_BUDGET_BYTES = 3_000_000;
+/** Reshard when a part outgrows the budget; also the initial part count. */
+const MIN_PARTS = 4;
 
 interface Manifest {
   schemaVersion: number;
@@ -33,6 +35,27 @@ interface Manifest {
 
 const chunksFile = (i: number) => `chunks-${i}.json`;
 const vectorsFile = (i: number) => `vectors-${i}.bin`;
+
+/* ── Sharding ─────────────────────────────────────────────────────────── */
+
+function fnv1a(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/**
+ * Which part a note's chunks live in. Sharding by path (rather than packing
+ * parts by size in document order) is what makes delta writes possible: a
+ * note's chunks always land in the same part, so editing one note dirties one
+ * part instead of reshuffling everything downstream of it.
+ */
+export function partOf(path: string, parts: number): number {
+  return fnv1a(path) % parts;
+}
 
 /* ── int8 quantization ────────────────────────────────────────────────── */
 
@@ -94,17 +117,28 @@ function decodeVectorPart(
     throw new Error("bad vector part header");
   }
   const count = view.getUint32(4, true);
+  // Every record needs at least 2 + 4 + dim bytes, so a count that couldn't
+  // possibly fit in the file means it's truncated or corrupt.
+  if (8 + count * (6 + dim) > buf.byteLength) throw new Error("vector part truncated");
+
   const out: Array<{ id: string; vec: Float32Array }> = [];
   let off = 8;
   for (let i = 0; i < count; i++) {
+    if (off + 2 > buf.byteLength) throw new Error("vector part truncated");
     const idLen = view.getUint16(off, true);
     off += 2;
+    // Bounds-check BEFORE slicing: TypedArray.subarray CLAMPS out-of-range
+    // indices instead of throwing, so a file truncated mid-record used to
+    // yield an undersized vector that passed validation and then blew up
+    // downstream in the vector store.
+    if (off + idLen + 4 + dim > buf.byteLength) throw new Error("vector part truncated");
     const id = dec.decode(bytes.subarray(off, off + idLen));
     off += idLen;
     const scale = view.getFloat32(off, true);
     off += 4;
     const data = new Int8Array(bytes.subarray(off, off + dim));
     off += dim;
+    if (data.length !== dim) throw new Error("vector part truncated");
     out.push({ id, vec: dequantize(scale, data) });
   }
   return out;
@@ -112,46 +146,62 @@ function decodeVectorPart(
 
 /* ── save / load ──────────────────────────────────────────────────────── */
 
+export interface SaveOptions {
+  /**
+   * Note paths changed since the last successful save. When given (and the
+   * shard count is unchanged) only the parts holding those notes are
+   * rewritten; otherwise every part is.
+   */
+  dirtyPaths?: ReadonlySet<string>;
+  /** Test seam. */
+  partBudgetBytes?: number;
+}
+
 /**
- * Persist a snapshot as chunked files under dir. Chunk parts are JSON, vector
- * parts are int8-quantized binary aligned to the same chunk split, and the
- * manifest is written LAST so a crash mid-save leaves a stale-but-consistent
- * manifest rather than a torn one. Leftover higher-numbered parts from a
- * previous, larger save are removed.
+ * Persist a snapshot as sharded files under dir.
+ *
+ * The manifest is written LAST, so an interrupted save leaves the previous
+ * manifest describing the previous generation. Parts are sharded by note path,
+ * which keeps a normal save proportional to what actually changed rather than
+ * to the size of the vault.
  */
 export async function saveIndex(
   io: FileIO,
   dir: string,
   snap: IndexSnapshot,
-  opts: { partBudgetBytes?: number } = {},
+  opts: SaveOptions = {},
 ): Promise<void> {
-  const partBudget = opts.partBudgetBytes ?? PART_BUDGET_BYTES;
   if (!(await io.exists(dir))) await io.mkdir(dir);
+  const budget = opts.partBudgetBytes ?? PART_BUDGET_BYTES;
+
+  const previous = await readManifest(io, dir);
+  let parts = previous?.parts ?? MIN_PARTS;
 
   const byId = new Map(snap.vectors.map((v) => [v.id, v.vec]));
 
-  // Split chunks into parts by serialized size.
-  const parts: Chunk[][] = [];
-  let current: Chunk[] = [];
-  let currentBytes = 0;
-  for (const chunk of snap.chunks) {
-    const bytes = JSON.stringify(chunk).length + 1;
-    if (currentBytes + bytes > partBudget && current.length > 0) {
-      parts.push(current);
-      current = [];
-      currentBytes = 0;
-    }
-    current.push(chunk);
-    currentBytes += bytes;
+  // Group chunks into shards, and grow the shard count if any shard would
+  // exceed the per-file budget (a reshard rewrites everything, but is rare).
+  let shards: Chunk[][] = [];
+  for (;;) {
+    shards = Array.from({ length: parts }, () => [] as Chunk[]);
+    for (const chunk of snap.chunks) shards[partOf(chunk.path, parts)].push(chunk);
+    const worst = shards.reduce((max, s) => Math.max(max, JSON.stringify(s).length), 0);
+    if (worst <= budget || parts >= 1024) break;
+    parts *= 2;
   }
-  if (current.length > 0 || parts.length === 0) parts.push(current);
 
-  for (let i = 0; i < parts.length; i++) {
-    await io.write(`${dir}/${chunksFile(i)}`, JSON.stringify(parts[i]));
+  const resharded = parts !== previous?.parts;
+  const dirtyParts = new Set<number>();
+  if (!resharded && opts.dirtyPaths) {
+    for (const path of opts.dirtyPaths) dirtyParts.add(partOf(path, parts));
+  }
+  const writeAll = resharded || !opts.dirtyPaths;
+
+  for (let i = 0; i < parts; i++) {
+    if (!writeAll && !dirtyParts.has(i)) continue;
+    await io.write(`${dir}/${chunksFile(i)}`, JSON.stringify(shards[i]));
     const withVecs = snap.dim
-      ? parts[i]
-          .filter((c) => byId.has(c.id))
-          .map((c) => ({ id: c.id, vec: byId.get(c.id)! }))
+      ? shards[i].filter((c) => byId.has(c.id)).map((c) => ({ id: c.id, vec: byId.get(c.id)! }))
       : [];
     await io.writeBinary(`${dir}/${vectorsFile(i)}`, encodeVectorPart(withVecs, snap.dim ?? 0));
   }
@@ -160,15 +210,27 @@ export async function saveIndex(
     schemaVersion: SCHEMA_VERSION,
     embedderId: snap.embedderId,
     dim: snap.dim,
-    parts: parts.length,
+    parts,
     notes: snap.notes,
   };
   await io.write(`${dir}/manifest.json`, JSON.stringify(manifest));
 
-  // Sweep leftovers from an earlier save that had more parts.
+  // Sweep parts left over from a previous, larger shard count.
   for (const name of await io.list(dir)) {
     const m = /^(?:chunks|vectors)-(\d+)\.(?:json|bin)$/.exec(name);
-    if (m && Number(m[1]) >= parts.length) await io.remove(`${dir}/${name}`);
+    if (m && Number(m[1]) >= parts) await io.remove(`${dir}/${name}`);
+  }
+}
+
+async function readManifest(io: FileIO, dir: string): Promise<Manifest | null> {
+  try {
+    const manifest = JSON.parse(await io.read(`${dir}/manifest.json`)) as Manifest;
+    if (manifest.schemaVersion !== SCHEMA_VERSION) return null;
+    if (!Number.isInteger(manifest.parts) || manifest.parts < 1) return null;
+    if (!Array.isArray(manifest.notes)) return null;
+    return manifest;
+  } catch {
+    return null;
   }
 }
 
@@ -180,9 +242,8 @@ export async function saveIndex(
  */
 export async function loadIndex(io: FileIO, dir: string): Promise<IndexSnapshot | null> {
   try {
-    const manifest = JSON.parse(await io.read(`${dir}/manifest.json`)) as Manifest;
-    if (manifest.schemaVersion !== SCHEMA_VERSION) return null;
-    if (!Number.isInteger(manifest.parts) || manifest.parts < 0) return null;
+    const manifest = await readManifest(io, dir);
+    if (!manifest) return null;
 
     const chunks: Chunk[] = [];
     const vectors: IndexSnapshot["vectors"] = [];
@@ -191,10 +252,11 @@ export async function loadIndex(io: FileIO, dir: string): Promise<IndexSnapshot 
       if (!Array.isArray(part)) return null;
       chunks.push(...part);
       if (manifest.dim) {
-        vectors.push(...decodeVectorPart(await io.readBinary(`${dir}/${vectorsFile(i)}`), manifest.dim));
+        vectors.push(
+          ...decodeVectorPart(await io.readBinary(`${dir}/${vectorsFile(i)}`), manifest.dim),
+        );
       }
     }
-    if (!Array.isArray(manifest.notes)) return null;
 
     return {
       embedderId: manifest.embedderId,

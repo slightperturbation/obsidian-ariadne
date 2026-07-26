@@ -63,6 +63,13 @@ const SEGMENT_PREVIEW_CHARS = 200;
  */
 const MERGE_COSINE = 0.95;
 const MOC_NEIGHBORHOOD = 12;
+/** Words of a note used as the near-duplicate probe (see mergeNote). */
+const MERGE_PROBE_WORDS = 300;
+
+/** A bounded, representative slice of a note for duplicate detection. */
+function mergeProbe(content: string): string {
+  return content.replace(/^---\n[\s\S]*?\n---\n?/, "").split(/\s+/).slice(0, MERGE_PROBE_WORDS).join(" ");
+}
 
 /**
  * Orchestrates the Phase 3 actions: gathers context, optionally consults the
@@ -471,7 +478,12 @@ export class ActionsController {
     }
     await view.save();
     const content = await app.vault.read(file);
-    const results = await manager.related(content, { excludePath: file.path, limit: 3 });
+    // Compare on a bounded slice, not the whole note: the embedder truncates
+    // around 380 words (so a long note's tail never counted anyway), and an
+    // OR-lexical query built from thousands of terms is both slow and
+    // effectively "any note sharing any word".
+    const probe = mergeProbe(content);
+    const results = await manager.related(probe, { excludePath: file.path, limit: 3 });
     const top = results[0];
     if (!top || (top.cosine ?? 0) < MERGE_COSINE) {
       new Notice("No near-duplicate found for this note.");
@@ -485,20 +497,22 @@ export class ActionsController {
     const otherContent = await app.vault.read(otherFile);
 
     // Deleting a note does NOT rewrite links to it (Obsidian only auto-updates
-    // on rename), so say so plainly before the user accepts.
-    const inbound = Object.entries(app.metadataCache.resolvedLinks)
-      .filter(([from, targets]) => from !== file.path && !!targets[otherFile.path])
-      .map(([from]) => from);
-    if (inbound.length > 0) {
-      new Notice(
-        `Heads up: ${inbound.length} note${inbound.length === 1 ? "" : "s"} link to “${otherFile.basename}”. ` +
-          `Those links will not resolve after the merge.`,
-        8000,
-      );
+    // on rename), so collect the notes pointing at the duplicate and repoint
+    // them at the kept note as part of the same atomic action.
+    const inbound: Array<{ path: string; content: string }> = [];
+    for (const [from, targets] of Object.entries(app.metadataCache.resolvedLinks)) {
+      if (from === file.path || from === otherFile.path) continue;
+      if (!targets[otherFile.path]) continue;
+      const source = app.vault.getAbstractFileByPath(from);
+      if (source instanceof TFile) {
+        inbound.push({ path: from, content: await app.vault.read(source) });
+      }
     }
 
     this.preview(
       buildMergeProposal({
+        inbound,
+        keepLinktext: app.metadataCache.fileToLinktext(file, file.path),
         keepPath: file.path,
         keepContent: content,
         keepTitle: file.basename,

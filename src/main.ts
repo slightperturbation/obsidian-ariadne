@@ -173,6 +173,10 @@ export default class AriadnePlugin extends Plugin {
           status: this.status,
           watcher: this.getWatcher(),
           marginEnabled: () => this.settings.enableMargin,
+          // Looser than the ghost-text bar: a card is glanceable, an inline
+          // suggestion interrupts, so the Margin can afford to be less certain.
+          marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
+          marginNeighbors: (path) => this.linkNeighborhood(path),
           onCreateNote: (seed) => void this.actions.createNote(seed),
           onWeave: (result) => void this.actions.weave(result),
         }),
@@ -253,9 +257,20 @@ export default class AriadnePlugin extends Plugin {
 
     // Warm start: restore the last session's snapshot, then diff mtimes so
     // only changed/new/deleted notes re-index.
-    const snapshot = await loadIndex(this.io, this.indexDir);
+    let snapshot = await loadIndex(this.io, this.indexDir);
     if (snapshot) {
-      this.manager.restore(snapshot);
+      try {
+        this.manager.restore(snapshot);
+      } catch (err) {
+        // A corrupt snapshot must cost a rebuild, not the session: without
+        // this the throw escaped into the unawaited startIndexing() and the
+        // rest of startup (vault events, stale diff, model load) never ran.
+        this.log.warn(`snapshot restore failed, rebuilding: ${String(err)}`);
+        this.manager = new IndexManager();
+        snapshot = null;
+      }
+    }
+    if (snapshot) {
       this.lastSavedRevision = this.manager.revision;
       this.status.set({ indexedNotes: this.manager.noteCount });
       this.log.info(`warm start: ${this.manager.noteCount} notes from snapshot`);
@@ -420,7 +435,12 @@ export default class AriadnePlugin extends Plugin {
     this.saving = true;
     const revision = this.manager.revision;
     try {
-      await saveIndex(this.io, this.indexDir, await this.manager.snapshot());
+      const dirty = new Set(this.manager.dirtyPaths());
+      await saveIndex(this.io, this.indexDir, await this.manager.snapshot(), {
+        // Only the shards holding changed notes are rewritten.
+        dirtyPaths: this.lastSavedRevision < 0 ? undefined : dirty,
+      });
+      this.manager.markPersisted(dirty);
       this.lastSavedRevision = revision;
       this.log.info(`index saved (${this.manager.noteCount} notes)`);
     } catch (err) {
@@ -449,6 +469,29 @@ export default class AriadnePlugin extends Plugin {
       if (leaf.view instanceof MarkdownView && leaf.view.file) return leaf.view;
     }
     return null;
+  }
+
+  /**
+   * Notes one hop away from `path` in the link graph: its backlinks, and the
+   * notes its own links point on to. Directly-linked notes are deliberately
+   * left out — the Margin already suppresses those as "not news". What remains
+   * is the near neighbourhood, which is a much better relevance prior than
+   * text similarity alone: a note two hops from what you're writing is
+   * demonstrably part of the same thought.
+   */
+  private linkNeighborhood(path: string): Set<string> {
+    const graph = this.app.metadataCache.resolvedLinks;
+    const out = new Set<string>();
+    const direct = Object.keys(graph[path] ?? {});
+    for (const target of direct) {
+      for (const second of Object.keys(graph[target] ?? {})) {
+        if (second !== path) out.add(second);
+      }
+    }
+    for (const [source, links] of Object.entries(graph)) {
+      if (source !== path && links[path]) out.add(source);
+    }
+    return out;
   }
 
   private async activateLine(): Promise<void> {

@@ -101,3 +101,19 @@ describe("stub notes", () => {
     expect(chunks[0].text).toContain("Beta");
   });
 });
+
+describe("frontmatter vs thematic break", () => {
+  it("does not eat a leading pull quote fenced by ---", () => {
+    const md = "---\nA pull quote worth keeping\n---\nThe real body.";
+    expect(stripFrontmatter(md)).toContain("A pull quote worth keeping");
+    const all = chunkNote("q.md", md).map((c) => c.text).join("\n");
+    expect(all).toContain("A pull quote worth keeping");
+    expect(all).toContain("The real body.");
+  });
+
+  it("still strips genuine YAML frontmatter", () => {
+    const md = "---\ntype: note\ntags: [a]\n---\n\nBody text.";
+    expect(stripFrontmatter(md)).not.toContain("type: note");
+    expect(stripFrontmatter(md).trim()).toBe("Body text.");
+  });
+});

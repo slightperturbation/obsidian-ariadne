@@ -19,6 +19,16 @@ export interface RelatedOptions {
   /** The note being written — never suggest a note to itself. */
   excludePath?: string;
   limit?: number;
+  /**
+   * Drop results below this raw cosine. The Margin is ambient marginalia, so a
+   * wrong card costs more than an empty section — unlike an explicit search,
+   * which should always show its best guess.
+   */
+  minCosine?: number;
+  /** Note titles already linked from the draft — no point re-surfacing them. */
+  excludeTitles?: ReadonlySet<string>;
+  /** Paths in the draft's link neighbourhood; raises their confidence. */
+  neighbors?: ReadonlySet<string>;
 }
 
 export interface NoteMeta {
@@ -53,6 +63,21 @@ const VECTOR_FLOOR = 0.6;
 /** How many chunks to pull from each ranked list before fusing. */
 const CANDIDATES = 100;
 
+/** Frontmatter values worth searching (aliases, tags) flattened to text. */
+function searchableMeta(frontmatter?: Record<string, unknown>): string {
+  if (!frontmatter) return "";
+  const out: string[] = [];
+  for (const key of ["aliases", "alias", "tags", "tag", "title"]) {
+    const value = frontmatter[key];
+    if (typeof value === "string") out.push(value);
+    else if (Array.isArray(value)) out.push(...value.filter((v): v is string => typeof v === "string"));
+  }
+  return out.join(" ");
+}
+
+const hasFilters = (f: ReturnType<typeof parseQuery>["filters"]): boolean =>
+  !!(f.folder || f.type || f.since);
+
 function makeSnippet(text: string): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
   return oneLine.length <= SNIPPET_MAX ? oneLine : oneLine.slice(0, SNIPPET_MAX - 1).trimEnd() + "…";
@@ -77,6 +102,8 @@ export class IndexManager {
   private embedderId?: string;
   /** Bumped on every mutation, so persistence can skip no-op saves. */
   revision = 0;
+  /** Notes touched since the last successful save — drives delta writes. */
+  private dirtySincePersist = new Set<string>();
 
   constructor(private embedder?: EmbeddingProvider) {
     if (embedder) {
@@ -141,11 +168,13 @@ export class IndexManager {
 
     this.removeNote(note.path, { keepVectors: storedByIndex });
     this.revision++;
+    this.dirtySincePersist.add(note.path);
     if (chunks.length === 0) {
       // Still record metadata so the note is known, even if it has no body.
       this.recordMeta(note, 0);
       return;
     }
+    this.lexical.setMeta(note.path, searchableMeta(note.frontmatter));
     this.lexical.add(chunks);
     for (const c of chunks) this.addChunk(c);
     if (vecs) {
@@ -166,6 +195,16 @@ export class IndexManager {
     ids.add(c.id);
   }
 
+  /** Paths whose parts must be rewritten on the next save. */
+  dirtyPaths(): ReadonlySet<string> {
+    return this.dirtySincePersist;
+  }
+
+  /** Called after a save lands; unsaved changes stay dirty if it failed. */
+  markPersisted(paths: ReadonlySet<string>): void {
+    for (const p of paths) this.dirtySincePersist.delete(p);
+  }
+
   private recordMeta(note: SourceNote, chunkCount: number): void {
     const fmType = note.frontmatter?.type;
     this.meta.set(note.path, {
@@ -180,7 +219,10 @@ export class IndexManager {
   }
 
   removeNote(path: string, opts: { keepVectors?: boolean } = {}): void {
-    if (this.meta.has(path)) this.revision++;
+    if (this.meta.has(path)) {
+      this.revision++;
+      this.dirtySincePersist.add(path);
+    }
     this.lexical.removePath(path);
     // indexTexts already replaced this path's vectors atomically; removing
     // them here would delete what was just stored.
@@ -211,7 +253,8 @@ export class IndexManager {
     const queryText = [text, ...phrases].join(" ").trim();
     if (!queryText) return [];
 
-    const lexicalIds = this.lexical.rankedIds(queryText, CANDIDATES);
+    const scoped = hasFilters(filters) ? (p: string) => this.passesFilters(p, filters) : undefined;
+    const lexicalIds = this.lexical.rankedIds(queryText, CANDIDATES, "and", scoped);
     // Layer membership is note-level: a note is "semantic only" when no chunk
     // of it matched lexically at all.
     const lexicalPaths = new Set(
@@ -254,8 +297,17 @@ export class IndexManager {
       for (const h of vhits) cosineById.set(h.id, h.score);
     }
 
-    const ranked = this.collapseToNotes(lists, (path) => path !== opts.excludePath);
-    return this.buildResults(ranked, limit, cosineById);
+    // Gate before the limit is applied, so a filtered-out card doesn't cost a
+    // slot that a good one could have filled.
+    const ranked = this.collapseToNotes(lists, (path) => {
+      if (path === opts.excludePath) return false;
+      if (opts.excludeTitles?.has(this.meta.get(path)?.title ?? "")) return false;
+      return true;
+    }).filter(
+      (entry) =>
+        opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
+    );
+    return this.buildResults(ranked, limit, cosineById, undefined, opts.neighbors);
   }
 
   /**
@@ -305,6 +357,8 @@ export class IndexManager {
     limit: number,
     cosineById: Map<string, number>,
     semanticOnly?: (path: string) => boolean,
+    /** Notes linked from the note being written — a strong relevance signal. */
+    neighbors?: ReadonlySet<string>,
   ): ScoredResult[] {
     const now = Date.now();
     // Relevance is relative to the best hit, not to how many candidates the
@@ -319,7 +373,13 @@ export class IndexManager {
         title: meta.title,
         snippet: makeSnippet(chunk.text),
         score: best > 0 ? entry.fused / best : 0,
-        confidence: confidence({ rank, cosine }),
+        confidence: confidence({
+          rank,
+          cosine,
+          // A note the draft already links to (or that links back) is
+          // demonstrably part of this thought, not just lexically nearby.
+          ...(neighbors ? { graphProximity: neighbors.has(entry.path) ? 1 : 0 } : {}),
+        }),
         ...(semanticOnly ? { semanticOnly: semanticOnly(entry.path) } : {}),
         cosine,
         spark: sparkValues(
@@ -399,19 +459,34 @@ export class IndexManager {
 
     const withVectors = new Set<string>();
     if (snap.dim && snap.vectors.length > 0) {
-      this.vectors = into ?? new VectorStore(snap.dim);
+      const store = into ?? new VectorStore(snap.dim);
+      this.vectors = store;
       for (const { id, vec } of snap.vectors) {
         const path = this.chunks.get(id)?.path;
-        if (path) {
-          this.vectors.upsert(id, path, vec);
-          withVectors.add(id);
-        }
+        // Skip rather than throw on a wrong-length vector: a truncated part
+        // must degrade to "re-embed that note", never take down the restore
+        // (and with it the whole session's index).
+        if (!path || vec.length !== store.dim) continue;
+        store.upsert(id, path, vec);
+        withVectors.add(id);
       }
     }
     // Derived from the snapshot rather than by asking the store, so this works
     // the same whether the store is in-process or across a worker boundary.
     for (const c of snap.chunks) {
       if (!withVectors.has(c.id)) this.unembedded.add(c.path);
+    }
+
+    // Drift check: if a note's restored chunks don't match what the manifest
+    // claims, the parts and the manifest came from different saves. Drop the
+    // note's metadata so the startup mtime diff re-indexes it — otherwise its
+    // recorded mtime still matches disk and it stays permanently invisible.
+    for (const m of snap.notes) {
+      const actual = this.pathChunks.get(m.path)?.size ?? 0;
+      if (actual !== m.chunkCount) {
+        this.meta.delete(m.path);
+        this.unembedded.delete(m.path);
+      }
     }
   }
 }

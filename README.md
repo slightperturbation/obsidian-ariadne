@@ -6,6 +6,23 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
+**Pre-Phase-5 review pass.** A full code/behavior/UI review of everything
+through 4b, then the fixes it found. The substantive ones: the vector search
+now runs **in a Web Worker** (which already hosted the embedder), so a 30k-vector
+query never blocks typing — and the store itself went from per-vector objects to
+one contiguous `Float32Array` with slot reuse (154ms → 12.4ms at 30k). Cosine is
+carried **raw** rather than remapped to `[0,1]`, which had silently pinned every
+threshold at 0.5 and made the reticence slider inert; the Related layer was
+mostly noise as a result. Persistence writes **deltas** for dirty shards only,
+with a manifest written last and bounds-checked decoding, so an interrupted save
+can't produce a torn index. Merge now preserves the duplicate's frontmatter,
+rewrites inbound links, and never duplicates identical blocks. Retrieval applies
+`in:`/`type:`/`since:` filters **during** candidate generation (a scoped query
+could previously come back empty just because its hits weren't globally top-k),
+indexes frontmatter aliases and tags, and gates the Margin behind a semantic
+floor plus link-graph proximity — a note two hops from what you're writing now
+scores above one that merely reads alike.
+
 **Phase 4a — refactoring engine.** Structural refactors on top of the Phase 3
 action framework: **semantic split** — a two-pass flow: an *unstructured* note
 is first restructured in place into editable `##` sections (the model clusters

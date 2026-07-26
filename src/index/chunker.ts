@@ -9,17 +9,27 @@ export interface ChunkOptions {
 
 export const DEFAULT_CHUNK_OPTIONS: ChunkOptions = { maxChars: 1000, minChars: 120 };
 
-const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const ATX_HEADING = /^(#{1,6})\s+(.*)$/;
+/** A YAML-ish `key:` line — what distinguishes frontmatter from a `---` rule. */
+const YAML_KEY = /^[A-Za-z0-9_-]+\s*:/m;
 
 interface Section {
   heading?: string;
   text: string;
 }
 
-/** Strip a leading YAML frontmatter block, if present. */
+/**
+ * Strip a leading YAML frontmatter block, if present.
+ *
+ * The block must actually contain a `key:` line — otherwise a note that opens
+ * with a thematic break around a pull quote looks identical to frontmatter,
+ * and the quote gets silently deleted from the index.
+ */
 export function stripFrontmatter(markdown: string): string {
-  return markdown.replace(FRONTMATTER, "");
+  const m = FRONTMATTER.exec(markdown);
+  if (!m || !YAML_KEY.test(m[1])) return markdown;
+  return markdown.slice(m[0].length);
 }
 
 const FENCE = /^\s*(```|~~~)/;
