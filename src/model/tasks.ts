@@ -316,3 +316,49 @@ export function parseTriage(text: string): { disposition: "elaborate" | "archive
   // Unparseable → elaborate: the costly mistake is archiving a live idea.
   return { disposition: "elaborate", reason: "" };
 }
+
+/* ── Theme naming (recurring journal themes) ──────────────────────────── */
+
+export const THEME_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description:
+        "A permanent-note title for the recurring theme, in the writer's own vocabulary (≤8 words, no ending period) — the ONE idea, not the topic area",
+    },
+    gist: {
+      type: "string",
+      description:
+        "One terse fragment (≤15 words, lowercase start) saying what the permanent note would claim",
+    },
+  },
+  required: ["title"],
+  additionalProperties: false,
+} as const;
+
+export function themePrompt(snippets: string[]): string {
+  return [
+    `A writer's journal keeps returning to one theme. These excerpts are from separate dated entries. Name the recurring idea as a Zettelkasten note title, using the writer's own vocabulary where possible — the specific claim they keep circling, not the general topic.`,
+    ``,
+    ...snippets.map((s, i) => `Entry ${i + 1}: ${s}`),
+  ].join("\n");
+}
+
+export function parseTheme(text: string): { title: string; gist?: string } | null {
+  try {
+    const parsed = JSON.parse(text) as { title?: unknown; gist?: unknown };
+    if (typeof parsed.title === "string" && parsed.title.trim()) {
+      return {
+        title: sanitizeTitle(parsed.title.trim().replace(/\.$/, "")),
+        gist:
+          typeof parsed.gist === "string" && parsed.gist.trim()
+            ? parsed.gist.trim().replace(/\.$/, "")
+            : undefined,
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}

@@ -29,6 +29,7 @@ import { PromptModal } from "./ui/prompt-modal";
 import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
 import { looksPeriodic } from "./core/periodic";
+import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -90,6 +91,8 @@ export default class AriadnePlugin extends Plugin {
   private policy!: DevicePolicy;
   /** Reverse link graph, invalidated on metadata changes (see backlinks()). */
   private backlinkIndex?: Map<string, Set<string>>;
+  /** Dangling-topic ranking, same invalidation cadence as the backlinks. */
+  private wantedCache?: WantedTopic[];
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -186,6 +189,12 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "find-journal-themes",
+      name: "Find recurring journal themes",
+      callback: () => void this.actions.findJournalThemes(),
+    });
+
+    this.addCommand({
       id: "capture-thought",
       name: "Capture a thought to the Inbox",
       callback: () => {
@@ -261,6 +270,9 @@ export default class AriadnePlugin extends Plugin {
           marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
           marginNeighbors: (path) => this.linkNeighborhood(path),
           isPeriodic: looksPeriodic,
+          wantedTopics: () =>
+            (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks)),
+          onCreateWanted: (title) => void this.actions.createNote(title),
           touch: () => this.policy.touch,
           tensions: this.tensions,
           lineBias: () => biasOf(this.settings.lineSerendipity),
@@ -406,11 +418,15 @@ export default class AriadnePlugin extends Plugin {
     this.registerEvent(
       this.app.metadataCache.on("changed", (file: TFile) => {
         this.backlinkIndex = undefined;
+        this.wantedCache = undefined;
         markIfNote(file.path);
       }),
     );
     this.registerEvent(
-      this.app.metadataCache.on("resolved", () => (this.backlinkIndex = undefined)),
+      this.app.metadataCache.on("resolved", () => {
+        this.backlinkIndex = undefined;
+        this.wantedCache = undefined;
+      }),
     );
 
     if (this.settings.indexOnStartup) {

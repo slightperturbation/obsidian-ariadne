@@ -2,7 +2,7 @@ import type { CompleteOptions, ModelUsage } from "./providers/claude";
 import type { StatusStore } from "../core/status";
 import type { Logger } from "../util/logger";
 
-export type TaskKind = "connective" | "scaffold" | "relation";
+export type TaskKind = "connective" | "scaffold" | "relation" | "theme";
 
 /** What the router needs from any reasoning backend. */
 export interface ReasoningProvider {
@@ -20,7 +20,7 @@ export type RoutingMode = "auto" | "cloud" | "local";
  * structure and stay on the API (PRD §4.6: cheap/simple → local,
  * quality-sensitive → cloud).
  */
-const LOCAL_OK: ReadonlySet<TaskKind> = new Set(["connective", "relation"]);
+const LOCAL_OK: ReadonlySet<TaskKind> = new Set(["connective", "relation", "theme"]);
 
 export class BudgetExceededError extends Error {
   constructor(limit: number) {

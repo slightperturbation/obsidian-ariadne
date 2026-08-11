@@ -4,6 +4,7 @@ import type { StatusStore } from "../core/status";
 import type { ScoredResult } from "../core/types";
 import type { DraftWatcher, DraftContext } from "../margin/draft-watcher";
 import type { TensionFinding } from "../margin/tension/detect";
+import type { WantedTopic } from "../margin/wanted";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
 export const ARIADNE_VIEW_TYPE = "ariadne-line";
@@ -29,6 +30,10 @@ export interface AriadneViewDeps {
   marginNeighbors?: (path: string) => ReadonlySet<string>;
   /** Dated journal entries: demoted in the Margin, never ghost-suggested. */
   isPeriodic?: (path: string) => boolean;
+  /** Dangling [[topics]] ranked by demand (see margin/wanted). */
+  wantedTopics?: () => WantedTopic[];
+  /** Create a note for a wanted topic (scaffolded, undoable). */
+  onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
   touch?: () => boolean;
   /** Ambient tension/echo analysis (see margin/tension). */
@@ -65,6 +70,9 @@ export class AriadneView extends ItemView {
   private marginEl!: HTMLElement;
   private marginHintEl!: HTMLElement;
   private glyphEl!: HTMLElement;
+  private wantedEl!: HTMLElement;
+  /** Wanted topics the user waved off — for this session. */
+  private dismissedWanted = new Set<string>();
 
   private results: ScoredResult[] = [];
   private selected = 0;
@@ -141,6 +149,12 @@ export class AriadneView extends ItemView {
     this.marginEl.classList.add("ariadne-cards");
     marginWrap.append(this.marginHintEl, this.marginEl);
     root.appendChild(marginWrap);
+
+    // Topics wanting notes — the vault's open loops, kept at the foot where
+    // they read as an invitation rather than a task list.
+    this.wantedEl = doc.createElement("div");
+    this.wantedEl.classList.add("ariadne-wanted");
+    root.appendChild(this.wantedEl);
 
     this.glyphEl = doc.createElement("div");
     this.glyphEl.classList.add("ariadne-glyph");
@@ -428,6 +442,7 @@ export class AriadneView extends ItemView {
     findings.forEach((f, i) => {
       this.marginEl.appendChild(this.tensionRowEl(doc, f, i, ctx));
     });
+    this.renderWanted();
 
     // Same row component as the search results, so ⇧/⌥/⌘ mean the same thing
     // in both halves of the panel.
@@ -504,6 +519,55 @@ export class AriadneView extends ItemView {
       }
     }
     return row;
+  }
+
+  /**
+   * "Wanted by N notes" rows for dangling topics. Activation scaffolds the
+   * note — the one-keystroke close of a loop the writer has been leaving
+   * open; × waves the topic off for this session.
+   */
+  private renderWanted(): void {
+    if (!this.wantedEl) return;
+    this.wantedEl.replaceChildren();
+    const topics = (this.deps.wantedTopics?.() ?? []).filter(
+      (t) => !this.dismissedWanted.has(t.title),
+    );
+    if (topics.length === 0 || !this.deps.onCreateWanted) return;
+
+    const doc = this.wantedEl.ownerDocument;
+    const label = doc.createElement("div");
+    label.classList.add("ariadne-section-label");
+    label.textContent = "Wanted";
+    this.wantedEl.appendChild(label);
+
+    for (const topic of topics) {
+      const row = doc.createElement("div");
+      row.classList.add("ariadne-row", "ariadne-confidence-quiet");
+      const head = doc.createElement("div");
+      head.classList.add("ariadne-row-head");
+      const title = doc.createElement("span");
+      title.classList.add("ariadne-row-title");
+      title.textContent = topic.title;
+      const count = doc.createElement("span");
+      count.classList.add("ariadne-wanted-count");
+      count.textContent = `wanted by ${topic.sources}`;
+      const dismiss = doc.createElement("button");
+      dismiss.type = "button";
+      dismiss.classList.add("ariadne-dismiss");
+      dismiss.textContent = "×";
+      dismiss.setAttribute("aria-label", `Dismiss ${topic.title} for this session`);
+      dismiss.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.dismissedWanted.add(topic.title);
+        this.renderWanted();
+      });
+      head.append(title, count, dismiss);
+      row.appendChild(head);
+      row.addEventListener("click", () => this.deps.onCreateWanted!(topic.title));
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `Create the note ${topic.title}`);
+      this.wantedEl.appendChild(row);
+    }
   }
 
   /* ── Status glyph ───────────────────────────────────────────────────── */

@@ -143,3 +143,19 @@ classification needs it; echoes don't).
       appears after the passage in the journal. The journal text itself is
       untouched. ⌘Z removes the inserted link; *Undo last action* removes
       the note.
+
+## 10. Wanted topics + recurring themes
+
+- [ ] **Wanted.** Have ≥2 notes link to a [[Topic]] that doesn't exist →
+      a quiet **Wanted** section appears at the panel foot: "Topic ·
+      wanted by 2". Click → the scaffolded note is created (undoable).
+      × dismisses it for the session. A topic with only ONE dangling
+      reference never appears.
+- [ ] **Themes.** Write 3+ dated entries circling one idea that has no
+      permanent note. Run **Find recurring journal themes** → a row names
+      the theme (in your vocabulary), says "N entries · no permanent note
+      nearby". **Create note** scaffolds it seeded from your own journal
+      excerpts; **Open latest** jumps to the newest entry.
+- [ ] Once a permanent note for the theme exists (or one already did),
+      the theme stops appearing — covered themes are for linking, not
+      re-creating.

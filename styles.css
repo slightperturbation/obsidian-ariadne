@@ -353,3 +353,21 @@
 .ariadne .is-hidden {
   display: none;
 }
+
+/* ── Wanted topics (dangling links ranked by demand) ────────────────── */
+
+.ariadne-wanted {
+  flex-shrink: 0;
+  margin-top: var(--size-4-2);
+}
+
+.ariadne-wanted-count {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+}
+
+.ariadne-wanted .ariadne-row {
+  cursor: pointer;
+}

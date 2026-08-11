@@ -6,7 +6,19 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 4c (backlog) — Inbox triage + untitled notes.** *Triage Inbox*
+**Return mechanisms — wanted topics + recurring themes.** Two answers to the
+real failure mode of a personal vault: capture without return. **Wanted** — a
+quiet section at the panel foot ranking dangling `[[topics]]` by how many
+distinct notes reach for them; one click scaffolds the note (a single dangling
+reference is a typo, two is demand). **Recurring journal themes** — the
+generalization of the echo card: dated entries that cluster in embedding space
+with *no permanent note nearby* are a thought you keep having but never kept.
+A command surfaces each theme, named in your own vocabulary (cheap model call —
+local box when awake), with one keystroke to scaffold the note seeded from
+your own journal's words. Covered themes (a permanent note already sits close)
+are deliberately silent — that's a linking job, not a creation job.
+
+Earlier: **Phase 4c (backlog) — Inbox triage + untitled notes.** *Triage Inbox*
 proposes exactly one disposition per Inbox note, the Ahrens way — **elaborate**
 (a live idea worth developing; the button just opens it, because elaborating is
 writing), **merge** (a stored-vector near-duplicate; runs the normal previewed

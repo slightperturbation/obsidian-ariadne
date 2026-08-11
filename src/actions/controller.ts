@@ -56,13 +56,18 @@ import { ListPreviewModal } from "../ui/list-preview-modal";
 import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal";
 import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
+import { clusterThemes, type EntryNeighbors } from "./themes";
+import { looksPeriodic } from "../core/periodic";
 import {
   TITLE_SCHEMA,
   TRIAGE_SCHEMA,
+  THEME_SCHEMA,
   parseTitle,
   parseTriage,
+  parseTheme,
   titlePrompt,
   triagePrompt,
+  themePrompt,
 } from "../model/tasks";
 
 const EXCERPT_CHARS = 600;
@@ -656,6 +661,113 @@ export class ActionsController {
     const noteName = path.split("/").pop()!.replace(/\.md$/, "");
     if (insertAt) editor.replaceRange(` [[${noteName}]]`, insertAt);
     new Notice(`Promoted to ${path} — elaborate it when ready.`);
+  }
+
+  /** Recent dated entries examined for recurring themes. */
+  private static readonly THEME_ENTRIES = 60;
+
+  /**
+   * Recurring journal themes: dated entries clustering in embedding space
+   * with no permanent note nearby — a thought the writer keeps having but
+   * never keeps. Each theme gets a name (writer's vocabulary, cheap model
+   * call — local box when awake) and one keystroke to become a scaffolded
+   * note whose seed carries the journal evidence.
+   */
+  async findJournalThemes(): Promise<void> {
+    const { app } = this.deps;
+    const manager = this.deps.manager();
+    if (!manager?.hasStoredVectors()) {
+      new Notice("Themes need the semantic index — wait for it to finish, or check the glyph.");
+      return;
+    }
+    const dated = app.vault
+      .getMarkdownFiles()
+      .filter((f) => looksPeriodic(f.path))
+      .sort((a, b) => b.stat.mtime - a.stat.mtime)
+      .slice(0, ActionsController.THEME_ENTRIES);
+    if (dated.length < 3) {
+      new Notice("Not enough dated entries to look for themes yet.");
+      return;
+    }
+
+    const items: ActionableItem[] = [];
+    await this.withWorkingNotice(`Ariadne is reading ${dated.length} journal entries…`, async () => {
+      const neighborhoods: EntryNeighbors[] = [];
+      for (const file of dated) {
+        const hits = await manager.relatedToPath(file.path, { limit: 8 });
+        if (hits.length === 0) continue; // no vectors yet (edited on a reader)
+        neighborhoods.push({
+          path: file.path,
+          hits: hits.map((h) => ({
+            path: h.path,
+            title: h.title,
+            snippet: h.snippet,
+            cosine: h.cosine,
+            periodic: looksPeriodic(h.path),
+          })),
+        });
+      }
+
+      for (const theme of clusterThemes(neighborhoods).slice(0, 5)) {
+        // Name it — cheap labeling, so the local box takes it when awake.
+        let named: { title: string; gist?: string } | null = null;
+        if (this.deps.router.available()) {
+          try {
+            named = parseTheme(
+              await this.deps.router.run("theme", themePrompt(theme.evidence), {
+                schema: THEME_SCHEMA as unknown as Record<string, unknown>,
+                maxTokens: 150,
+              }),
+            );
+          } catch (err) {
+            this.deps.log.warn(`theme naming failed: ${String(err)}`);
+          }
+        }
+        const title = named?.title ?? titleFromContent(theme.evidence[0] ?? "") ?? "Recurring theme";
+
+        items.push({
+          title,
+          detail:
+            `${theme.entries.length} entries` +
+            (named?.gist ? ` — ${named.gist}` : "") +
+            " · no permanent note nearby",
+          actions: [
+            {
+              label: "Create note",
+              run: async () => {
+                // The scaffold's seed carries the theme's own evidence, so
+                // the note starts from what the writer actually wrote.
+                const seed = [title, ...(named?.gist ? [named.gist] : []), ...theme.evidence].join(
+                  "\n",
+                );
+                await this.createNote(seed);
+                return true;
+              },
+            },
+            {
+              label: "Open latest",
+              run: () => {
+                void app.workspace.openLinkText(theme.entries[0], "", false);
+                return false;
+              },
+            },
+          ],
+        });
+      }
+    });
+
+    if (items.length === 0) {
+      new Notice("No uncaptured recurring themes found — the journal's ideas all have notes.");
+      return;
+    }
+    new ItemActionsModal(app, {
+      title: "Recurring journal themes",
+      description:
+        "Thoughts you keep having but haven't kept: dated entries that cluster together with " +
+        "no permanent note nearby. Creating one starts it from your own journal's words.",
+      items,
+    }).open();
+    this.deps.log.info(`themes: ${items.length} uncaptured recurring themes surfaced`);
   }
 
   /* ── Filing 4c: Untitled renaming + Inbox triage ────────────────────── */

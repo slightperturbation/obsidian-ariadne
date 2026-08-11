@@ -1,0 +1,51 @@
+import { looksPeriodic } from "../core/periodic";
+
+/**
+ * Topics wanting notes — dangling [[links]] ranked by demand.
+ *
+ * A bare [[Morphogenesis]] with no note behind it is a topic the writer has
+ * reached for repeatedly and never given a home; a hand-maintained dashboard
+ * full of them is the loop that never closes. Obsidian already knows every
+ * unresolved link; the work here is judging which ones constitute *demand*:
+ *
+ * - ranked by how many DISTINCT notes reach for the topic, then by total
+ *   references — five notes each wanting [[X]] once is a stronger signal
+ *   than one note repeating [[Y]] five times;
+ * - links to future daily notes are excluded (a dangling [[2026-08-12]] is a
+ *   calendar artifact, not a missing idea);
+ * - single-reference topics are excluded: one dangling link is a typo or a
+ *   passing thought, not yet a topic.
+ */
+
+export interface WantedTopic {
+  title: string;
+  /** How many distinct notes link to it. */
+  sources: number;
+  /** Total reference count across the vault. */
+  refs: number;
+}
+
+/** Obsidian's metadataCache.unresolvedLinks shape. */
+export type UnresolvedLinks = Record<string, Record<string, number>>;
+
+const MIN_SOURCES = 2;
+
+export function wantedTopics(unresolved: UnresolvedLinks, limit = 3): WantedTopic[] {
+  const byTopic = new Map<string, { sources: number; refs: number }>();
+  for (const links of Object.values(unresolved)) {
+    for (const [target, count] of Object.entries(links)) {
+      // Subpath links ([[X#h]], [[X#^block]]) count toward their note.
+      const title = target.split(/[#|]/)[0].trim();
+      if (!title || looksPeriodic(title)) continue;
+      const entry = byTopic.get(title) ?? { sources: 0, refs: 0 };
+      entry.sources += 1;
+      entry.refs += count;
+      byTopic.set(title, entry);
+    }
+  }
+  return [...byTopic.entries()]
+    .filter(([, v]) => v.sources >= MIN_SOURCES)
+    .map(([title, v]) => ({ title, sources: v.sources, refs: v.refs }))
+    .sort((a, b) => b.sources - a.sources || b.refs - a.refs || a.title.localeCompare(b.title))
+    .slice(0, limit);
+}
