@@ -31,6 +31,7 @@ import { ensureRuntimeAssets } from "./assets";
 import { looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, resurfacePick } from "./margin/resurface";
+import { inFolders, parseFolderList } from "./margin/journal";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -95,6 +96,30 @@ export default class AriadnePlugin extends Plugin {
   /** Dangling-topic ranking, same invalidation cadence as the backlinks. */
   private wantedCache?: WantedTopic[];
 
+  /**
+   * Is this note a journal/dated entry? Three signals, most specific first:
+   * dated names (2026-07-25, "June 28, 2026", weeklies…), the Daily Notes
+   * core plugin's configured folder, and the user's journal folders — for
+   * journals whose entries aren't date-named ("Morning pages 12").
+   */
+  private isJournalPath = (path: string): boolean => {
+    if (looksPeriodic(path)) return true;
+    return inFolders(path, this.journalFolders());
+  };
+
+  private journalFolders(): string[] {
+    const folders = parseFolderList(this.settings.journalFolders);
+    const dailyNotes = (
+      this.app as unknown as {
+        internalPlugins?: {
+          getPluginById?: (id: string) => { instance?: { options?: { folder?: string } } } | null;
+        };
+      }
+    ).internalPlugins?.getPluginById?.("daily-notes")?.instance?.options?.folder?.trim();
+    if (dailyNotes) folders.push(normalizePath(dailyNotes));
+    return folders;
+  }
+
   async onload(): Promise<void> {
     await this.loadSettings();
     this.log = new Logger("Ariadne", this.settings.debugLogging);
@@ -137,6 +162,7 @@ export default class AriadnePlugin extends Plugin {
       attachmentsFolder: () => this.settings.attachmentsFolder,
       inboxFolder: () => this.settings.inboxFolder,
       archiveFolder: () => this.settings.archiveFolder,
+      isJournal: (path) => this.isJournalPath(path),
       log: this.log,
     });
     this.status.set({ brain: provider.available() ? "cloud" : "none" });
@@ -282,21 +308,28 @@ export default class AriadnePlugin extends Plugin {
           // suggestion interrupts, so the Margin can afford to be less certain.
           marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
           marginNeighbors: (path) => this.linkNeighborhood(path),
-          isPeriodic: looksPeriodic,
+          isPeriodic: this.isJournalPath,
           wantedTopics: () =>
-            (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks)),
+            this.settings.enableWanted
+              ? (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks))
+              : [],
           onCreateWanted: (title) => void this.actions.createNote(title),
           onThisDay: (currentPath) =>
-            onThisDay(currentPath, this.app.vault.getMarkdownFiles().map((f) => f.path)),
+            this.settings.enableOnThisDay
+              ? onThisDay(currentPath, this.app.vault.getMarkdownFiles().map((f) => f.path))
+              : [],
           resurfaced: () => {
-            if (!this.manager) return null;
+            if (!this.manager || !this.settings.enableResurfacing) return null;
             const pick = resurfacePick(
               this.manager.noteMetas(),
               new Date().toISOString().slice(0, 10),
               Date.now(),
+              this.isJournalPath,
             );
             return pick ? { path: pick.path, title: pick.title } : null;
           },
+          promoteHint: () => this.settings.enablePromoteHint,
+          onPromote: () => void this.actions.promoteToNote(),
           touch: () => this.policy.touch,
           tensions: this.tensions,
           lineBias: () => biasOf(this.settings.lineSerendipity),
@@ -320,7 +353,7 @@ export default class AriadnePlugin extends Plugin {
       manager: () => this.manager,
       enabled: () => this.settings.enableGhostText,
       minCosine: () => this.settings.ghostMinCosine,
-      isPeriodic: looksPeriodic,
+      isPeriodic: this.isJournalPath,
       log: this.log,
     });
     this.getWatcher().subscribe((ctx) => void this.ghost?.onContext(ctx));

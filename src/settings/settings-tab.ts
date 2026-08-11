@@ -68,6 +68,66 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("Journaling").setHeading();
+
+    new Setting(containerEl)
+      .setName("Journal folders")
+      .setDesc(
+        "Folders whose notes are journal entries, comma-separated. Dated names (2026-07-25, " +
+          "\u201CJune 28, 2026\u201D, weeklies) and the Daily Notes plugin's folder are detected automatically; " +
+          "list folders here only for journals without dated names. Journal entries rank below permanent " +
+          "notes in the Margin, feed theme detection, and get the reflective companions (On this day, promote).",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.journalFolders).onChange(async (v) => {
+          this.plugin.settings.journalFolders = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Offer to promote thoughts")
+      .setDesc(
+        "While writing reflective prose in a journal note (not log lines), show a quiet " +
+          "\u201Cpromote this thought\u201D row in the Margin. The command works everywhere regardless.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enablePromoteHint).onChange(async (v) => {
+          this.plugin.settings.enablePromoteHint = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("On this day")
+      .setDesc("In a dated note's Margin, show entries from this date in past months and years.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableOnThisDay).onChange(async (v) => {
+          this.plugin.settings.enableOnThisDay = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Still true?")
+      .setDesc("Resurface one old, barely-linked note per day at the panel foot.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableResurfacing).onChange(async (v) => {
+          this.plugin.settings.enableResurfacing = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Wanted topics")
+      .setDesc("Show dangling [[topics]] that several notes reach for, at the panel foot.")
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableWanted).onChange(async (v) => {
+          this.plugin.settings.enableWanted = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName("Margin").setHeading();
 
     new Setting(containerEl)

@@ -35,6 +35,22 @@ export interface AriadneSettings {
   archiveFolder: string;
 
 
+  // Journaling
+  /**
+   * Folders whose notes are journal entries even without dated names, on top
+   * of two automatic signals: dated-name detection (2026-07-25, "June 28,
+   * 2026", weeklies…) and the Daily Notes core plugin's folder.
+   */
+  journalFolders: string;
+  /** Offer "promote this thought" while writing reflective prose in a journal note. */
+  enablePromoteHint: boolean;
+  /** Past entries sharing today's month-day, shown in a dated note's Margin. */
+  enableOnThisDay: boolean;
+  /** One old, barely-linked note per day at the panel foot ("Still true?"). */
+  enableResurfacing: boolean;
+  /** The Wanted section (dangling topics ranked by demand) at the panel foot. */
+  enableWanted: boolean;
+
   // Margin
   enableMargin: boolean;
   /**
@@ -81,6 +97,12 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   inboxFolder: "Inbox",
   archiveFolder: "Archive",
 
+
+  journalFolders: "Journal",
+  enablePromoteHint: true,
+  enableOnThisDay: true,
+  enableResurfacing: true,
+  enableWanted: true,
 
   enableMargin: true,
   tensionMode: "quiet",

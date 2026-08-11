@@ -57,7 +57,7 @@ import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal"
 import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
 import { clusterThemes, type EntryNeighbors } from "./themes";
-import { dateOf, looksPeriodic } from "../core/periodic";
+import { dateOf } from "../core/periodic";
 import { onThisDay, resurfacePick } from "../margin/resurface";
 import { wantedTopics } from "../margin/wanted";
 import {
@@ -109,6 +109,8 @@ export class ActionsController {
       attachmentsFolder: () => string;
       inboxFolder: () => string;
       archiveFolder: () => string;
+      /** Journal/dated-entry detection (names + configured folders). */
+      isJournal: (path: string) => boolean;
       log: Logger;
     },
   ) {}
@@ -754,7 +756,7 @@ export class ActionsController {
     }
 
     if (manager) {
-      const pick = resurfacePick(manager.noteMetas(), today, Date.now());
+      const pick = resurfacePick(manager.noteMetas(), today, Date.now(), this.deps.isJournal);
       if (pick) {
         items.push({
           title: pick.title,
@@ -799,10 +801,18 @@ export class ActionsController {
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
       .toISOString()
       .slice(0, 10);
+    // Date-named entries carry their date; journal-folder entries without
+    // dated names ("Morning pages 12") fall back to their modification time —
+    // a journal is defined by the activity, not the filename.
+    const weekAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
     const entries: Array<{ path: string; date: string }> = [];
     for (const f of app.vault.getMarkdownFiles()) {
       const d = dateOf(f.path);
-      if (d && d >= weekAgo) entries.push({ path: f.path, date: d });
+      if (d && d >= weekAgo) {
+        entries.push({ path: f.path, date: d });
+      } else if (!d && this.deps.isJournal(f.path) && f.stat.mtime >= weekAgoMs) {
+        entries.push({ path: f.path, date: new Date(f.stat.mtime).toISOString().slice(0, 10) });
+      }
     }
     entries.sort((a, b) => a.date.localeCompare(b.date));
     if (entries.length < 2) {
@@ -880,7 +890,7 @@ export class ActionsController {
     }
     const dated = app.vault
       .getMarkdownFiles()
-      .filter((f) => looksPeriodic(f.path))
+      .filter((f) => this.deps.isJournal(f.path))
       .sort((a, b) => b.stat.mtime - a.stat.mtime)
       .slice(0, ActionsController.THEME_ENTRIES);
     if (dated.length < 3) {
@@ -901,7 +911,7 @@ export class ActionsController {
             title: h.title,
             snippet: h.snippet,
             cosine: h.cosine,
-            periodic: looksPeriodic(h.path),
+            periodic: this.deps.isJournal(h.path),
           })),
         });
       }

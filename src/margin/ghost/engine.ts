@@ -3,6 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import type { IndexManager } from "../../index/manager";
 import type { DraftContext } from "../draft-watcher";
 import { decideGhost } from "./suggest";
+import { isLogLine } from "../journal";
 import { setGhost } from "./state";
 import type { Logger } from "../../util/logger";
 
@@ -63,6 +64,14 @@ export class GhostEngine {
     if (!view || !cm || view.file?.path !== ctx.path) return;
 
     if (!ctx.text.trim()) {
+      cm.dispatch({ effects: setGhost.of(null) });
+      return;
+    }
+
+    // In a journal note, a log line (task, bullet, heading) is traffic, not
+    // thought — an inline link suggestion there is noise. Bullets in
+    // permanent notes keep their ghosts: there, lists ARE the thinking.
+    if (this.deps.isPeriodic?.(ctx.path) && isLogLine(ctx.lineBefore)) {
       cm.dispatch({ effects: setGhost.of(null) });
       return;
     }

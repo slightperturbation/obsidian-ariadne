@@ -176,3 +176,23 @@ classification needs it; echoes don't).
       is created in the Inbox: links to the entries + 3–5 QUESTIONS in your
       vocabulary naming specific claims — no summaries, no prose in your
       voice. Undo removes it.
+
+## 12. Journal vs daily note (mode-aware Margin)
+
+- [ ] **Detection.** Settings → Journaling shows Journal folders (default
+      "Journal"); dated names and the Daily Notes plugin folder are
+      automatic. A note in a listed folder with an undated name
+      ("Morning pages 3") gets the same treatment as a dated note.
+- [ ] **Log mode is quiet.** In a daily note, type task/bullet lines
+      ("- [ ] email Sam") → no ghost link suggestions on those lines, no
+      promote hint, no tension checks. The same bullets in a permanent
+      note still get ghosts — there, lists are the thinking.
+- [ ] **Reflection gets the apparatus.** In the same daily note, write a
+      reflective paragraph (2–3 sentences) → the Margin leads with
+      "↳ promote this thought to a note" and (if past entries share the
+      date) "On this day", then related notes with permanent notes first.
+- [ ] Click the promote hint → same behavior as the Promote command:
+      Inbox note + provenance + link after the passage.
+- [ ] **Every surface has a switch.** Toggling off Promote hint /
+      On this day / Still true? / Wanted topics removes exactly that
+      surface and nothing else.

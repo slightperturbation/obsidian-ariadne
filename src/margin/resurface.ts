@@ -51,6 +51,7 @@ export function resurfacePick(
   metas: NoteMeta[],
   isoDate: string,
   now: number,
+  isJournal: (path: string) => boolean = looksPeriodic,
 ): NoteMeta | null {
   const candidates = metas
     .filter(
@@ -58,7 +59,7 @@ export function resurfacePick(
         m.chunkCount > 0 &&
         m.linkCount <= MAX_LINKS &&
         now - m.mtime > STALE_MS &&
-        !looksPeriodic(m.path),
+        !isJournal(m.path),
     )
     .sort((a, b) => a.path.localeCompare(b.path)); // stable across sessions
   if (candidates.length === 0) return null;

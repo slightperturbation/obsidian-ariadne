@@ -5,6 +5,7 @@ import type { ScoredResult } from "../core/types";
 import type { DraftWatcher, DraftContext } from "../margin/draft-watcher";
 import type { TensionFinding } from "../margin/tension/detect";
 import type { WantedTopic } from "../margin/wanted";
+import { isReflectiveProse } from "../margin/journal";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
 export const ARIADNE_VIEW_TYPE = "ariadne-line";
@@ -36,6 +37,9 @@ export interface AriadneViewDeps {
   onThisDay?: (currentPath: string) => string[];
   /** Today's "still true?" resurfaced note, if any. */
   resurfaced?: () => { path: string; title: string } | null;
+  /** Offer promotion while writing reflective prose in a journal note. */
+  promoteHint?: () => boolean;
+  onPromote?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
@@ -78,7 +82,6 @@ export class AriadneView extends ItemView {
   /** Wanted topics the user waved off — for this session. */
   private dismissedWanted = new Set<string>();
   private dismissedResurfaced = false;
-  private currentNotePath?: string;
 
   private results: ScoredResult[] = [];
   private selected = 0;
@@ -390,7 +393,6 @@ export class AriadneView extends ItemView {
     const manager = this.deps.manager();
     if (!manager) return;
     this.lastCtx = ctx;
-    this.currentNotePath = ctx.path;
     const token = ++this.marginToken;
     // On a blank line, fall back to whole-note context (title + opening).
     const contextText = ctx.text.trim() || `${ctx.title}\n${ctx.noteText.slice(0, 600)}`;
@@ -449,6 +451,15 @@ export class AriadneView extends ItemView {
     findings.forEach((f, i) => {
       this.marginEl.appendChild(this.tensionRowEl(doc, f, i, ctx));
     });
+
+    // Journal mode: a dated note's Margin leads with the reflective
+    // companions — the offer to keep a thought, then this day in past years —
+    // before topical relatedness. A logbook wants navigation; a journal
+    // wants return.
+    if (ctx && this.deps.isPeriodic?.(ctx.path)) {
+      this.renderPromoteHint(doc, ctx);
+      this.renderOnThisDay(this.marginEl, ctx.path);
+    }
     this.renderWanted();
 
     // Same row component as the search results, so ⇧/⌥/⌘ mean the same thing
@@ -536,7 +547,6 @@ export class AriadneView extends ItemView {
   private renderWanted(): void {
     if (!this.wantedEl) return;
     this.wantedEl.replaceChildren();
-    this.renderOnThisDay();
     this.renderResurfaced();
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
       (t) => !this.dismissedWanted.has(t.title),
@@ -599,20 +609,37 @@ export class AriadneView extends ItemView {
     return row;
   }
 
-  /** Past entries on this month-day — shown only inside a dated note. */
-  private renderOnThisDay(): void {
-    const path = this.currentNotePath;
-    if (!path) return;
+  /**
+   * The moment-of-writing bridge out of the journal: when the paragraph
+   * under the cursor is reflective prose (not log lines — a task list has
+   * nothing to promote), one quiet row offers to keep the thought. The same
+   * command exists in the palette; this makes it visible exactly when it
+   * applies, and only then.
+   */
+  private renderPromoteHint(doc: Document, ctx: DraftContext): void {
+    if (!this.deps.promoteHint?.() || !this.deps.onPromote) return;
+    if (!isReflectiveProse(ctx.text)) return;
+    const row = doc.createElement("div");
+    row.classList.add("ariadne-promote-hint");
+    row.textContent = "↳ promote this thought to a note";
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", "Promote the current paragraph to a note");
+    row.addEventListener("click", () => this.deps.onPromote!());
+    this.marginEl.appendChild(row);
+  }
+
+  /** Past entries on this month-day — rendered into a dated note's Margin. */
+  private renderOnThisDay(container: HTMLElement, path: string): void {
     const past = (this.deps.onThisDay?.(path) ?? []).slice(0, 3);
     if (past.length === 0) return;
-    const doc = this.wantedEl.ownerDocument;
+    const doc = container.ownerDocument;
     const label = doc.createElement("div");
     label.classList.add("ariadne-section-label");
     label.textContent = "On this day";
-    this.wantedEl.appendChild(label);
+    container.appendChild(label);
     for (const p of past) {
       const title = p.split("/").pop()!.replace(/\.md$/, "");
-      this.wantedEl.appendChild(this.footRowEl(title, p, `Open ${title}`));
+      container.appendChild(this.footRowEl(title, p, `Open ${title}`));
     }
   }
 

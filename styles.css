@@ -371,3 +371,24 @@
 .ariadne-wanted .ariadne-row {
   cursor: pointer;
 }
+
+/* ── Promote hint (journal mode) ─────────────────────────────────────── */
+
+.ariadne-promote-hint {
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  padding: var(--size-4-1) var(--size-4-2);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+}
+
+.ariadne-promote-hint:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.is-mobile .ariadne-promote-hint {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
