@@ -288,3 +288,47 @@
   text-underline-offset: 2px;
   padding: 0 2px;
 }
+
+/* ── Tension / echo cards (Phase 6) ──────────────────────────────────────
+   The kind label is plain small-caps text, not a badge — no capsules around
+   data. Tension gets the accent; echo stays muted: a contradiction is the
+   rarer, sharper signal and the eye should find it first. */
+
+.ariadne-kind-label {
+  font-variant: small-caps;
+  letter-spacing: 0.06em;
+  font-size: var(--font-ui-smaller);
+  margin-right: var(--size-4-2);
+  color: var(--text-muted);
+}
+
+.ariadne-tension .ariadne-kind-label {
+  color: var(--text-accent);
+}
+
+/* The explanation line is the model's words, not the note's — italic keeps
+   the two voices distinct. */
+.ariadne-tension .ariadne-row-snippet,
+.ariadne-echo .ariadne-row-snippet {
+  font-style: italic;
+}
+
+.ariadne-dismiss {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: var(--text-faint);
+  font-size: var(--font-ui-medium);
+  padding: 0 var(--size-4-1);
+  cursor: pointer;
+}
+
+.ariadne-dismiss:hover {
+  color: var(--text-normal);
+}
+
+.is-mobile .ariadne-dismiss {
+  min-height: 44px;
+  min-width: 44px;
+}

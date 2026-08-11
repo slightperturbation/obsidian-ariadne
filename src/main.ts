@@ -16,6 +16,7 @@ import { saveIndex, loadIndex, type FileIO } from "./index/persistence";
 import { ARIADNE_VIEW_TYPE, AriadneView } from "./line/view";
 import { DraftWatcher } from "./margin/draft-watcher";
 import { GhostEngine } from "./margin/ghost/engine";
+import { TensionEngine } from "./margin/tension/engine";
 import { ghostExtension } from "./margin/ghost/extension";
 import { MarkdownView } from "obsidian";
 import { ClaudeProvider } from "./model/providers/claude";
@@ -77,6 +78,7 @@ export default class AriadnePlugin extends Plugin {
   private workerClient?: WorkerClient;
   private watcher?: DraftWatcher;
   private ghost?: GhostEngine;
+  private tensions?: TensionEngine;
   private router!: ModelRouter;
   private executor!: ActionExecutor;
   private actions!: ActionsController;
@@ -176,6 +178,17 @@ export default class AriadnePlugin extends Plugin {
       callback: () => void this.actions.undoLast(),
     });
 
+    this.tensions = new TensionEngine({
+      manager: () => this.manager,
+      router: this.router,
+      mode: () => this.settings.tensionMode,
+      log: this.log,
+    });
+
+    // Serendipity 0.5 is neutral; the ±0.2 swing is enough to move a card a
+    // full prominence tier without ever being able to hide it.
+    const biasOf = (serendipity: number) => (serendipity - 0.5) * 0.4;
+
     this.registerView(
       ARIADNE_VIEW_TYPE,
       (leaf) =>
@@ -189,6 +202,9 @@ export default class AriadnePlugin extends Plugin {
           marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
           marginNeighbors: (path) => this.linkNeighborhood(path),
           touch: () => this.policy.touch,
+          tensions: this.tensions,
+          lineBias: () => biasOf(this.settings.lineSerendipity),
+          marginBias: () => biasOf(this.settings.marginSerendipity),
           onCreateNote: (seed) => void this.actions.createNote(seed),
           onWeave: (result) => void this.actions.weave(result),
         }),

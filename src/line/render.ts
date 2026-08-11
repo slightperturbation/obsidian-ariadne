@@ -25,6 +25,13 @@ export interface RowOptions {
    * insert-link are simply unreachable on a phone.
    */
   touch?: boolean;
+  /**
+   * Serendipity bias, added to confidence before the prominence tiers apply.
+   * Positive = this surface presents bolder; negative = quieter. It shapes
+   * how results LOOK, never which results exist — gating stays retrieval's
+   * job, so turning serendipity down can't hide a result, only hush it.
+   */
+  bias?: number;
 }
 
 export const modifiersOf = (ev: MouseEvent | KeyboardEvent): ActivateModifiers => ({
@@ -47,9 +54,10 @@ export function rowEl(
   handlers: RenderHandlers,
   opts: RowOptions = {},
 ): HTMLElement {
-  const { variant = "row", touch = false } = opts;
+  const { variant = "row", touch = false, bias = 0 } = opts;
   const row = doc.createElement("div");
-  row.classList.add("ariadne-row", `ariadne-confidence-${prominence(result.confidence)}`);
+  const tier = prominence(Math.max(0, Math.min(1, result.confidence + bias)));
+  row.classList.add("ariadne-row", `ariadne-confidence-${tier}`);
   if (variant === "card") row.classList.add("ariadne-card");
   if (selected) row.classList.add("is-selected");
   row.dataset.index = String(index);
@@ -151,6 +159,7 @@ export function renderResults(
   handlers: RenderHandlers,
   emptyHint?: string,
   touch = false,
+  bias = 0,
 ): void {
   const doc = container.ownerDocument;
   container.replaceChildren();
@@ -176,7 +185,7 @@ export function renderResults(
     container.appendChild(sectionEl(doc, "Found"));
     for (const r of found) {
       container.appendChild(
-        rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers, { touch }),
+        rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers, { touch, bias }),
       );
     }
   }
@@ -184,7 +193,7 @@ export function renderResults(
     container.appendChild(sectionEl(doc, "Related"));
     for (const r of related) {
       container.appendChild(
-        rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers, { touch }),
+        rowEl(doc, r, indexOf.get(r)!, indexOf.get(r) === selectedIndex, handlers, { touch, bias }),
       );
     }
   }

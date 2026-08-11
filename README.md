@@ -6,7 +6,24 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 5 — iOS parity, synced index, Bases.** A vault has one **index owner**
+**Phase 6a — tension, echo, serendipity.** The Margin now notices two things
+beyond relatedness: **echo** — you're re-writing a note that already exists
+(near-verbatim cosine; free, instant, no API) — and **tension** — the
+paragraph you're drafting contradicts an existing note. Tension detection
+exploits the fact that embeddings measure *topic*, not *agreement*: high-cosine
+neighbors in the ambiguous band are sent (cached, per-session capped, silenced
+at the cost limit) to the reasoning model, which answers contradicts /
+restates / neither with a terse explanation — "disagrees on whether spaced
+repetition helps transfer", in italics on the card. "Neither" stays silent.
+Echoes of already-linked notes are dropped (the connection is made); tensions
+with linked notes still surface (contradicting a note you cite is exactly the
+moment to be told). Cards are dismissible per note-pair per session, and act
+like any row — open, ⌥ link, ⇧ weave. Plus **serendipity dials**: per-surface
+(Margin / search Related layer) prominence bias that shapes how boldly results
+present, never which results exist. Manual script:
+[tests/manual/phase-6.md](tests/manual/phase-6.md).
+
+Earlier: **Phase 5 — iOS parity, synced index, Bases.** A vault has one **index owner**
 (runs the embedding model, writes the index shards) and any number of
 **readers** that consume those shards over Sync. Desktops own and phones read
 by default; either can be pinned per device in settings. That one decision

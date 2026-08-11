@@ -2,7 +2,7 @@ import type { CompleteOptions, ModelUsage } from "./providers/claude";
 import type { StatusStore } from "../core/status";
 import type { Logger } from "../util/logger";
 
-export type TaskKind = "connective" | "scaffold";
+export type TaskKind = "connective" | "scaffold" | "relation";
 
 /** What the router needs from any reasoning backend (Claude now, Gemma in Phase 6). */
 export interface ReasoningProvider {
@@ -21,10 +21,12 @@ export class BudgetExceededError extends Error {
  * Model router v1: one provider (Claude API), serialized calls, and honest
  * accounting. Every call adds its cost to the session total, surfaces it in
  * the status glyph, and a hard budget stops calls before they start once the
- * user's limit is hit. Reasoning calls are always initiated by an explicit
- * user gesture and run async — nothing here can sit in the typing path.
- * Phase 6 adds the local-Gemma provider and per-task routing behind the same
- * interface.
+ * user's limit is hit. Reasoning calls run async — nothing here can sit in
+ * the typing path. Most are initiated by an explicit user gesture; the one
+ * exception is ambient tension/echo classification, which carries its own
+ * per-session call cap and caching on top of the shared budget (see
+ * margin/tension/engine.ts). Phase 6 adds the local-Gemma provider and
+ * per-task routing behind the same interface.
  */
 export class ModelRouter {
   private sessionCostUsd = 0;

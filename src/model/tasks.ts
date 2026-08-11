@@ -167,3 +167,67 @@ export function sanitizeTitle(title: string): string {
       .trim() || "Untitled"
   );
 }
+
+/* ── Relation classification (tension/echo) ───────────────────────────── */
+
+export const RELATION_SCHEMA = {
+  type: "object",
+  properties: {
+    relation: {
+      type: "string",
+      enum: ["contradicts", "restates", "neither"],
+      description:
+        "contradicts = the two texts take incompatible positions on the same question; restates = the paragraph re-says what the note already says; neither = same territory, no stance overlap",
+    },
+    explanation: {
+      type: "string",
+      description:
+        "Only for contradicts/restates: one terse fragment (≤12 words, lowercase start, no ending period) naming the SPECIFIC point of disagreement or repetition",
+    },
+  },
+  required: ["relation"],
+  additionalProperties: false,
+} as const;
+
+export function relationPrompt(input: {
+  paragraph: string;
+  noteTitle: string;
+  noteExcerpt: string;
+}): string {
+  return [
+    `A writer is drafting a paragraph. An existing note in their Zettelkasten covers similar ground. Judge the relation between what the PARAGRAPH claims and what the NOTE claims.`,
+    ``,
+    `PARAGRAPH (being written now):`,
+    input.paragraph,
+    ``,
+    `NOTE "${input.noteTitle}":`,
+    input.noteExcerpt,
+    ``,
+    `Rules:`,
+    `- "contradicts" only for genuine incompatibility: the paragraph asserts what the note denies, or vice versa. Different emphasis, scope, or examples is NOT contradiction.`,
+    `- "restates" only when the paragraph substantially re-says the note's point — a reader would call it the same idea again.`,
+    `- Everything else — related topic, complementary angle, shared vocabulary — is "neither". When unsure, answer "neither"; a wrong interruption costs the writer more than a missed one.`,
+    `- The explanation names the specific point at issue, not the topic. "disagrees on whether spaced repetition helps transfer", not "both discuss learning".`,
+  ].join("\n");
+}
+
+export function parseRelation(text: string): { relation: "contradicts" | "restates" | "neither"; explanation?: string } {
+  try {
+    const parsed = JSON.parse(text) as { relation?: unknown; explanation?: unknown };
+    if (
+      parsed.relation === "contradicts" ||
+      parsed.relation === "restates" ||
+      parsed.relation === "neither"
+    ) {
+      const explanation =
+        typeof parsed.explanation === "string" && parsed.explanation.trim()
+          ? parsed.explanation.trim().replace(/\.$/, "")
+          : undefined;
+      return { relation: parsed.relation, explanation };
+    }
+  } catch {
+    /* fall through */
+  }
+  // A malformed answer must degrade to silence, not to a wrong card.
+  return { relation: "neither" };
+}

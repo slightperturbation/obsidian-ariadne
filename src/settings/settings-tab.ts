@@ -81,6 +81,54 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Tension and echo cards")
+      .setDesc(
+        "Surface contradictions ('this disagrees with…') and repetitions ('you've written this before') in the Margin. " +
+          "Quiet interrupts only when nearly certain. Checks use the reasoning model in the background — cached, " +
+          "capped per session, and they stop at your cost limit.",
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({ off: "Off", quiet: "Quiet (default)", eager: "Eager" })
+          .setValue(this.plugin.settings.tensionMode)
+          .onChange(async (v) => {
+            this.plugin.settings.tensionMode = v as AriadneSettings["tensionMode"];
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Margin serendipity")
+      .setDesc(
+        "How boldly the Margin presents its cards. Lower = quieter marginalia, higher = more insistent. " +
+          "Shapes emphasis only — never hides a result.",
+      )
+      .addSlider((sl) =>
+        sl
+          .setLimits(0, 1, 0.05)
+          .setValue(this.plugin.settings.marginSerendipity)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.marginSerendipity = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Search serendipity")
+      .setDesc("The same dial for the search results' Related layer.")
+      .addSlider((sl) =>
+        sl
+          .setLimits(0, 1, 0.05)
+          .setValue(this.plugin.settings.lineSerendipity)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.lineSerendipity = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Ghost link suggestions")
       .setDesc(
         "Faint inline [[link]] suggestions after a typing pause. Tab accepts, Esc dismisses; on a phone, tap the suggestion to accept and keep typing to dismiss.",

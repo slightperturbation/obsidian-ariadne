@@ -3,6 +3,7 @@ import type { IndexManager } from "../index/manager";
 import type { StatusStore } from "../core/status";
 import type { ScoredResult } from "../core/types";
 import type { DraftWatcher, DraftContext } from "../margin/draft-watcher";
+import type { TensionFinding } from "../margin/tension/detect";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
 export const ARIADNE_VIEW_TYPE = "ariadne-line";
@@ -28,6 +29,16 @@ export interface AriadneViewDeps {
   marginNeighbors?: (path: string) => ReadonlySet<string>;
   /** Touch device: show tap targets instead of a modifier-key legend. */
   touch?: () => boolean;
+  /** Ambient tension/echo analysis (see margin/tension). */
+  tensions?: {
+    analyze(ctx: DraftContext): Promise<TensionFinding[]>;
+    /** Fires when a background verdict lands — re-analyze and re-render. */
+    subscribe(listener: () => void): () => void;
+    dismiss(notePath: string, targetPath: string): void;
+  };
+  /** Per-surface prominence bias (serendipity tuning), added to confidence. */
+  lineBias?: () => number;
+  marginBias?: () => number;
   /** Layer 3 (Do): create a scaffolded note from the query. */
   onCreateNote?: (seed: string) => void;
   /** Layer 3 (Do): weave a bidirectional link with a result (⇧↵ / ⇧-click). */
@@ -62,6 +73,8 @@ export class AriadneView extends ItemView {
   private lastStatusHint?: string;
   private unsubscribeStatus: (() => void) | null = null;
   private unsubscribeWatcher: (() => void) | null = null;
+  private unsubscribeTensions: (() => void) | null = null;
+  private lastCtx?: DraftContext;
   private lastMarkdown: MarkdownView | null = null;
 
   constructor(
@@ -143,6 +156,12 @@ export class AriadneView extends ItemView {
     );
 
     this.unsubscribeWatcher = this.deps.watcher.subscribe((ctx) => void this.refreshMargin(ctx));
+    // A classification verdict arriving is new information about the same
+    // paragraph — re-run the analysis for the context we already have.
+    this.unsubscribeTensions =
+      this.deps.tensions?.subscribe(() => {
+        if (this.lastCtx) void this.refreshMargin(this.lastCtx);
+      }) ?? null;
 
     this.renderResults();
   }
@@ -150,8 +169,10 @@ export class AriadneView extends ItemView {
   async onClose(): Promise<void> {
     this.unsubscribeStatus?.();
     this.unsubscribeWatcher?.();
+    this.unsubscribeTensions?.();
     this.unsubscribeStatus = null;
     this.unsubscribeWatcher = null;
+    this.unsubscribeTensions = null;
     if (this.debounce) clearTimeout(this.debounce);
   }
 
@@ -245,6 +266,7 @@ export class AriadneView extends ItemView {
       },
       undefined,
       this.touch,
+      this.deps.lineBias?.() ?? 0,
     );
 
     // A status line above the Do row: without it, "index still warming",
@@ -345,6 +367,7 @@ export class AriadneView extends ItemView {
     if (!this.deps.marginEnabled()) return;
     const manager = this.deps.manager();
     if (!manager) return;
+    this.lastCtx = ctx;
     const token = ++this.marginToken;
     // On a blank line, fall back to whole-note context (title + opening).
     const contextText = ctx.text.trim() || `${ctx.title}\n${ctx.noteText.slice(0, 600)}`;
@@ -364,15 +387,24 @@ export class AriadneView extends ItemView {
     // Without a local model, free text can't be embedded — but the note being
     // written was embedded by whichever device owns the index, so asking in
     // terms of the note keeps the Margin semantic instead of lexical-only.
-    const results =
+    const [results, findings] = await Promise.all([
       manager.canEmbedText() || !manager.hasStoredVectors()
-        ? await manager.related(contextText, opts)
-        : await manager.relatedToPath(ctx.path, opts);
+        ? manager.related(contextText, opts)
+        : manager.relatedToPath(ctx.path, opts),
+      this.deps.tensions?.analyze(ctx) ?? Promise.resolve([]),
+    ]);
     if (token !== this.marginToken) return;
-    this.renderMargin(results);
+    // A note flagged as tension/echo shouldn't ALSO appear as a plain related
+    // card below — one note, one card, the sharper reading wins.
+    const flagged = new Set(findings.map((f) => f.path));
+    this.renderMargin(results.filter((r) => !flagged.has(r.path)), findings, ctx);
   }
 
-  private renderMargin(results: ScoredResult[]): void {
+  private renderMargin(
+    results: ScoredResult[],
+    findings: TensionFinding[] = [],
+    ctx?: DraftContext,
+  ): void {
     const doc = this.marginEl.ownerDocument;
     this.marginEl.replaceChildren();
 
@@ -382,25 +414,89 @@ export class AriadneView extends ItemView {
       return;
     }
     this.marginHintEl.textContent = MARGIN_HINT;
-    this.marginHintEl.style.display = results.length === 0 ? "" : "none";
+    this.marginHintEl.style.display =
+      results.length === 0 && findings.length === 0 ? "" : "none";
+
+    // Tension/echo findings first: rarer, sharper signals than relatedness.
+    findings.forEach((f, i) => {
+      this.marginEl.appendChild(this.tensionRowEl(doc, f, i, ctx));
+    });
 
     // Same row component as the search results, so ⇧/⌥/⌘ mean the same thing
     // in both halves of the panel.
+    const bias = this.deps.marginBias?.() ?? 0;
     results.forEach((r, i) => {
       this.marginEl.appendChild(
         rowEl(
           doc,
           r,
-          i,
+          findings.length + i,
           false,
           {
             onActivate: (result, mods) => this.activate(result, mods),
             onHoverSelect: () => {},
           },
-          { variant: "card", touch: this.touch },
+          { variant: "card", touch: this.touch, bias },
         ),
       );
     });
+  }
+
+  /**
+   * A tension/echo card: the shared row (so open/link/weave behave normally)
+   * with a small-caps kind label ahead of the title, the model's explanation
+   * as the snippet, and a quiet per-session dismiss. No badge, no capsule —
+   * the label is text, per the design system.
+   */
+  private tensionRowEl(
+    doc: Document,
+    f: TensionFinding,
+    index: number,
+    ctx?: DraftContext,
+  ): HTMLElement {
+    const asResult: ScoredResult = {
+      path: f.path,
+      title: f.title,
+      snippet: f.snippet,
+      score: f.cosine,
+      confidence: f.confidence,
+      cosine: f.cosine,
+    };
+    const row = rowEl(
+      doc,
+      asResult,
+      index,
+      false,
+      {
+        onActivate: (result, mods) => this.activate(result, mods),
+        onHoverSelect: () => {},
+      },
+      { variant: "card", touch: this.touch },
+    );
+    row.classList.add(f.kind === "tension" ? "ariadne-tension" : "ariadne-echo");
+
+    const head = row.querySelector(".ariadne-row-head");
+    if (head) {
+      const label = doc.createElement("span");
+      label.classList.add("ariadne-kind-label");
+      label.textContent = f.kind === "tension" ? "tension" : "echo";
+      head.insertBefore(label, head.firstChild);
+
+      if (this.deps.tensions && ctx) {
+        const dismiss = doc.createElement("button");
+        dismiss.type = "button";
+        dismiss.classList.add("ariadne-dismiss");
+        dismiss.textContent = "×";
+        dismiss.setAttribute("aria-label", `Dismiss ${f.kind} with ${f.title}`);
+        dismiss.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this.deps.tensions!.dismiss(ctx.path, f.path);
+          void this.refreshMargin(ctx);
+        });
+        head.appendChild(dismiss);
+      }
+    }
+    return row;
   }
 
   /* ── Status glyph ───────────────────────────────────────────────────── */
