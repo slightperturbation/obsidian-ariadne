@@ -29,6 +29,13 @@ export interface RelatedOptions {
   excludeTitles?: ReadonlySet<string>;
   /** Paths in the draft's link neighbourhood; raises their confidence. */
   neighbors?: ReadonlySet<string>;
+  /**
+   * Sink (never drop) matching notes to the bottom of the ranking — e.g.
+   * dated journal entries, which would otherwise crowd out the permanent
+   * notes a topic surface exists to show. A stable partition, so relative
+   * order within each group is preserved.
+   */
+  deprioritize?: (path: string) => boolean;
 }
 
 export interface NoteMeta {
@@ -77,6 +84,18 @@ function searchableMeta(frontmatter?: Record<string, unknown>): string {
 
 const hasFilters = (f: ReturnType<typeof parseQuery>["filters"]): boolean =>
   !!(f.folder || f.type || f.since);
+
+/** Stable partition: kept entries first, sunk entries after, order preserved. */
+function sink<T extends { path: string }>(
+  entries: T[],
+  shouldSink?: (path: string) => boolean,
+): T[] {
+  if (!shouldSink) return entries;
+  const kept: T[] = [];
+  const sunk: T[] = [];
+  for (const e of entries) (shouldSink(e.path) ? sunk : kept).push(e);
+  return kept.concat(sunk);
+}
 
 function makeSnippet(text: string): string {
   const oneLine = text.replace(/\s+/g, " ").trim();
@@ -322,7 +341,7 @@ export class IndexManager {
       (entry) =>
         opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
     );
-    return this.buildResults(ranked, limit, cosineById, undefined, opts.neighbors);
+    return this.buildResults(sink(ranked, opts.deprioritize), limit, cosineById, undefined, opts.neighbors);
   }
 
   /**
@@ -371,7 +390,7 @@ export class IndexManager {
       (entry) =>
         opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
     );
-    return this.buildResults(ranked, limit, cosineById, undefined, opts.neighbors);
+    return this.buildResults(sink(ranked, opts.deprioritize), limit, cosineById, undefined, opts.neighbors);
   }
 
   /** Whether relatedToPath() can answer at all (vectors on hand). */

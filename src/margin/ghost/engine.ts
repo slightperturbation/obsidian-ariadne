@@ -11,6 +11,8 @@ export interface GhostEngineDeps {
   manager: () => IndexManager | undefined;
   enabled: () => boolean;
   minCosine: () => number;
+  /** Dated journal entries — never offered as inline link targets. */
+  isPeriodic?: (path: string) => boolean;
   log: Logger;
 }
 
@@ -65,7 +67,13 @@ export class GhostEngine {
       return;
     }
 
-    const results = await manager.related(ctx.text, { excludePath: ctx.path, limit: 5 });
+    // People link ideas, not days: an inline suggestion pointing at a dated
+    // entry is nearly always noise, so periodic notes are excluded here
+    // outright (the Margin still shows them, demoted — that surface is
+    // glanceable, this one interrupts).
+    const results = (
+      await manager.related(ctx.text, { excludePath: ctx.path, limit: 8 })
+    ).filter((r) => !this.deps.isPeriodic?.(r.path));
     if (token !== this.token) return; // a newer context superseded this one
 
     const decision = decideGhost({

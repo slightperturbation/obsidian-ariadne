@@ -19,6 +19,13 @@ export interface TensionEngineDeps {
   manager: () => IndexManager | undefined;
   router: ModelRouter;
   mode: () => TensionMode;
+  /**
+   * A real excerpt of a note (frontmatter stripped, bounded). The display
+   * snippet is 160 characters — enough to recognize a note, far too little
+   * for a model to judge whether it CONTRADICTS a paragraph. A verdict that
+   * interrupts writing deserves to have read more than a teaser.
+   */
+  excerptOf?: (path: string) => Promise<string | null>;
   log: Logger;
 }
 
@@ -180,12 +187,15 @@ export class TensionEngine {
     this.inFlight.add(pairKey);
     this.classifyCount++;
     const paragraphKey = ctx.key;
-    void this.deps.router
-      .run(
+    const targetPath = pairKey.slice(pairKey.indexOf("::") + 2);
+    void (async () => {
+      const excerpt = (await this.deps.excerptOf?.(targetPath)) ?? noteExcerpt;
+      return this.deps.router.run(
         "relation",
-        relationPrompt({ paragraph: ctx.text.trim(), noteTitle, noteExcerpt }),
+        relationPrompt({ paragraph: ctx.text.trim(), noteTitle, noteExcerpt: excerpt }),
         { schema: RELATION_SCHEMA as unknown as Record<string, unknown>, maxTokens: 200 },
-      )
+      );
+    })()
       .then((text) => {
         this.failures = 0;
         this.setCache(pairKey, { paragraphKey, verdict: parseRelation(text) });

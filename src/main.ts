@@ -28,6 +28,7 @@ import { ActionsController } from "./actions/controller";
 import { PromptModal } from "./ui/prompt-modal";
 import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
+import { looksPeriodic } from "./core/periodic";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -185,6 +186,24 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "capture-thought",
+      name: "Capture a thought to the Inbox",
+      callback: () => {
+        new PromptModal(
+          this.app,
+          { title: "What's the thought?", placeholder: "Fleeting is fine — it lands in the Inbox…" },
+          (seed) => void this.actions.captureThought(seed),
+        ).open();
+      },
+    });
+
+    this.addCommand({
+      id: "promote-to-note",
+      name: "Promote selection to a note",
+      editorCallback: () => void this.actions.promoteToNote(),
+    });
+
+    this.addCommand({
       id: "triage-inbox",
       name: "Triage Inbox",
       callback: () => void this.actions.triageInbox(),
@@ -216,6 +235,12 @@ export default class AriadnePlugin extends Plugin {
       manager: () => this.manager,
       router: this.router,
       mode: () => this.settings.tensionMode,
+      excerptOf: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!(file instanceof TFile)) return null;
+        const content = await this.app.vault.cachedRead(file);
+        return content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").slice(0, 1200) || null;
+      },
       log: this.log,
     });
 
@@ -235,6 +260,7 @@ export default class AriadnePlugin extends Plugin {
           // suggestion interrupts, so the Margin can afford to be less certain.
           marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
           marginNeighbors: (path) => this.linkNeighborhood(path),
+          isPeriodic: looksPeriodic,
           touch: () => this.policy.touch,
           tensions: this.tensions,
           lineBias: () => biasOf(this.settings.lineSerendipity),
@@ -258,6 +284,7 @@ export default class AriadnePlugin extends Plugin {
       manager: () => this.manager,
       enabled: () => this.settings.enableGhostText,
       minCosine: () => this.settings.ghostMinCosine,
+      isPeriodic: looksPeriodic,
       log: this.log,
     });
     this.getWatcher().subscribe((ctx) => void this.ghost?.onContext(ctx));
@@ -281,6 +308,16 @@ export default class AriadnePlugin extends Plugin {
     );
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (view?.editor) this.getWatcher().onFocusChange(view.editor, view);
+      }),
+    );
+    // Following a link in the SAME pane fires file-open, not
+    // active-leaf-change — without this, the Margin goes stale exactly while
+    // chaining through old notes, which is the core reading workflow the
+    // method is built on (work WITH old notes, not just write new ones).
+    this.registerEvent(
+      this.app.workspace.on("file-open", () => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (view?.editor) this.getWatcher().onFocusChange(view.editor, view);
       }),

@@ -122,3 +122,24 @@ classification needs it; echoes don't).
       note are rewritten — and is undoable.
 - [ ] A table-heavy note: search for text from a table row → the snippet
       shows an intact row, not a shredded fragment.
+
+## 9. Journaling fit (use review)
+
+- [ ] **Margin follows reading.** Click a [[link]] inside a note (same pane)
+      → the Margin updates to the new note without any edit. Chain three
+      links; it keeps up.
+- [ ] **Daily notes don't crowd.** In today's daily note, write about a topic
+      you have BOTH a permanent note and old journal mentions of → the
+      permanent note ranks above the dated entries in the Margin; the dated
+      entries still appear, lower.
+- [ ] **Ghost never suggests a date.** Ghost text offers [[Idea]] links but
+      never [[2026-07-20]].
+- [ ] **Capture a thought** (command) → type a sentence → an Inbox note
+      exists, titled from your words, instantly — no API call, no dialogs
+      beyond the one prompt. *Undo last action* removes it.
+- [ ] **Promote selection to a note**: in a daily note, select a good line
+      (or just stand in the paragraph) and run it → an Inbox note is created
+      with the text + "— promoted from [[the daily]]", and " [[title]]"
+      appears after the passage in the journal. The journal text itself is
+      untouched. ⌘Z removes the inserted link; *Undo last action* removes
+      the note.

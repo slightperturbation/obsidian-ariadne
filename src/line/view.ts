@@ -27,6 +27,8 @@ export interface AriadneViewDeps {
   marginMinCosine?: () => number | undefined;
   /** Link-graph neighbourhood of the note being written (backlinks + 2-hop). */
   marginNeighbors?: (path: string) => ReadonlySet<string>;
+  /** Dated journal entries: demoted in the Margin, never ghost-suggested. */
+  isPeriodic?: (path: string) => boolean;
   /** Touch device: show tap targets instead of a modifier-key legend. */
   touch?: () => boolean;
   /** Ambient tension/echo analysis (see margin/tension). */
@@ -383,6 +385,9 @@ export class AriadneView extends ItemView {
       excludeTitles: linked,
       minCosine: this.deps.marginMinCosine?.(),
       neighbors: this.deps.marginNeighbors?.(ctx.path),
+      // While journaling, the nearest neighbors are other dated entries;
+      // the permanent note on the idea must outrank last Tuesday's mention.
+      deprioritize: this.deps.isPeriodic,
     };
     // Without a local model, free text can't be embedded — but the note being
     // written was embedded by whichever device owns the index, so asking in

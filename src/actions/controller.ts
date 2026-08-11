@@ -55,6 +55,7 @@ import { PreviewModal } from "../ui/preview-modal";
 import { ListPreviewModal } from "../ui/list-preview-modal";
 import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal";
 import { decideLocally, isUntitledName, titleFromContent } from "./triage";
+import { paragraphAround } from "../margin/context";
 import {
   TITLE_SCHEMA,
   TRIAGE_SCHEMA,
@@ -565,6 +566,96 @@ export class ActionsController {
       },
       () => void this.applyAttachmentSweep(folder, moves),
     ).open();
+  }
+
+  /* ── Journaling bridge: capture + promote ───────────────────────────── */
+
+  /**
+   * Zero-ceremony capture: a thought becomes an Inbox note *instantly* —
+   * titled from its own words, no model call, no home to choose, no
+   * structure imposed. Ahrens's fleeting notes work only when capture costs
+   * nothing; the scaffolded create (which calls the API and picks a
+   * permanent home) is for when a thought is ready to become a note, not
+   * for getting it out of your head.
+   */
+  async captureThought(seed: string): Promise<void> {
+    const text = seed.trim();
+    if (!text) return;
+    const inbox = normalizePath(this.deps.inboxFolder());
+    const title =
+      titleFromContent(text) ?? `Capture ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+    const path = this.uniquePath(`${inbox}/${title}.md`);
+    await this.deps.executor.apply({
+      title: `Capture "${title}"`,
+      changes: [{ type: "create", path, after: `${text}\n` }],
+    });
+    new Notice(`Captured to ${path}`);
+  }
+
+  /**
+   * Promote a fleeting line out of the journal (PRD §4.4): the selection —
+   * or the paragraph at the cursor — becomes an Inbox note carrying a
+   * provenance link back to the source, and a [[link]] is appended after the
+   * text in the source so the journal points at the idea's new home.
+   *
+   * The journal text itself is never altered or removed: the daily note
+   * keeps the fleeting form (that's the record of the day), the new note is
+   * where elaboration happens, and the link ties them. Instant and local; a
+   * model is consulted only if the text yields no usable title.
+   */
+  async promoteToNote(): Promise<void> {
+    const view = this.deps.lastMarkdown();
+    const file = view?.file;
+    if (!view || !file) {
+      new Notice("Open a note to promote from.");
+      return;
+    }
+    const editor = view.editor;
+    let text = editor.getSelection().trim();
+    let insertAt = text ? editor.getCursor("to") : undefined;
+    if (!text) {
+      const cursor = editor.getCursor();
+      const para = paragraphAround(editor.getValue().split("\n"), cursor.line);
+      text = para.text.trim();
+      insertAt = { line: para.endLine, ch: editor.getLine(para.endLine).length };
+    }
+    if (text.length < 20) {
+      new Notice("Select (or stand in) the passage to promote.");
+      return;
+    }
+
+    let title = titleFromContent(text);
+    if (!title && this.deps.router.available()) {
+      try {
+        title = parseTitle(
+          await this.deps.router.run("scaffold", titlePrompt(text.slice(0, EXCERPT_CHARS)), {
+            schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
+            maxTokens: 100,
+          }),
+        );
+      } catch (err) {
+        this.deps.log.warn(`promote title failed: ${String(err)}`);
+      }
+    }
+    if (!title) {
+      new Notice("Couldn't derive a title from that passage.");
+      return;
+    }
+
+    const inbox = normalizePath(this.deps.inboxFolder());
+    const path = this.uniquePath(`${inbox}/${title}.md`);
+    const body = `${text}\n\n— promoted from [[${file.basename}]]\n`;
+    await this.deps.executor.apply({
+      title: `Promote "${title}"`,
+      changes: [{ type: "create", path, after: body }],
+    });
+
+    // Appended via the editor, not a file rewrite: an addition in the
+    // writer's buffer, reversible with ordinary ⌘Z, and never a whole-file
+    // modify racing their live typing.
+    const noteName = path.split("/").pop()!.replace(/\.md$/, "");
+    if (insertAt) editor.replaceRange(` [[${noteName}]]`, insertAt);
+    new Notice(`Promoted to ${path} — elaborate it when ready.`);
   }
 
   /* ── Filing 4c: Untitled renaming + Inbox triage ────────────────────── */
