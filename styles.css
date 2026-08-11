@@ -332,3 +332,24 @@
   min-height: 44px;
   min-width: 44px;
 }
+
+/* ── Retirement modal ────────────────────────────────────────────────── */
+
+.ariadne-retire-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-4);
+  padding: var(--size-4-2) 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.ariadne-retire-actions {
+  display: flex;
+  gap: var(--size-4-2);
+  flex-shrink: 0;
+}
+
+.ariadne .is-hidden {
+  display: none;
+}

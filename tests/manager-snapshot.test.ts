@@ -73,6 +73,7 @@ describe("IndexManager snapshot/restore", () => {
     const provider: EmbeddingProvider = {
       id: "spy-64",
       dim: 64,
+      floor: 0.6,
       ready: async () => {},
       embed: (texts) => base.embed(texts),
       embedQuery,

@@ -14,7 +14,7 @@ function makeFile(path: string, mtime = 1000, parent: string | null = null): TFi
   f.basename = (path.split("/").pop() ?? path).replace(/\.md$/, "");
   f.extension = path.endsWith(".md") ? "md" : path.split(".").pop() ?? "";
   f.stat = { mtime, ctime: mtime, size: 0 };
-  f.parent = parent === null ? null : { path: parent };
+  f.parent = parent === null ? null : ({ path: parent } as TFile["parent"]);
   return f;
 }
 

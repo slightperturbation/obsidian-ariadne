@@ -6,7 +6,19 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 6b — local Gemma + smart routing.** An OpenAI-compatible provider for
+**Phase 6c — retirement + release track.** A guided **Retire replaced
+plugins** command: it lists Smart Connections and Omnisearch with what Ariadne
+covers instead, disables each only on an explicit per-item click (the ordinary
+plugin toggle — reversible in settings), and offers to move `.smart-env/` to
+the *system* trash. And the release plumbing for a BRAT beta: since BRAT ships
+only `manifest.json`/`main.js`/`styles.css`, the worker bundle and ONNX
+runtime (~24 MB) are attached to each GitHub release and **self-healed** by
+the plugin on first semantic start if missing. A tag-triggered workflow builds
+and drafts the release; `eslint-plugin-obsidianmd` is wired into `npm run
+lint` and clean (its checks also raised `minAppVersion` to 1.7.2, matching the
+APIs actually called). See *Installing (beta, via BRAT)* and *Releasing* below.
+
+Earlier: **Phase 6b — local Gemma + smart routing.** An OpenAI-compatible provider for
 a Gemma-class model on the home network (Ollama/LM Studio/llama.cpp), used
 **opportunistically and never depended on**: a cached reachability probe with a
 short timeout decides the route synchronously, quick tasks (connective
@@ -146,6 +158,32 @@ whose mtime changed. A corrupt or version-bumped snapshot is silently
 discarded and rebuilt — the vault is always the source of truth.
 
 Manual test script: [tests/manual/phase-1.md](tests/manual/phase-1.md).
+
+## Installing (beta, via BRAT)
+
+Not yet in the community-plugin directory. To install the beta:
+
+1. Install **BRAT** (Beta Reviewers Auto-update Tester) from Community plugins.
+2. BRAT settings → *Add beta plugin* → this repository's GitHub slug.
+3. Enable **Ariadne** in Community plugins.
+
+BRAT downloads `manifest.json`, `main.js`, and `styles.css`; on first run with
+semantic search enabled, Ariadne fetches its remaining runtime files (the
+worker bundle and ONNX runtime, ~24 MB) from the same release and drops them
+next to `main.js` — see `src/assets.ts`. If that download is blocked, search
+falls back to lexical and the console says which file is missing.
+
+## Releasing
+
+1. Set `RELEASE_REPO` in `src/assets.ts` to the real GitHub slug (once).
+2. Bump `manifest.json`/`versions.json` (`npm version …` runs `version-bump.mjs`).
+3. Commit, tag with the bare version (`0.6.0`, no `v` — BRAT and `assetUrl()`
+   both expect tag = manifest version), push the tag.
+4. The `Release` workflow builds and attaches all six files as a **draft**
+   release; review and publish it.
+
+Community-plugin submission (later): `eslint-plugin-obsidianmd` is wired into
+`npm run lint` and clean; the remaining checklist lives in the Obsidian docs.
 
 ## Development
 

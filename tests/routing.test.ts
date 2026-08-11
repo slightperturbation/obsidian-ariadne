@@ -127,7 +127,7 @@ describe("GemmaProvider", () => {
   });
 
   it("completes via chat/completions and reports zero cost", async () => {
-    const fetchFn = vi.fn((url: string) =>
+    const fetchFn = vi.fn((url: string, _init?: RequestInit) =>
       String(url).endsWith("/models")
         ? okJson({ data: [] })
         : okJson({ choices: [{ message: { content: '{"relation":"neither"}' } }] }),
@@ -141,7 +141,7 @@ describe("GemmaProvider", () => {
     expect(text).toBe('{"relation":"neither"}');
     expect(usage.costUsd).toBe(0);
     const call = fetchFn.mock.calls.find(([u]) => String(u).endsWith("/chat/completions"))!;
-    const body = JSON.parse((call[1] as RequestInit).body as string);
+    const body = JSON.parse(String(call[1]?.body));
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(body.messages[0].content).toContain("matching this schema");
   });

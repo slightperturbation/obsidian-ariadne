@@ -1,7 +1,7 @@
 import esbuild from "esbuild";
 import process from "process";
 import fs from "node:fs";
-import builtins from "builtin-modules";
+import { builtinModules as builtins } from "node:module";
 
 // Ship the ONNX runtime next to main.js: Obsidian blocks dynamic import of
 // remote modules, so the default CDN load of these files fails inside the app.

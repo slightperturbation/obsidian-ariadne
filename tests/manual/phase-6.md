@@ -91,3 +91,15 @@ classification needs it; echoes don't).
       yours to judge).
 - [ ] With NO Claude API key but the box awake → weaving and tension checks
       still work, `brain local`.
+
+## 7. Incumbent retirement
+
+- [ ] With Smart Connections and/or Omnisearch enabled, run **Ariadne: Retire
+      replaced plugins** → a modal lists each, with what Ariadne covers
+      instead, and per-item **Disable** buttons. Nothing happens without a
+      click.
+- [ ] Click Disable → the plugin turns off (verify in Community plugins —
+      and note it's re-enableable there, this is the ordinary toggle).
+- [ ] If `.smart-env/` exists, a **Trash .smart-env/** button appears →
+      clicking moves it to the *system* trash (recoverable in Finder).
+- [ ] With neither installed, the modal says there's nothing to retire.

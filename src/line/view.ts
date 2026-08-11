@@ -409,13 +409,15 @@ export class AriadneView extends ItemView {
     this.marginEl.replaceChildren();
 
     if (!this.deps.marginEnabled()) {
-      this.marginHintEl.style.display = "";
+      this.marginHintEl.classList.remove("is-hidden");
       this.marginHintEl.textContent = "Margin is off — enable it in Ariadne settings.";
       return;
     }
     this.marginHintEl.textContent = MARGIN_HINT;
-    this.marginHintEl.style.display =
-      results.length === 0 && findings.length === 0 ? "" : "none";
+    this.marginHintEl.classList.toggle(
+      "is-hidden",
+      results.length > 0 || findings.length > 0,
+    );
 
     // Tension/echo findings first: rarer, sharper signals than relatedness.
     findings.forEach((f, i) => {

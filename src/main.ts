@@ -26,6 +26,8 @@ import { ActionExecutor } from "./actions/framework";
 import { ObsidianVaultIO } from "./actions/vault-io";
 import { ActionsController } from "./actions/controller";
 import { PromptModal } from "./ui/prompt-modal";
+import { RetirementModal, surveyIncumbents } from "./actions/retirement";
+import { ensureRuntimeAssets } from "./assets";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -181,8 +183,18 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "retire-incumbents",
+      name: "Retire replaced plugins (Smart Connections, Omnisearch)",
+      callback: () => {
+        void surveyIncumbents(this.app).then((statuses) =>
+          new RetirementModal(this.app, statuses, this.log).open(),
+        );
+      },
+    });
+
+    this.addCommand({
       id: "undo-last-action",
-      name: "Undo last Ariadne action",
+      name: "Undo last action",
       callback: () => void this.actions.undoLast(),
     });
 
@@ -220,7 +232,7 @@ export default class AriadnePlugin extends Plugin {
 
     this.addCommand({
       id: "focus-line",
-      name: "Open Ariadne",
+      name: "Open panel",
       callback: () => void this.activateLine(),
     });
 
@@ -438,6 +450,9 @@ export default class AriadnePlugin extends Plugin {
   private async startSemantic(): Promise<void> {
     if (!this.manager || !this.scheduler) return;
     this.status.set({ semantic: "loading" });
+    // A BRAT install ships only main.js/manifest/styles — fetch the worker
+    // and ONNX runtime from this version's release if they're missing.
+    await ensureRuntimeAssets(this.app, this.manifest, this.log);
     try {
       const client = await this.makeWorkerClient();
       await client.ready();

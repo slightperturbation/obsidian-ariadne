@@ -31,12 +31,13 @@ export class GemmaProvider {
       baseUrl: () => string;
       /** Model name as the server knows it, e.g. "gemma3:27b". */
       model: () => string;
-      fetch?: typeof fetch;
+      /** Injected (requestUrl-backed in the app) — never the renderer's fetch. */
+      fetch: typeof fetch;
     },
   ) {}
 
   private get fetchImpl(): typeof fetch {
-    return this.deps.fetch ?? fetch;
+    return this.deps.fetch;
   }
 
   /** Configured at all? (Cheap, synchronous — the router's first gate.) */
