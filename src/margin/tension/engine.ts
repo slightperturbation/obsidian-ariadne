@@ -101,6 +101,15 @@ export class TensionEngine {
       [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) => m[1].trim()),
     );
     const { echoes, candidates } = selectCandidates({ results, linkedTitles, profile });
+    // Visible with the Debug logging setting: the raw numbers behind why a
+    // card did or didn't appear, for tuning the floors against a real vault.
+    this.deps.log.debug(
+      `tension: top cosines ${results
+        .slice(0, 5)
+        .map((r) => `${r.title}=${r.cosine?.toFixed(3) ?? "lex"}`)
+        .join(", ")} (echo≥${profile.echoFloor}, band≥${profile.candidateFloor}, ` +
+        `echoes=${echoes.length}, candidates=${candidates.length})`,
+    );
 
     const findings: TensionFinding[] = [];
 
