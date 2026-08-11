@@ -231,3 +231,88 @@ export function parseRelation(text: string): { relation: "contradicts" | "restat
   // A malformed answer must degrade to silence, not to a wrong card.
   return { relation: "neither" };
 }
+
+/* ── Untitled rename: title from content ──────────────────────────────── */
+
+export const TITLE_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description:
+        "A terse note title in the writer's own vocabulary (≤8 words, no ending period). Name the note's ONE idea, not its topic area.",
+    },
+  },
+  required: ["title"],
+  additionalProperties: false,
+} as const;
+
+export function titlePrompt(content: string): string {
+  return [
+    `Propose a title for this untitled Zettelkasten note. Use the writer's own words where possible; name the note's one idea specifically ("Spaced repetition trades transfer for retention", not "Notes on learning").`,
+    ``,
+    content,
+  ].join("\n");
+}
+
+export function parseTitle(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as { title?: unknown };
+    if (typeof parsed.title === "string" && parsed.title.trim()) {
+      return sanitizeTitle(parsed.title.trim().replace(/\.$/, ""));
+    }
+  } catch {
+    /* fall through */
+  }
+  return null;
+}
+
+/* ── Inbox triage: disposition for the ambiguous middle ───────────────── */
+
+export const TRIAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    disposition: {
+      type: "string",
+      enum: ["elaborate", "archive"],
+      description:
+        "elaborate = this contains a live idea worth developing into a permanent note; archive = inert (a stale clipping, an expired to-do, a thought that resolved itself)",
+    },
+    reason: {
+      type: "string",
+      description: "One terse fragment (≤12 words, lowercase start) saying why",
+    },
+  },
+  required: ["disposition", "reason"],
+  additionalProperties: false,
+} as const;
+
+export function triagePrompt(input: { name: string; content: string }): string {
+  return [
+    `An Inbox note in a Zettelkasten awaits triage. The Ahrens rule: an Inbox item either becomes (part of) a permanent note or leaves the system — it must not simply sit. Merging with duplicates is handled elsewhere; your call is only: is there a live idea here worth elaborating, or is this inert?`,
+    ``,
+    `Note "${input.name}":`,
+    input.content,
+    ``,
+    `Lean toward "elaborate" when there is any genuine thought — a question, a claim, a connection. "archive" is for content with no idea to develop: raw clippings never engaged with, logistics that expired, duplicated fragments.`,
+  ].join("\n");
+}
+
+export function parseTriage(text: string): { disposition: "elaborate" | "archive"; reason: string } {
+  try {
+    const parsed = JSON.parse(text) as { disposition?: unknown; reason?: unknown };
+    if (parsed.disposition === "elaborate" || parsed.disposition === "archive") {
+      return {
+        disposition: parsed.disposition,
+        reason:
+          typeof parsed.reason === "string" && parsed.reason.trim()
+            ? parsed.reason.trim().replace(/\.$/, "")
+            : "",
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  // Unparseable → elaborate: the costly mistake is archiving a live idea.
+  return { disposition: "elaborate", reason: "" };
+}

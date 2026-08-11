@@ -6,7 +6,21 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 6c — retirement + release track.** A guided **Retire replaced
+**Phase 4c (backlog) — Inbox triage + untitled notes.** *Triage Inbox*
+proposes exactly one disposition per Inbox note, the Ahrens way — **elaborate**
+(a live idea worth developing; the button just opens it, because elaborating is
+writing), **merge** (a stored-vector near-duplicate; runs the normal previewed
+merge flow), or **archive** (inert; an undoable move to `Archive/`). Local
+signals decide for free where they can — emptiness, near-duplication — and the
+model is asked only about the ambiguous middle, with the parser biased to
+*elaborate* because archiving a live idea is the costly mistake. *Resolve
+untitled notes* proposes real titles for `Untitled*` notes with content — the
+note's own first heading or line when usable (free), a model title only
+otherwise — and renames via Obsidian's link-rewriting rename, undoable, one
+click each. Also: markdown **tables are now atomic** in the chunker — an
+oversized table used to be hard-split mid-row into meaningless fragments.
+
+Earlier: **Phase 6c — retirement + release track.** A guided **Retire replaced
 plugins** command: it lists Smart Connections and Omnisearch with what Ariadne
 covers instead, disables each only on an explicit per-item click (the ordinary
 plugin toggle — reversible in settings), and offers to move `.smart-env/` to

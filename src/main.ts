@@ -130,6 +130,8 @@ export default class AriadnePlugin extends Plugin {
       executor: this.executor,
       lastMarkdown: () => this.resolveMarkdown(),
       attachmentsFolder: () => this.settings.attachmentsFolder,
+      inboxFolder: () => this.settings.inboxFolder,
+      archiveFolder: () => this.settings.archiveFolder,
       log: this.log,
     });
     this.status.set({ brain: provider.available() ? "cloud" : "none" });
@@ -180,6 +182,18 @@ export default class AriadnePlugin extends Plugin {
       id: "cleanup-empty-notes",
       name: "Clean up empty notes",
       callback: () => void this.actions.cleanupEmptyNotes(),
+    });
+
+    this.addCommand({
+      id: "triage-inbox",
+      name: "Triage Inbox",
+      callback: () => void this.actions.triageInbox(),
+    });
+
+    this.addCommand({
+      id: "resolve-untitled",
+      name: "Resolve untitled notes",
+      callback: () => void this.actions.resolveUntitled(),
     });
 
     this.addCommand({

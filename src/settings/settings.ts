@@ -30,6 +30,9 @@ export interface AriadneSettings {
 
   // Filing
   attachmentsFolder: string;
+  /** Lifecycle folders (PRD §4.5): capture lands in Inbox; inert notes rest in Archive. */
+  inboxFolder: string;
+  archiveFolder: string;
 
 
   // Margin
@@ -75,6 +78,8 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   costLimitUsd: 2,
 
   attachmentsFolder: "Supporting Files",
+  inboxFolder: "Inbox",
+  archiveFolder: "Archive",
 
 
   enableMargin: true,

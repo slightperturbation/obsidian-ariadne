@@ -53,6 +53,16 @@ import {
 } from "../model/refactor-tasks";
 import { PreviewModal } from "../ui/preview-modal";
 import { ListPreviewModal } from "../ui/list-preview-modal";
+import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal";
+import { decideLocally, isUntitledName, titleFromContent } from "./triage";
+import {
+  TITLE_SCHEMA,
+  TRIAGE_SCHEMA,
+  parseTitle,
+  parseTriage,
+  titlePrompt,
+  triagePrompt,
+} from "../model/tasks";
 
 const EXCERPT_CHARS = 600;
 const SEGMENT_PREVIEW_CHARS = 200;
@@ -86,6 +96,8 @@ export class ActionsController {
       executor: ActionExecutor;
       lastMarkdown: () => MarkdownView | null;
       attachmentsFolder: () => string;
+      inboxFolder: () => string;
+      archiveFolder: () => string;
       log: Logger;
     },
   ) {}
@@ -553,6 +565,192 @@ export class ActionsController {
       },
       () => void this.applyAttachmentSweep(folder, moves),
     ).open();
+  }
+
+  /* ── Filing 4c: Untitled renaming + Inbox triage ────────────────────── */
+
+  /** Most items examined per triage/rename run — bounds reads and API calls. */
+  private static readonly TRIAGE_BATCH = 15;
+
+  async resolveUntitled(): Promise<void> {
+    const { app } = this.deps;
+    const candidates = app.vault
+      .getMarkdownFiles()
+      .filter((f) => isUntitledName(f.basename) && f.stat.size >= 20)
+      .slice(0, ActionsController.TRIAGE_BATCH);
+    if (candidates.length === 0) {
+      new Notice("No untitled notes with content found.");
+      return;
+    }
+
+    const items: ActionableItem[] = [];
+    await this.withWorkingNotice("Ariadne is reading untitled notes…", async () => {
+      for (const file of candidates) {
+        const content = await app.vault.read(file);
+        // The writer's own first heading/line beats a generated title — and
+        // is free. The model is only asked when the note offers nothing.
+        let title = titleFromContent(content);
+        if (!title && this.deps.router.available()) {
+          try {
+            title = parseTitle(
+              await this.deps.router.run("scaffold", titlePrompt(content.slice(0, EXCERPT_CHARS)), {
+                schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
+                maxTokens: 100,
+              }),
+            );
+          } catch (err) {
+            this.deps.log.warn(`title proposal failed for ${file.path}: ${String(err)}`);
+          }
+        }
+        if (!title) continue;
+
+        const folder = file.parent?.path && file.parent.path !== "/" ? file.parent.path : "";
+        const toPath = this.uniquePath(folder ? `${folder}/${title}.md` : `${title}.md`);
+        items.push({
+          title: `${file.basename} → ${toPath.split("/").pop()!.replace(/\.md$/, "")}`,
+          detail: content.replace(/\s+/g, " ").slice(0, 120),
+          actions: [
+            {
+              label: "Rename",
+              run: async () => {
+                const fromPath = file.path;
+                await app.fileManager.renameFile(file, toPath);
+                this.deps.executor.pushExternalUndo(
+                  `Renamed ${fromPath.split("/").pop()} to ${title}`,
+                  async () => {
+                    const moved = app.vault.getAbstractFileByPath(toPath);
+                    if (moved instanceof TFile && !app.vault.getAbstractFileByPath(fromPath)) {
+                      await app.fileManager.renameFile(moved, fromPath);
+                    }
+                  },
+                );
+                return true;
+              },
+            },
+            {
+              label: "Open",
+              run: () => {
+                void app.workspace.openLinkText(file.path, "", false);
+                return false;
+              },
+            },
+          ],
+        });
+      }
+    });
+
+    if (items.length === 0) {
+      new Notice("Nothing renameable — the untitled notes offered no usable title.");
+      return;
+    }
+    new ItemActionsModal(app, {
+      title: "Untitled notes",
+      description: "Links to renamed notes are rewritten automatically. Each rename is undoable.",
+      items,
+    }).open();
+  }
+
+  async triageInbox(): Promise<void> {
+    const { app } = this.deps;
+    const manager = this.deps.manager();
+    const inbox = normalizePath(this.deps.inboxFolder());
+    const files = app.vault
+      .getMarkdownFiles()
+      .filter((f) => f.path.startsWith(`${inbox}/`));
+    if (files.length === 0) {
+      new Notice(`Nothing in ${inbox}/ to triage.`);
+      return;
+    }
+    const batch = files.slice(0, ActionsController.TRIAGE_BATCH);
+
+    const items: ActionableItem[] = [];
+    await this.withWorkingNotice(`Ariadne is triaging ${batch.length} Inbox notes…`, async () => {
+      for (const file of batch) {
+        const content = await app.vault.read(file);
+        // Local signals first: emptiness and near-duplication are free calls.
+        const related = manager
+          ? await manager.related(mergeProbe(content), { excludePath: file.path, limit: 1 })
+          : [];
+        let proposal = decideLocally(content, related[0]);
+        if (!proposal && this.deps.router.available()) {
+          try {
+            const verdict = parseTriage(
+              await this.deps.router.run(
+                "scaffold",
+                triagePrompt({ name: file.basename, content: content.slice(0, EXCERPT_CHARS) }),
+                { schema: TRIAGE_SCHEMA as unknown as Record<string, unknown>, maxTokens: 150 },
+              ),
+            );
+            proposal = { disposition: verdict.disposition, reason: verdict.reason };
+          } catch (err) {
+            this.deps.log.warn(`triage failed for ${file.path}: ${String(err)}`);
+          }
+        }
+        // No model, no local signal → the honest default is the writing desk.
+        proposal ??= { disposition: "elaborate", reason: "needs your judgment" };
+
+        const open = {
+          label: "Open",
+          run: () => {
+            void app.workspace.openLinkText(file.path, "", false);
+            return false;
+          },
+        };
+        const archive = {
+          label: "Archive",
+          destructive: true,
+          run: async () => {
+            const folder = normalizePath(this.deps.archiveFolder());
+            if (!app.vault.getAbstractFileByPath(folder)) {
+              await app.vault.createFolder(folder).catch(() => {});
+            }
+            const fromPath = file.path;
+            const toPath = this.uniquePath(`${folder}/${file.name}`);
+            await app.fileManager.renameFile(file, toPath);
+            this.deps.executor.pushExternalUndo(`Archived ${file.name}`, async () => {
+              const moved = app.vault.getAbstractFileByPath(toPath);
+              if (moved instanceof TFile && !app.vault.getAbstractFileByPath(fromPath)) {
+                await app.fileManager.renameFile(moved, fromPath);
+              }
+            });
+            return true;
+          },
+        };
+        const merge = {
+          label: "Merge…",
+          run: async () => {
+            // Reuse the whole merge flow (preview included): open the note so
+            // it is the merge source, then let mergeNote re-detect the target.
+            await app.workspace.openLinkText(file.path, "", false);
+            await this.mergeNote();
+            return false;
+          },
+        };
+
+        const actions =
+          proposal.disposition === "merge"
+            ? [merge, open, archive]
+            : proposal.disposition === "archive"
+              ? [archive, open]
+              : [open, archive];
+        items.push({
+          title: file.basename,
+          detail: `${proposal.disposition}${proposal.reason ? " — " + proposal.reason : ""}`,
+          actions,
+        });
+      }
+    });
+
+    new ItemActionsModal(app, {
+      title: `Inbox triage (${batch.length}${files.length > batch.length ? ` of ${files.length}` : ""})`,
+      description:
+        "One disposition per item, the Ahrens way: elaborate it, merge it, or archive it — " +
+        "an Inbox trends toward empty. Archive moves are undoable.",
+      items,
+    }).open();
+    if (files.length > batch.length) {
+      new Notice(`Showing the first ${batch.length} — run again for the rest.`);
+    }
   }
 
   private async applyAttachmentSweep(folder: string, moves: AttachmentMove[]): Promise<void> {

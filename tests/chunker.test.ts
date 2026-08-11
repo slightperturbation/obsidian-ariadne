@@ -117,3 +117,26 @@ describe("frontmatter vs thematic break", () => {
     expect(stripFrontmatter(md).trim()).toBe("Body text.");
   });
 });
+
+describe("tables are atomic", () => {
+  it("never hard-splits a table mid-row", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `| metric ${i} | value ${i} | note about measurement ${i} |`);
+    const table = ["| name | value | note |", "| --- | --- | --- |", ...rows].join("\n");
+    const md = `Intro paragraph.\n\n${table}\n\nOutro paragraph.`;
+    const chunks = chunkNote("t.md", md);
+    const tableChunk = chunks.find((c) => c.text.includes("metric 0"));
+    expect(tableChunk).toBeDefined();
+    // The whole table is one chunk: first and last rows travel together.
+    expect(tableChunk!.text).toContain("metric 39");
+    // And every line of it is still a well-formed row.
+    for (const line of tableChunk!.text.split("\n")) {
+      expect(line.trimStart().startsWith("|")).toBe(true);
+    }
+  });
+
+  it("still hard-splits oversized prose", () => {
+    const long = Array.from({ length: 300 }, (_, i) => `word${i}`).join(" ");
+    const chunks = chunkNote("p.md", long);
+    expect(chunks.length).toBeGreaterThan(1);
+  });
+});

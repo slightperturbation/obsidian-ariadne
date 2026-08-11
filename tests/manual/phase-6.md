@@ -103,3 +103,22 @@ classification needs it; echoes don't).
 - [ ] If `.smart-env/` exists, a **Trash .smart-env/** button appears →
       clicking moves it to the *system* trash (recoverable in Finder).
 - [ ] With neither installed, the modal says there's nothing to retire.
+
+## 8. Inbox triage + untitled notes (4c)
+
+- [ ] Put a few notes in `Inbox/`: one empty-ish stub, one near-copy of an
+      existing note, one genuine fragment of thinking, one stale clipping.
+- [ ] Run **Triage Inbox** → one row per note, each with a proposed
+      disposition and terse reason: the stub says *archive — effectively
+      empty*, the near-copy says *merge — near-duplicate of X*, the live
+      fragment says *elaborate*.
+- [ ] **Archive** moves the note to `Archive/` — *Undo last action* brings it
+      back. **Merge…** opens the note and runs the normal merge flow with its
+      preview. **Open** just opens it (elaborating is writing, not a button).
+- [ ] Create `Untitled.md` and `Untitled 2.md` with content (one with a
+      heading, one without). Run **Resolve untitled notes** → proposed titles:
+      the heading verbatim for the first; a model-proposed title for the
+      second (or its first line). **Rename** renames in place — links to the
+      note are rewritten — and is undoable.
+- [ ] A table-heavy note: search for text from a table row → the snippet
+      shows an intact row, not a shredded fragment.

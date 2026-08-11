@@ -77,6 +77,18 @@ function toSections(markdown: string): Section[] {
   return sections;
 }
 
+/**
+ * A markdown table: every non-blank line is a `|` row. Tables are atomic —
+ * hard-splitting one at a word boundary used to shred it mid-row, indexing
+ * fragments like "| 12.4 | ms |" that match nothing and mean nothing. A
+ * table's meaning lives in whole rows against their header, so an oversized
+ * table stays one (oversized) chunk rather than several broken ones.
+ */
+function isTable(paragraph: string): boolean {
+  const lines = paragraph.split("\n").filter((l) => l.trim().length > 0);
+  return lines.length >= 2 && lines.every((l) => l.trimStart().startsWith("|"));
+}
+
 /** Split a paragraph that exceeds maxChars into length-bounded pieces at word boundaries. */
 function hardSplit(text: string, maxChars: number): string[] {
   const pieces: string[] = [];
@@ -103,7 +115,8 @@ function packSection(text: string, opts: ChunkOptions): string[] {
         blocks.push(current);
         current = "";
       }
-      blocks.push(...hardSplit(para, opts.maxChars));
+      if (isTable(para)) blocks.push(para);
+      else blocks.push(...hardSplit(para, opts.maxChars));
       continue;
     }
     if (current.length === 0) {

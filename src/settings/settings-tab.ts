@@ -254,6 +254,26 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl)
+      .setName("Inbox folder")
+      .setDesc("Where capture lands; Triage Inbox proposes one disposition per note here.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.inboxFolder).onChange(async (v) => {
+          this.plugin.settings.inboxFolder = v.trim() || "Inbox";
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Archive folder")
+      .setDesc("Where triage moves inert notes. Moves are undoable.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.archiveFolder).onChange(async (v) => {
+          this.plugin.settings.archiveFolder = v.trim() || "Archive";
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName("Advanced").setHeading();
 
     new Setting(containerEl)
