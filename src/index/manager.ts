@@ -393,6 +393,11 @@ export class IndexManager {
     return this.buildResults(sink(ranked, opts.deprioritize), limit, cosineById, undefined, opts.neighbors);
   }
 
+  /** Read-only note metadata, for surfaces that rank notes without text. */
+  noteMetas(): NoteMeta[] {
+    return [...this.meta.values()].map((m) => ({ ...m }));
+  }
+
   /** Whether relatedToPath() can answer at all (vectors on hand). */
   hasStoredVectors(): boolean {
     return !!this.vectors?.vectorsOfPath;

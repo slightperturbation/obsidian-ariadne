@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { looksPeriodic } from "../src/core/periodic";
+import { dayKeyOf, dateOf, looksPeriodic } from "../src/core/periodic";
+import { onThisDay, resurfacePick } from "../src/margin/resurface";
 import { IndexManager } from "../src/index/manager";
 import { HashEmbedder } from "../src/index/embeddings/hash-embedder";
 import type { SourceNote } from "../src/core/types";
@@ -58,5 +59,71 @@ describe("related() demotes periodic notes without hiding them", () => {
     const paths = results.map((r) => r.path);
     expect(paths).toContain("2026-07-20.md"); // demoted, not hidden
     expect(paths.indexOf("Motivation.md")).toBeLessThan(paths.indexOf("2026-07-20.md"));
+  });
+});
+
+describe("dayKeyOf / dateOf", () => {
+  it("extracts the month-day and full date from both name conventions", () => {
+    expect(dayKeyOf("Daily/2026-07-25.md")).toBe("07-25");
+    expect(dayKeyOf("June 28, 2026.md")).toBe("06-28");
+    expect(dayKeyOf("8 June 2025.md")).toBe("06-08");
+    expect(dateOf("2026-07-25 Friday.md")).toBe("2026-07-25");
+    expect(dateOf("June 28, 2026.md")).toBe("2026-06-28");
+  });
+
+  it("returns null for weeklies, monthlies, and ordinary notes", () => {
+    for (const name of ["2026-W31.md", "2026-07.md", "Open-endedness.md"]) {
+      expect(dayKeyOf(name)).toBeNull();
+      expect(dateOf(name)).toBeNull();
+    }
+  });
+});
+
+describe("resurfacing", () => {
+  it("onThisDay finds past entries sharing the month-day, newest first", () => {
+    const paths = [
+      "2026-07-25.md",
+      "2025-07-25.md",
+      "June 28, 2026.md",
+      "2024-07-25.md",
+      "Open-endedness.md",
+    ];
+    expect(onThisDay("2026-07-25.md", paths)).toEqual(["2025-07-25.md", "2024-07-25.md"]);
+    // Works for a synthetic today-path that has no file behind it.
+    expect(onThisDay("2027-07-25.md", paths)).toEqual([
+      "2026-07-25.md",
+      "2025-07-25.md",
+      "2024-07-25.md",
+    ]);
+  });
+
+  it("resurfacePick is stable within a day, different across days, and honest about eligibility", () => {
+    const now = Date.now();
+    const old = now - 60 * 24 * 60 * 60 * 1000;
+    const meta = (path: string, linkCount: number, mtime: number) => ({
+      path,
+      title: path.replace(/\.md$/, ""),
+      mtime,
+      folder: "",
+      linkCount,
+      chunkCount: 1,
+    });
+    const metas = [
+      meta("Agents.md", 0, old),
+      meta("Morphogenesis.md", 1, old),
+      meta("Well-linked.md", 8, old), // the graph already returns this one
+      meta("Fresh.md", 0, now), // recently touched — not dormant
+      meta("2025-01-01.md", 0, old), // dated entries are not "still true?" material
+    ];
+    const a = resurfacePick(metas, "2026-08-11", now);
+    const b = resurfacePick(metas, "2026-08-11", now);
+    expect(a).toEqual(b); // same pick all day
+    expect(["Agents.md", "Morphogenesis.md"]).toContain(a!.path);
+    // Ineligible notes never surface.
+    for (const iso of ["2026-08-11", "2026-08-12", "2026-08-13", "2026-08-14"]) {
+      const pick = resurfacePick(metas, iso, now)!;
+      expect(["Agents.md", "Morphogenesis.md"]).toContain(pick.path);
+    }
+    expect(resurfacePick([meta("Fresh.md", 0, now)], "2026-08-11", now)).toBeNull();
   });
 });

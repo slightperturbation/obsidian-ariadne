@@ -57,17 +57,22 @@ import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal"
 import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
 import { clusterThemes, type EntryNeighbors } from "./themes";
-import { looksPeriodic } from "../core/periodic";
+import { dateOf, looksPeriodic } from "../core/periodic";
+import { onThisDay, resurfacePick } from "../margin/resurface";
+import { wantedTopics } from "../margin/wanted";
 import {
   TITLE_SCHEMA,
   TRIAGE_SCHEMA,
   THEME_SCHEMA,
+  SYNTHESIS_SCHEMA,
   parseTitle,
   parseTriage,
   parseTheme,
+  parseSynthesis,
   titlePrompt,
   triagePrompt,
   themePrompt,
+  synthesisPrompt,
 } from "../model/tasks";
 
 const EXCERPT_CHARS = 600;
@@ -661,6 +666,199 @@ export class ActionsController {
     const noteName = path.split("/").pop()!.replace(/\.md$/, "");
     if (insertAt) editor.replaceRange(` [[${noteName}]]`, insertAt);
     new Notice(`Promoted to ${path} — elaborate it when ready.`);
+  }
+
+  /**
+   * Close the day — the evening review ritual, composed entirely from pieces
+   * that already exist. Journaling advice converges on the same point: the
+   * review is where the value compounds, and a ritual with a surface gets
+   * done. One modal: today's entry, this date in past years, the Inbox
+   * count, the most-wanted topic, and one old note asking "still true?".
+   * Nothing here is new machinery; it is the day's open loops in one place.
+   */
+  async closeTheDay(): Promise<void> {
+    const { app } = this.deps;
+    const manager = this.deps.manager();
+    const today = new Date().toISOString().slice(0, 10);
+    const allPaths = app.vault.getMarkdownFiles().map((f) => f.path);
+    const items: ActionableItem[] = [];
+
+    const todaysEntry = allPaths.find((p) => dateOf(p) === today);
+    if (todaysEntry) {
+      const name = todaysEntry.split("/").pop()!.replace(/\.md$/, "");
+      items.push({
+        title: name,
+        detail: "today's entry — a promotable line in it?",
+        actions: [
+          {
+            label: "Open",
+            run: () => {
+              void app.workspace.openLinkText(todaysEntry, "", false);
+              return false;
+            },
+          },
+        ],
+      });
+    }
+
+    for (const past of onThisDay(`${today}.md`, allPaths).slice(0, 2)) {
+      const name = past.split("/").pop()!.replace(/\.md$/, "");
+      items.push({
+        title: name,
+        detail: "on this day",
+        actions: [
+          {
+            label: "Open",
+            run: () => {
+              void app.workspace.openLinkText(past, "", false);
+              return false;
+            },
+          },
+        ],
+      });
+    }
+
+    const inbox = normalizePath(this.deps.inboxFolder());
+    const inboxCount = allPaths.filter((p) => p.startsWith(`${inbox}/`)).length;
+    if (inboxCount > 0) {
+      items.push({
+        title: `Inbox: ${inboxCount} note${inboxCount === 1 ? "" : "s"}`,
+        detail: "an Inbox trends toward empty",
+        actions: [
+          {
+            label: "Triage",
+            run: async () => {
+              await this.triageInbox();
+              return true;
+            },
+          },
+        ],
+      });
+    }
+
+    const wanted = wantedTopics(app.metadataCache.unresolvedLinks, 1)[0];
+    if (wanted) {
+      items.push({
+        title: wanted.title,
+        detail: `wanted by ${wanted.sources} notes — no note exists`,
+        actions: [
+          {
+            label: "Create",
+            run: async () => {
+              await this.createNote(wanted.title);
+              return true;
+            },
+          },
+        ],
+      });
+    }
+
+    if (manager) {
+      const pick = resurfacePick(manager.noteMetas(), today, Date.now());
+      if (pick) {
+        items.push({
+          title: pick.title,
+          detail: "still true? — old and barely linked",
+          actions: [
+            {
+              label: "Revisit",
+              run: () => {
+                void app.workspace.openLinkText(pick.path, "", false);
+                return false;
+              },
+            },
+          ],
+        });
+      }
+    }
+
+    if (items.length === 0) {
+      new Notice("Nothing open — the day is already closed.");
+      return;
+    }
+    new ItemActionsModal(app, {
+      title: "Close the day",
+      description: "The day's open loops, in one place. Take what's useful; dismiss the rest.",
+      items,
+    }).open();
+  }
+
+  /**
+   * Weekly synthesis: a created note that links the week's entries and asks
+   * elaboration QUESTIONS — never prose. Prompting elaboration is exactly
+   * what a thinking partner should do; writing the synthesis for you is
+   * exactly what it shouldn't (the AI-writing boundary, PRD §9.3).
+   */
+  async weeklySynthesis(): Promise<void> {
+    const { app } = this.deps;
+    if (!this.deps.router.available()) {
+      new Notice("Weekly synthesis needs a reasoning model — set an API key or local model URL.");
+      return;
+    }
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    const entries: Array<{ path: string; date: string }> = [];
+    for (const f of app.vault.getMarkdownFiles()) {
+      const d = dateOf(f.path);
+      if (d && d >= weekAgo) entries.push({ path: f.path, date: d });
+    }
+    entries.sort((a, b) => a.date.localeCompare(b.date));
+    if (entries.length < 2) {
+      new Notice("Not enough journal entries this week to synthesize.");
+      return;
+    }
+
+    const excerpts: Array<{ date: string; excerpt: string; path: string }> = [];
+    for (const e of entries) {
+      const file = app.vault.getAbstractFileByPath(e.path);
+      if (!(file instanceof TFile)) continue;
+      const content = (await app.vault.cachedRead(file))
+        .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+        .trim();
+      if (content) excerpts.push({ date: e.date, excerpt: content.slice(0, 500), path: e.path });
+    }
+
+    let questions: string[] = [];
+    await this.withWorkingNotice("Ariadne is reading the week…", async () => {
+      try {
+        questions = parseSynthesis(
+          await this.deps.router.run("scaffold", synthesisPrompt(excerpts), {
+            schema: SYNTHESIS_SCHEMA as unknown as Record<string, unknown>,
+            maxTokens: 500,
+            thinking: true,
+          }),
+        );
+      } catch (err) {
+        this.deps.log.warn(`synthesis failed: ${String(err)}`);
+      }
+    });
+    if (questions.length === 0) {
+      new Notice("Couldn't draw questions from the week — see console.");
+      return;
+    }
+
+    // ISO week number for a stable, conventional title.
+    const jan4 = new Date(Date.UTC(now.getUTCFullYear(), 0, 4));
+    const week = Math.ceil(
+      ((now.getTime() - jan4.getTime()) / 86_400_000 + jan4.getUTCDay() + 1) / 7,
+    );
+    const title = `Weekly synthesis ${now.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+    const inbox = normalizePath(this.deps.inboxFolder());
+    const path = this.uniquePath(`${inbox}/${title}.md`);
+    const body = [
+      `# ${title}`,
+      ``,
+      `Entries: ${excerpts.map((e) => `[[${e.path.split("/").pop()!.replace(/\.md$/, "")}]]`).join(" · ")}`,
+      ``,
+      `## Questions to elaborate`,
+      ``,
+      ...questions.map((q) => `- ${q}`),
+      ``,
+    ].join("\n");
+    await this.deps.executor.apply({ title: `Create "${title}"`, changes: [{ type: "create", path, after: body }] });
+    await app.workspace.openLinkText(path, "", false);
   }
 
   /** Recent dated entries examined for recurring themes. */

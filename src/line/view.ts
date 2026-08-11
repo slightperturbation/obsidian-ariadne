@@ -32,6 +32,10 @@ export interface AriadneViewDeps {
   isPeriodic?: (path: string) => boolean;
   /** Dangling [[topics]] ranked by demand (see margin/wanted). */
   wantedTopics?: () => WantedTopic[];
+  /** Past entries sharing today's month-day (when a dated note is open). */
+  onThisDay?: (currentPath: string) => string[];
+  /** Today's "still true?" resurfaced note, if any. */
+  resurfaced?: () => { path: string; title: string } | null;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
@@ -73,6 +77,8 @@ export class AriadneView extends ItemView {
   private wantedEl!: HTMLElement;
   /** Wanted topics the user waved off — for this session. */
   private dismissedWanted = new Set<string>();
+  private dismissedResurfaced = false;
+  private currentNotePath?: string;
 
   private results: ScoredResult[] = [];
   private selected = 0;
@@ -384,6 +390,7 @@ export class AriadneView extends ItemView {
     const manager = this.deps.manager();
     if (!manager) return;
     this.lastCtx = ctx;
+    this.currentNotePath = ctx.path;
     const token = ++this.marginToken;
     // On a blank line, fall back to whole-note context (title + opening).
     const contextText = ctx.text.trim() || `${ctx.title}\n${ctx.noteText.slice(0, 600)}`;
@@ -529,6 +536,8 @@ export class AriadneView extends ItemView {
   private renderWanted(): void {
     if (!this.wantedEl) return;
     this.wantedEl.replaceChildren();
+    this.renderOnThisDay();
+    this.renderResurfaced();
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
       (t) => !this.dismissedWanted.has(t.title),
     );
@@ -568,6 +577,71 @@ export class AriadneView extends ItemView {
       row.setAttribute("aria-label", `Create the note ${topic.title}`);
       this.wantedEl.appendChild(row);
     }
+  }
+
+  /** A minimal open-on-click row for the foot sections. */
+  private footRowEl(title: string, path: string, aria: string): HTMLElement {
+    const doc = this.wantedEl.ownerDocument;
+    const row = doc.createElement("div");
+    row.classList.add("ariadne-row", "ariadne-confidence-faint");
+    const head = doc.createElement("div");
+    head.classList.add("ariadne-row-head");
+    const label = doc.createElement("span");
+    label.classList.add("ariadne-row-title");
+    label.textContent = title;
+    head.appendChild(label);
+    row.appendChild(head);
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", aria);
+    row.addEventListener("click", () =>
+      void this.app.workspace.openLinkText(path, "", false),
+    );
+    return row;
+  }
+
+  /** Past entries on this month-day — shown only inside a dated note. */
+  private renderOnThisDay(): void {
+    const path = this.currentNotePath;
+    if (!path) return;
+    const past = (this.deps.onThisDay?.(path) ?? []).slice(0, 3);
+    if (past.length === 0) return;
+    const doc = this.wantedEl.ownerDocument;
+    const label = doc.createElement("div");
+    label.classList.add("ariadne-section-label");
+    label.textContent = "On this day";
+    this.wantedEl.appendChild(label);
+    for (const p of past) {
+      const title = p.split("/").pop()!.replace(/\.md$/, "");
+      this.wantedEl.appendChild(this.footRowEl(title, p, `Open ${title}`));
+    }
+  }
+
+  /** One old, orphaned note a day: the vault reading back. */
+  private renderResurfaced(): void {
+    if (this.dismissedResurfaced) return;
+    const pick = this.deps.resurfaced?.();
+    if (!pick) return;
+    const doc = this.wantedEl.ownerDocument;
+    const label = doc.createElement("div");
+    label.classList.add("ariadne-section-label");
+    label.textContent = "Still true?";
+    this.wantedEl.appendChild(label);
+    const row = this.footRowEl(pick.title, pick.path, `Revisit ${pick.title}`);
+    const head = row.querySelector(".ariadne-row-head");
+    if (head) {
+      const dismiss = doc.createElement("button");
+      dismiss.type = "button";
+      dismiss.classList.add("ariadne-dismiss");
+      dismiss.textContent = "×";
+      dismiss.setAttribute("aria-label", "Dismiss for this session");
+      dismiss.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.dismissedResurfaced = true;
+        this.renderWanted();
+      });
+      head.appendChild(dismiss);
+    }
+    this.wantedEl.appendChild(row);
   }
 
   /* ── Status glyph ───────────────────────────────────────────────────── */

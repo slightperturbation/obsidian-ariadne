@@ -30,6 +30,7 @@ import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
 import { looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
+import { onThisDay, resurfacePick } from "./margin/resurface";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -189,6 +190,18 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "close-the-day",
+      name: "Close the day",
+      callback: () => void this.actions.closeTheDay(),
+    });
+
+    this.addCommand({
+      id: "weekly-synthesis",
+      name: "Weekly synthesis questions",
+      callback: () => void this.actions.weeklySynthesis(),
+    });
+
+    this.addCommand({
       id: "find-journal-themes",
       name: "Find recurring journal themes",
       callback: () => void this.actions.findJournalThemes(),
@@ -273,6 +286,17 @@ export default class AriadnePlugin extends Plugin {
           wantedTopics: () =>
             (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks)),
           onCreateWanted: (title) => void this.actions.createNote(title),
+          onThisDay: (currentPath) =>
+            onThisDay(currentPath, this.app.vault.getMarkdownFiles().map((f) => f.path)),
+          resurfaced: () => {
+            if (!this.manager) return null;
+            const pick = resurfacePick(
+              this.manager.noteMetas(),
+              new Date().toISOString().slice(0, 10),
+              Date.now(),
+            );
+            return pick ? { path: pick.path, title: pick.title } : null;
+          },
           touch: () => this.policy.touch,
           tensions: this.tensions,
           lineBias: () => biasOf(this.settings.lineSerendipity),

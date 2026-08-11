@@ -362,3 +362,46 @@ export function parseTheme(text: string): { title: string; gist?: string } | nul
   }
   return null;
 }
+
+/* ── Weekly synthesis: questions, never prose ─────────────────────────── */
+
+export const SYNTHESIS_SCHEMA = {
+  type: "object",
+  properties: {
+    questions: {
+      type: "array",
+      minItems: 3,
+      maxItems: 5,
+      items: {
+        type: "string",
+        description:
+          "One elaboration question (≤20 words) naming a SPECIFIC claim or tension from the week's entries — the kind that starts a permanent note",
+      },
+    },
+  },
+  required: ["questions"],
+  additionalProperties: false,
+} as const;
+
+export function synthesisPrompt(entries: Array<{ date: string; excerpt: string }>): string {
+  return [
+    `A writer reviews their week of journal entries. Produce elaboration questions — the questions a good thinking partner asks to turn circling thoughts into permanent notes. Name the specific claims and tensions in THEIR words; never summarize, never answer, never write prose for them. "You kept returning to X — what's the actual claim?" is the register.`,
+    ``,
+    ...entries.map((e) => `${e.date}:\n${e.excerpt}`),
+  ].join("\n\n");
+}
+
+export function parseSynthesis(text: string): string[] {
+  try {
+    const parsed = JSON.parse(text) as { questions?: unknown };
+    if (Array.isArray(parsed.questions)) {
+      return parsed.questions
+        .filter((q): q is string => typeof q === "string" && q.trim().length > 0)
+        .map((q) => q.trim())
+        .slice(0, 5);
+    }
+  } catch {
+    /* fall through */
+  }
+  return [];
+}

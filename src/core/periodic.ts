@@ -40,3 +40,47 @@ export function looksPeriodic(path: string): boolean {
   const base = (path.split("/").pop() ?? path).replace(/\.md$/i, "").trim();
   return PERIODIC_PATTERNS.some((p) => p.test(base));
 }
+
+const MONTH_INDEX: Record<string, string> = {
+  january: "01", february: "02", march: "03", april: "04", may: "05", june: "06",
+  july: "07", august: "08", september: "09", october: "10", november: "11", december: "12",
+};
+
+/**
+ * The month-day of a dated note ("07-25"), or null for non-daily periodic
+ * notes (weeklies, monthlies) and ordinary notes. This is the key for
+ * "on this day" — the classic journaling loop-closer: what was I thinking on
+ * this date, a month or a year ago?
+ */
+export function dayKeyOf(path: string): string | null {
+  const base = (path.split("/").pop() ?? path).replace(/\.md$/i, "").trim();
+  const iso = /^\d{4}-(\d{2})-(\d{2})(\b|_|$)/.exec(base);
+  if (iso) return `${iso[1]}-${iso[2]}`;
+  const written = new RegExp(`^(${MONTHS}) (\\d{1,2}), \\d{4}$`, "i").exec(base);
+  if (written) {
+    const month = MONTH_INDEX[written[1].toLowerCase()];
+    return `${month}-${written[2].padStart(2, "0")}`;
+  }
+  const dayFirst = new RegExp(`^(\\d{1,2}) (${MONTHS}) \\d{4}$`, "i").exec(base);
+  if (dayFirst) {
+    const month = MONTH_INDEX[dayFirst[2].toLowerCase()];
+    return `${month}-${dayFirst[1].padStart(2, "0")}`;
+  }
+  return null;
+}
+
+/** Full ISO date ("2026-07-25") of a daily note, from either name format. */
+export function dateOf(path: string): string | null {
+  const base = (path.split("/").pop() ?? path).replace(/\.md$/i, "").trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(\b|_|$)/.exec(base);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const written = new RegExp(`^(${MONTHS}) (\\d{1,2}), (\\d{4})$`, "i").exec(base);
+  if (written) {
+    return `${written[3]}-${MONTH_INDEX[written[1].toLowerCase()]}-${written[2].padStart(2, "0")}`;
+  }
+  const dayFirst = new RegExp(`^(\\d{1,2}) (${MONTHS}) (\\d{4})$`, "i").exec(base);
+  if (dayFirst) {
+    return `${dayFirst[3]}-${MONTH_INDEX[dayFirst[2].toLowerCase()]}-${dayFirst[1].padStart(2, "0")}`;
+  }
+  return null;
+}

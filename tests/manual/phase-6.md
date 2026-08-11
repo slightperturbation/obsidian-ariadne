@@ -159,3 +159,20 @@ classification needs it; echoes don't).
 - [ ] Once a permanent note for the theme exists (or one already did),
       the theme stops appearing — covered themes are for linking, not
       re-creating.
+
+## 11. Resurfacing + rituals
+
+- [ ] **On this day.** With dated entries from a past year sharing today's
+      month-day, open today's daily note → an *On this day* section at the
+      panel foot lists them; click opens.
+- [ ] **Still true?** One old (30+ days), barely-linked, non-dated note is
+      offered at the panel foot. It's the SAME note all day (reload and
+      check), a different one tomorrow. × dismisses for the session.
+- [ ] **Close the day** (command) → one modal: today's entry, this date in
+      past years, Inbox count → Triage, the most-wanted topic → Create,
+      the still-true note → Revisit. Empty day → "Nothing open".
+- [ ] **Weekly synthesis questions** (command, needs a model) → with 2+
+      dated entries in the last 7 days, a note `Weekly synthesis YYYY-Wnn`
+      is created in the Inbox: links to the entries + 3–5 QUESTIONS in your
+      vocabulary naming specific claims — no summaries, no prose in your
+      voice. Undo removes it.
