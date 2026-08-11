@@ -68,3 +68,26 @@ classification needs it; echoes don't).
 - A tension card reflects the model's judgment of two excerpts; it can be
   wrong. That's why it links the note — the card is an invitation to look,
   not a verdict.
+
+## 5. Panel persistence
+
+- [ ] Close and reopen Obsidian (or hot-reload the plugin) → the Ariadne
+      panel re-appears in the right sidebar on its own, without stealing
+      focus from the editor.
+
+## 6. Local Gemma route (requires the home box awake)
+
+- [ ] Start an OpenAI-compatible server (Ollama: `ollama serve` with
+      gemma3:27b pulled; or LM Studio). Set **Settings → Models → Local model
+      URL** (e.g. `http://localhost:11434/v1`) and the model name.
+- [ ] Weave a link (⇧↵) → glyph shows `brain local`; session cost does
+      **not** increase (the fragment came from the box, free).
+- [ ] Run *Split this note* → glyph shows `brain $…` — quality-sensitive
+      tasks stay on Claude under Automatic.
+- [ ] Stop the local server, weave again → works seamlessly via Claude
+      (console notes the local failure + retry; no visible error).
+- [ ] **Routing → Cloud only** → everything on Claude regardless.
+      **Local when reachable** → even Split uses the box (quality caveat is
+      yours to judge).
+- [ ] With NO Claude API key but the box awake → weaving and tension checks
+      still work, `brain local`.

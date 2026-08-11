@@ -516,10 +516,14 @@ export class AriadneView extends ItemView {
             : s.semantic === "synced"
               ? " · semantic synced"
               : " · semantic on";
+    // Honesty as UI (PRD §4.6): say which brain answered last, and the real
+    // number for cloud spend. "local" is the home box — free, so no figure.
     const brain =
       s.brain === "cloud"
         ? ` · brain ${s.sessionCostUsd >= 0.005 ? `$${s.sessionCostUsd.toFixed(2)}` : "ready"}`
-        : "";
+        : s.brain === "local"
+          ? ` · brain local${s.sessionCostUsd >= 0.005 ? ` ($${s.sessionCostUsd.toFixed(2)} cloud)` : ""}`
+          : "";
     // A reader device can't embed notes edited since the owner last indexed,
     // so say how many are in that state rather than quietly ranking them worse.
     const stale =

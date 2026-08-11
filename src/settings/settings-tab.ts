@@ -185,6 +185,52 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Local model URL")
+      .setDesc(
+        "OpenAI-compatible server on your home network (Ollama, LM Studio, llama.cpp) — e.g. http://gemma.local:11434/v1. " +
+          "Used opportunistically for cheap tasks when reachable; everything works without it. Leave blank to disable.",
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("http://…:11434/v1")
+          .setValue(this.plugin.settings.gemmaBaseUrl)
+          .onChange(async (v) => {
+            this.plugin.settings.gemmaBaseUrl = v.trim();
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Local model name")
+      .setDesc("As the local server knows it, e.g. gemma3:27b.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.gemmaModel).onChange(async (v) => {
+          this.plugin.settings.gemmaModel = v.trim() || "gemma3:27b";
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Routing")
+      .setDesc(
+        "Automatic sends quick tasks (link phrasing, tension checks) to the local box when it's awake and " +
+          "quality-sensitive work (scaffolds, splits, MoCs) to Claude. The glyph always says which brain answered.",
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            auto: "Automatic (recommended)",
+            cloud: "Cloud only",
+            local: "Local when reachable",
+          })
+          .setValue(this.plugin.settings.routingMode)
+          .onChange(async (v) => {
+            this.plugin.settings.routingMode = v as AriadneSettings["routingMode"];
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("Session cost limit")
       .setDesc("Reasoning calls stop once this much (USD) has been spent this session. 0 = no limit.")
       .addText((t) =>

@@ -1,5 +1,6 @@
 import type { DeviceRoleSetting } from "../core/device";
 import type { TensionMode } from "../margin/tension/detect";
+import type { RoutingMode } from "../model/router";
 
 export interface AriadneSettings {
   // Indexing
@@ -14,6 +15,15 @@ export interface AriadneSettings {
 
   // Models
   claudeApiKey: string;
+  /**
+   * OpenAI-compatible local server (Ollama/LM Studio/llama.cpp) on the home
+   * network, e.g. "http://gemma.local:11434/v1". Empty = no local route.
+   * Opportunistic: used when awake, never waited for, never required.
+   */
+  gemmaBaseUrl: string;
+  gemmaModel: string;
+  /** auto = cheap tasks local when reachable; cloud/local = user override. */
+  routingMode: RoutingMode;
   claudeModel: string;
   /** Hard per-session spend cap for reasoning calls (USD); 0 disables the cap. */
   costLimitUsd: number;
@@ -59,6 +69,9 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   // small structured tasks here (connective phrasing, note scaffolding).
   // Bump to a larger model in settings if scaffold quality warrants it.
   claudeModel: "claude-haiku-4-5",
+  gemmaBaseUrl: "",
+  gemmaModel: "gemma3:27b",
+  routingMode: "auto",
   costLimitUsd: 2,
 
   attachmentsFolder: "Supporting Files",

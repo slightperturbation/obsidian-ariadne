@@ -6,7 +6,19 @@ See the design docs in the vault: `Projects/Ariadne/` (PRD, landscape research, 
 
 ## Status
 
-**Phase 6a — tension, echo, serendipity.** The Margin now notices two things
+**Phase 6b — local Gemma + smart routing.** An OpenAI-compatible provider for
+a Gemma-class model on the home network (Ollama/LM Studio/llama.cpp), used
+**opportunistically and never depended on**: a cached reachability probe with a
+short timeout decides the route synchronously, quick tasks (connective
+phrasing, tension checks) go local when the box is awake, quality-sensitive
+work (scaffolds, splits, MoCs) stays on Claude, and a mid-call local failure
+falls back to the cloud transparently. Local calls are free and run even past
+the session cost cap — that's the point of having the box. The glyph says
+which brain answered (`brain local` / `brain $0.03`), per the PRD's
+honesty-as-UI rule. The panel also now restores itself after a plugin reload —
+the Line is an always-present surface and staying silently closed was a bug.
+
+Earlier: **Phase 6a — tension, echo, serendipity.** The Margin now notices two things
 beyond relatedness: **echo** — you're re-writing a note that already exists
 (near-verbatim cosine; free, instant, no API) — and **tension** — the
 paragraph you're drafting contradicts an existing note. Tension detection

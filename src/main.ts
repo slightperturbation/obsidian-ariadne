@@ -20,6 +20,7 @@ import { TensionEngine } from "./margin/tension/engine";
 import { ghostExtension } from "./margin/ghost/extension";
 import { MarkdownView } from "obsidian";
 import { ClaudeProvider } from "./model/providers/claude";
+import { GemmaProvider } from "./model/providers/gemma";
 import { ModelRouter } from "./model/router";
 import { ActionExecutor } from "./actions/framework";
 import { ObsidianVaultIO } from "./actions/vault-io";
@@ -106,8 +107,15 @@ export default class AriadnePlugin extends Plugin {
       model: () => this.settings.claudeModel,
       fetch: obsidianFetch,
     });
+    const gemma = new GemmaProvider({
+      baseUrl: () => this.settings.gemmaBaseUrl,
+      model: () => this.settings.gemmaModel,
+      fetch: obsidianFetch,
+    });
     this.router = new ModelRouter({
       provider,
+      local: gemma,
+      mode: () => this.settings.routingMode,
       status: this.status,
       costLimitUsd: () => this.settings.costLimitUsd,
       log: this.log,
@@ -264,7 +272,16 @@ export default class AriadnePlugin extends Plugin {
 
     // Indexing must wait for layout-ready: before that, the metadata cache is
     // still resolving and vault events replay the initial file scan.
-    this.app.workspace.onLayoutReady(() => void this.startIndexing());
+    this.app.workspace.onLayoutReady(() => {
+      void this.startIndexing();
+      // The Line is an always-present surface (PRD §3.1). A plugin reload
+      // detaches its leaves and Obsidian doesn't reliably restore them, so a
+      // hot-reload during development — or any update — silently removed the
+      // panel. Recreate it, without stealing focus from the editor.
+      if (this.app.workspace.getLeavesOfType(ARIADNE_VIEW_TYPE).length === 0) {
+        void this.activateLine(false);
+      }
+    });
 
     this.log.info(
       `loaded (v${this.manifest.version}) on ${Platform.isMobile ? "mobile" : "desktop"} ` +
@@ -622,15 +639,17 @@ export default class AriadnePlugin extends Plugin {
     return index;
   }
 
-  private async activateLine(): Promise<void> {
+  private async activateLine(focus = true): Promise<void> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(ARIADNE_VIEW_TYPE)[0];
     if (!leaf) {
       leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
-      await leaf.setViewState({ type: ARIADNE_VIEW_TYPE, active: true });
+      await leaf.setViewState({ type: ARIADNE_VIEW_TYPE, active: focus });
     }
-    await workspace.revealLeaf(leaf);
-    if (leaf.view instanceof AriadneView) leaf.view.focusInput();
+    if (focus) {
+      await workspace.revealLeaf(leaf);
+      if (leaf.view instanceof AriadneView) leaf.view.focusInput();
+    }
   }
 
   onunload(): void {
