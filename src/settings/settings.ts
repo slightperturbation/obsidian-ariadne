@@ -89,7 +89,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   // Bump to a larger model in settings if scaffold quality warrants it.
   claudeModel: "claude-haiku-4-5",
   gemmaBaseUrl: "",
-  gemmaModel: "gemma3:27b",
+  gemmaModel: "gemma4:26b",
   routingMode: "auto",
   costLimitUsd: 2,
 

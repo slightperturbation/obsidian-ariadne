@@ -262,10 +262,10 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Local model name")
-      .setDesc("As the local server knows it, e.g. gemma3:27b.")
+      .setDesc("As the local server knows it, e.g. gemma4:26b.")
       .addText((t) =>
         t.setValue(this.plugin.settings.gemmaModel).onChange(async (v) => {
-          this.plugin.settings.gemmaModel = v.trim() || "gemma3:27b";
+          this.plugin.settings.gemmaModel = v.trim() || "gemma4:26b";
           await this.plugin.saveSettings();
         }),
       );

@@ -78,7 +78,7 @@ classification needs it; echoes don't).
 ## 6. Local Gemma route (requires the home box awake)
 
 - [ ] Start an OpenAI-compatible server (Ollama: `ollama serve` with
-      gemma3:27b pulled; or LM Studio). Set **Settings → Models → Local model
+      gemma4:26b pulled; or LM Studio). Set **Settings → Models → Local model
       URL** (e.g. `http://localhost:11434/v1`) and the model name.
 - [ ] Weave a link (⇧↵) → glyph shows `brain local`; session cost does
       **not** increase (the fragment came from the box, free).

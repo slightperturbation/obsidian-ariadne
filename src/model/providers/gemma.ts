@@ -29,7 +29,7 @@ export class GemmaProvider {
     private deps: {
       /** e.g. "http://gemma.local:11434/v1" — empty disables the provider. */
       baseUrl: () => string;
-      /** Model name as the server knows it, e.g. "gemma3:27b". */
+      /** Model name as the server knows it, e.g. "gemma4:26b". */
       model: () => string;
       /** Injected (requestUrl-backed in the app) — never the renderer's fetch. */
       fetch: typeof fetch;
@@ -112,7 +112,7 @@ export class GemmaProvider {
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
-          model: this.deps.model().trim() || "gemma3:27b",
+          model: this.deps.model().trim() || "gemma4:26b",
           max_tokens: opts.maxTokens ?? 2048,
           ...(opts.schema ? { response_format: { type: "json_object" } } : {}),
           messages,
