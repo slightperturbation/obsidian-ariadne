@@ -3,6 +3,7 @@ import type { ModelRouter } from "../../model/router";
 import { BudgetExceededError } from "../../model/router";
 import { RELATION_SCHEMA, parseRelation, relationPrompt } from "../../model/tasks";
 import type { DraftContext } from "../draft-watcher";
+import { isReflectiveProse } from "../journal";
 import type { Logger } from "../../util/logger";
 import {
   TENSION_CONFIDENCE,
@@ -26,6 +27,8 @@ export interface TensionEngineDeps {
    * interrupts writing deserves to have read more than a teaser.
    */
   excerptOf?: (path: string) => Promise<string | null>;
+  /** Journal/dated-note detection — log content there has no stance to check. */
+  isJournal?: (path: string) => boolean;
   log: Logger;
 }
 
@@ -98,6 +101,11 @@ export class TensionEngine {
     if (!manager?.canEmbedText()) return [];
     const paragraph = ctx.text.trim();
     if (paragraph.length < MIN_PARAGRAPH_CHARS) return [];
+    // In a dated note, length alone isn't enough: a meeting-notes bullet
+    // block clears any character bar yet holds no stance to contradict or
+    // restate. Only reflective prose gets examined there; in permanent
+    // notes, structured writing IS the thinking and stays eligible.
+    if (this.deps.isJournal?.(ctx.path) && !isReflectiveProse(paragraph)) return [];
 
     const profile = TENSION_PROFILES[mode];
     const results = await manager.related(paragraph, {

@@ -58,6 +58,7 @@ import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
 import { clusterThemes, type EntryNeighbors } from "./themes";
 import { dateOf } from "../core/periodic";
+import { classifyEntry } from "../margin/tags";
 import { onThisDay, resurfacePick } from "../margin/resurface";
 import { wantedTopics } from "../margin/wanted";
 import {
@@ -824,10 +825,16 @@ export class ActionsController {
     for (const e of entries) {
       const file = app.vault.getAbstractFileByPath(e.path);
       if (!(file instanceof TFile)) continue;
-      const content = (await app.vault.cachedRead(file))
-        .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
-        .trim();
+      const raw = await app.vault.cachedRead(file);
+      // Task lists produce garbage elaboration questions; only entries where
+      // narrative dominates feed the synthesis.
+      if (classifyEntry(raw) !== "journal") continue;
+      const content = raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
       if (content) excerpts.push({ date: e.date, excerpt: content.slice(0, 500), path: e.path });
+    }
+    if (excerpts.length < 2) {
+      new Notice("This week's entries are all logs — nothing narrative to synthesize.");
+      return;
     }
 
     let questions: string[] = [];
@@ -888,13 +895,24 @@ export class ActionsController {
       new Notice("Themes need the semantic index — wait for it to finish, or check the glyph.");
       return;
     }
-    const dated = app.vault
+    // Only narrative entries seed themes. A log-shaped daily note recurs for
+    // operational reasons — the same project's meeting notes cluster tightly
+    // every week — and proposing that as a "recurring theme" would be a
+    // confident false positive. Themes live where thinking happens.
+    const candidates = app.vault
       .getMarkdownFiles()
       .filter((f) => this.deps.isJournal(f.path))
       .sort((a, b) => b.stat.mtime - a.stat.mtime)
       .slice(0, ActionsController.THEME_ENTRIES);
+    const dated: typeof candidates = [];
+    for (const f of candidates) {
+      if (classifyEntry(await app.vault.cachedRead(f)) === "journal") dated.push(f);
+    }
+    this.deps.log.debug(
+      `themes: ${dated.length} narrative entries of ${candidates.length} dated`,
+    );
     if (dated.length < 3) {
-      new Notice("Not enough dated entries to look for themes yet.");
+      new Notice("Not enough narrative journal entries to look for themes yet.");
       return;
     }
 

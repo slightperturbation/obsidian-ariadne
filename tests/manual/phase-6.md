@@ -227,3 +227,18 @@ classification needs it; echoes don't).
       Click a tag → it lands in frontmatter and leaves the row. × hides
       the row for this note this session. Suggestions only ever come from
       existing tags — never invented, never dated entry tags.
+
+## 15. Entry kind drives the suggestion machinery
+
+- [ ] **Themes ignore logs.** With several log-shaped dated entries about
+      the same project (meeting notes) and no narrative entries, *Find
+      recurring journal themes* reports not enough narrative entries —
+      recurring meetings are not a recurring theme.
+- [ ] **Synthesis ignores logs.** A week of task-list entries plus two
+      narrative ones → the weekly synthesis links and questions only the
+      narrative two. A week of only logs → "nothing narrative to
+      synthesize."
+- [ ] **Tension respects kind.** A long meeting-notes bullet block in a
+      dated note triggers no tension/echo analysis; the same block in a
+      permanent note stays eligible. A reflective paragraph in the dated
+      note gets the full apparatus.

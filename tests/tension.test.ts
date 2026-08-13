@@ -258,3 +258,43 @@ describe("TensionEngine", () => {
     expect(findings[1]).toMatchObject({ kind: "echo", path: "e1.md" });
   });
 });
+
+describe("entry-kind gating in dated notes", () => {
+  const LOG_BLOCK = [
+    "- 9:30 platform sync, migration timelines discussed at length again",
+    "- [ ] email Sam about the review process for the quarterly report",
+    "- [ ] book flights for the offsite before prices go up next week",
+  ].join("\n");
+
+  it("a long log block in a dated note is never examined — no stance to check", async () => {
+    const { engine, run } = makeEngine({ results: [result("dup.md", 0.95)] });
+    const fakeManager = { canEmbedText: () => true, related: vi.fn() } as unknown as IndexManager;
+    const withJournal = new TensionEngine({
+      manager: () => fakeManager,
+      router: { available: () => true, run: vi.fn() } as unknown as ModelRouter,
+      mode: () => "quiet",
+      isJournal: () => true,
+      log: new Logger("test", false),
+    });
+    expect(await withJournal.analyze(ctx({ path: "2026-08-12.md", text: LOG_BLOCK }))).toEqual([]);
+    // The same block in a permanent note stays eligible (length is enough there).
+    expect((await engine.analyze(ctx({ text: LOG_BLOCK }))).length).toBeGreaterThan(0);
+    expect(run).not.toHaveBeenCalled(); // 0.95 is a free echo, no model call
+  });
+
+  it("reflective prose in a dated note keeps the full apparatus", async () => {
+    const reflectiveCtx = ctx({ path: "2026-08-12.md" }); // PARAGRAPH is prose
+    const manager = {
+      canEmbedText: () => true,
+      related: vi.fn(() => Promise.resolve([result("dup.md", 0.95)])),
+    } as unknown as IndexManager;
+    const engine = new TensionEngine({
+      manager: () => manager,
+      router: { available: () => true, run: vi.fn() } as unknown as ModelRouter,
+      mode: () => "quiet",
+      isJournal: () => true,
+      log: new Logger("test", false),
+    });
+    expect(await engine.analyze(reflectiveCtx)).toHaveLength(1);
+  });
+});

@@ -300,6 +300,7 @@ export default class AriadnePlugin extends Plugin {
       manager: () => this.manager,
       router: this.router,
       mode: () => this.settings.tensionMode,
+      isJournal: (path) => this.isJournalPath(path),
       excerptOf: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) return null;
