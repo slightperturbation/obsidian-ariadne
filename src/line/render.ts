@@ -62,9 +62,13 @@ export function rowEl(
   if (selected) row.classList.add("is-selected");
   row.dataset.index = String(index);
   row.dataset.path = result.path;
-  row.setAttribute("role", "option");
-  row.setAttribute("aria-selected", String(selected));
-  row.id = `ariadne-opt-${variant}-${index}`;
+  if (variant === "row") {
+    // Only search rows live in the listbox; a Margin card is not selectable
+    // and an option outside a listbox is ARIA noise.
+    row.setAttribute("role", "option");
+    row.setAttribute("aria-selected", String(selected));
+    row.id = `ariadne-opt-${variant}-${index}`;
+  }
 
   const head = doc.createElement("div");
   head.classList.add("ariadne-row-head");
@@ -90,8 +94,16 @@ export function rowEl(
   // pen. preventDefault is applied only for a mouse, where it stops the editor
   // losing its selection before the handler runs; doing it for touch would
   // interfere with scrolling the list.
+  //
+  // Events that begin on a button INSIDE the row (dismiss ×, Link/Weave, tag
+  // chips) must not activate the row: those buttons act on `click`, which
+  // fires after pointerdown — stopping propagation there is too late. So the
+  // row checks where the event was born. Without this, dismissing a tension
+  // card first NAVIGATED to the very note the user was waving away.
+  const onOwnRow = (ev: Event) =>
+    !(ev.target instanceof Element) || !ev.target.closest("button");
   row.addEventListener("pointerdown", (ev) => {
-    if (ev.pointerType === "mouse") {
+    if (ev.pointerType === "mouse" && onOwnRow(ev)) {
       ev.preventDefault();
       handlers.onActivate(result, modifiersOf(ev));
     }
@@ -99,6 +111,7 @@ export function rowEl(
   row.addEventListener("click", (ev) => {
     // Touch and keyboard-activated clicks land here; a mouse already fired.
     if ((ev as PointerEvent).pointerType === "mouse") return;
+    if (!onOwnRow(ev)) return;
     handlers.onActivate(result, modifiersOf(ev));
   });
   row.addEventListener("mousemove", () => handlers.onHoverSelect(index));

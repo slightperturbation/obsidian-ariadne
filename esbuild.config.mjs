@@ -11,6 +11,12 @@ for (const f of ["ort-wasm-simd-threaded.asyncify.mjs", "ort-wasm-simd-threaded.
   fs.copyFileSync(`${ORT_DIST}/${f}`, f);
 }
 
+// Stamp the assets as belonging to this build's version, so the runtime
+// self-heal (src/assets.ts) never mistakes a fresh dev build for a stale
+// install and downloads release files over it.
+const manifestVersion = JSON.parse(fs.readFileSync("manifest.json", "utf8")).version;
+fs.writeFileSync("ariadne-assets.json", JSON.stringify({ version: manifestVersion }));
+
 const banner = `/*
 Ariadne — generated bundle; do not edit directly.
 Source and license: https://github.com/  (set on publish)

@@ -84,3 +84,31 @@ export function dateOf(path: string): string | null {
   }
   return null;
 }
+
+/**
+ * The LOCAL calendar date as YYYY-MM-DD. Daily notes are named in local
+ * time; `toISOString()` is UTC and put every evening (west of UTC) or early
+ * morning (east) on the wrong day — "begin today's entry" offered tomorrow.
+ */
+export function localISODate(at: Date = new Date()): string {
+  const y = at.getFullYear();
+  const m = String(at.getMonth() + 1).padStart(2, "0");
+  const d = String(at.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * ISO-8601 week label ("2026-W33") for a local date — including the ISO
+ * week-year, which differs from the calendar year around New Year (2027-01-01
+ * is 2026-W53). The previous ad-hoc formula was off by one for every date in
+ * a year whose Jan 4 falls on Sunday, and produced W00 in early January.
+ */
+export function isoWeekLabel(at: Date = new Date()): string {
+  const date = new Date(Date.UTC(at.getFullYear(), at.getMonth(), at.getDate()));
+  const day = date.getUTCDay() || 7; // ISO: Monday=1 … Sunday=7
+  date.setUTCDate(date.getUTCDate() + 4 - day); // the week's Thursday fixes the week-year
+  const year = date.getUTCFullYear();
+  const jan1 = Date.UTC(year, 0, 1);
+  const week = Math.ceil(((date.getTime() - jan1) / 86_400_000 + 1) / 7);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}

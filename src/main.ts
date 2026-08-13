@@ -28,7 +28,7 @@ import { ActionsController } from "./actions/controller";
 import { PromptModal } from "./ui/prompt-modal";
 import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
-import { dateOf, looksPeriodic } from "./core/periodic";
+import { dateOf, localISODate, looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
@@ -98,6 +98,16 @@ export default class AriadnePlugin extends Plugin {
   private wantedCache?: WantedTopic[];
   /** Per-path debounce for entry auto-tagging. */
   private tagTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** "Begin today's entry" was actioned; heals a format-blind detection. */
+  private todayHandled?: string;
+  private beginningToday = false;
+  private resurfacedCache?: { date: string; pick: { path: string; title: string } | null };
+  /** Panel dismissals ("for this session") — survive view rebuilds. */
+  private panelSession = {
+    wanted: new Set<string>(),
+    tagRows: new Set<string>(),
+    resurfaced: { dismissed: false },
+  };
 
   /**
    * Is this note a journal/dated entry? Three signals, most specific first:
@@ -188,7 +198,9 @@ export default class AriadnePlugin extends Plugin {
       isJournal: (path) => this.isJournalPath(path),
       log: this.log,
     });
-    this.status.set({ brain: provider.available() ? "cloud" : "none" });
+    this.status.set({
+      brain: provider.available() ? "cloud" : this.settings.gemmaBaseUrl.trim() ? "local" : "none",
+    });
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
         const mv = this.app.workspace.getActiveViewOfType(MarkdownView);
@@ -344,12 +356,17 @@ export default class AriadnePlugin extends Plugin {
               : [],
           resurfaced: () => {
             if (!this.manager || !this.settings.enableResurfacing) return null;
-            const pick = resurfacePick(
-              this.manager.noteMetas(),
-              new Date().toISOString().slice(0, 10),
-              Date.now(),
-              this.isJournalPath,
-            );
+            // Cached per day: the pick is deterministic all day, and the foot
+            // re-renders on every margin refresh — copying all note metadata
+            // each pause bought nothing.
+            const today = localISODate();
+            if (this.resurfacedCache?.date !== today) {
+              this.resurfacedCache = {
+                date: today,
+                pick: resurfacePick(this.manager.noteMetas(), today, Date.now(), this.isJournalPath),
+              };
+            }
+            const pick = this.resurfacedCache.pick;
             return pick ? { path: pick.path, title: pick.title } : null;
           },
           promoteHint: () => this.settings.enablePromoteHint,
@@ -358,9 +375,11 @@ export default class AriadnePlugin extends Plugin {
           tagsOf: (path) => this.tagsOf(path),
           onAddTag: (path, tag) => void this.addTag(path, tag),
           reservedTags: () => this.managedKinds(),
+          session: this.panelSession,
           todayMissing: () => {
             if (!this.settings.enableTodayHint) return false;
-            const today = new Date().toISOString().slice(0, 10);
+            const today = localISODate();
+            if (this.todayHandled === today) return false;
             return !this.app.vault.getMarkdownFiles().some((f) => dateOf(f.path) === today);
           },
           onBeginToday: () => void this.beginTodaysEntry(),
@@ -467,12 +486,27 @@ export default class AriadnePlugin extends Plugin {
       this.manager,
       (path) => this.source!.loadPath(path),
       this.status,
-      { onIdle: () => this.scheduleSave() },
+      {
+        onIdle: () => {
+          this.scheduleSave();
+          // Live, not boot-time: a reader edits notes all session, and the
+          // owner's fresh shards arrive over Sync mid-session.
+          if (!this.policy.loadsModel && this.manager) {
+            this.status.set({ staleNotes: this.manager.unembeddedCount });
+          }
+        },
+      },
     );
 
     // Warm start: restore the last session's snapshot, then diff mtimes so
     // only changed/new/deleted notes re-index.
     let snapshot = await loadIndex(this.io, this.indexDir);
+    // Semantic off must mean OFF: restore() would rebuild the vector store
+    // from the snapshot and the Margin would quietly keep semantic ranking
+    // (via stored vectors) while the glyph claimed otherwise.
+    if (snapshot && !this.settings.enableSemantic) {
+      snapshot = { ...snapshot, vectors: [], dim: undefined, embedderId: undefined };
+    }
     if (snapshot) {
       try {
         this.manager.restore(snapshot);
@@ -695,7 +729,7 @@ export default class AriadnePlugin extends Plugin {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.saveIndexNow();
+      if (this.policy.writesIndex) void this.saveIndexNow();
     }, SAVE_DELAY_MS);
   }
 
@@ -755,23 +789,36 @@ export default class AriadnePlugin extends Plugin {
    * in the first journal folder.
    */
   private async beginTodaysEntry(): Promise<void> {
-    const commands = (
-      this.app as unknown as {
-        commands?: { executeCommandById?: (id: string) => boolean };
-      }
-    ).commands;
-    if (commands?.executeCommandById?.("daily-notes")) return;
+    if (this.beginningToday) return;
+    this.beginningToday = true;
+    try {
+      const today = localISODate();
+      // The row can't always see success (an exotic daily-note format is
+      // invisible to dateOf) — remember the action so it stops re-offering.
+      this.todayHandled = today;
+      const commands = (
+        this.app as unknown as {
+          commands?: { executeCommandById?: (id: string) => boolean };
+        }
+      ).commands;
+      if (commands?.executeCommandById?.("daily-notes")) return;
 
-    const today = new Date().toISOString().slice(0, 10);
-    const folder = this.journalFolders()[0] ?? "";
-    const path = normalizePath(folder ? `${folder}/${today}.md` : `${today}.md`);
-    if (!this.app.vault.getAbstractFileByPath(path)) {
-      if (folder && !this.app.vault.getAbstractFileByPath(folder)) {
-        await this.app.vault.createFolder(folder).catch(() => {});
+      const folder = this.journalFolders()[0] ?? "";
+      const path = normalizePath(folder ? `${folder}/${today}.md` : `${today}.md`);
+      if (!this.app.vault.getAbstractFileByPath(path)) {
+        if (folder && !this.app.vault.getAbstractFileByPath(folder)) {
+          await this.app.vault.createFolder(folder).catch(() => {});
+        }
+        try {
+          await this.app.vault.create(path, "");
+        } catch (err) {
+          this.log.warn(`could not create ${path}: ${String(err)}`);
+        }
       }
-      await this.app.vault.create(path, "").catch(() => {});
+      await this.app.workspace.openLinkText(path, "", false);
+    } finally {
+      this.beginningToday = false;
     }
-    await this.app.workspace.openLinkText(path, "", false);
   }
 
   /**
@@ -788,7 +835,16 @@ export default class AriadnePlugin extends Plugin {
    * daily/ tag replaced by journal/.
    */
   private maybeAutoTag(path: string): void {
-    if (!this.settings.autoTagEntries || !this.isJournalPath(path)) return;
+    if (!this.settings.autoTagEntries) return;
+    // Owner-only: two devices auto-tagging race Sync on the same frontmatter,
+    // and a ctime-derived date DIVERGES across devices (the phone's ctime is
+    // the day Sync delivered the file). One writer, convergent marks.
+    if (!this.policy.writesIndex) return;
+    // Eligibility by name/folder only — deliberately NOT the type-property
+    // signal. Marks must not self-justify: a note moved out of the journal
+    // folder stops being re-marked (its type remains until hand-cleared, and
+    // still counts for detection elsewhere, which is the opt-in use).
+    if (!looksPeriodic(path) && !inFolders(path, this.journalFolders())) return;
     const prior = this.tagTimers.get(path);
     if (prior) clearTimeout(prior);
     this.tagTimers.set(
@@ -801,9 +857,13 @@ export default class AriadnePlugin extends Plugin {
   }
 
   private managedKinds(): string[] {
+    // normalizeTag: a user pasting "#daily" into the setting must not make
+    // the idempotence check permanently unsatisfiable (tags are compared
+    // post-normalization; a "#"-prefixed kind never matches and every
+    // metadata change becomes a frontmatter write, forever).
     return [
-      this.settings.dailyTag.trim() || "daily",
-      this.settings.journalTag.trim() || "journal",
+      normalizeTag(this.settings.dailyTag) || "daily",
+      normalizeTag(this.settings.journalTag) || "journal",
       // Always recognized, so renaming the setting doesn't strand old marks.
       "daily",
       "journal",
@@ -843,6 +903,13 @@ export default class AriadnePlugin extends Plugin {
     // `date` is written only when absent: a hand-set date always wins.
     const dateOk = fm?.date !== undefined && fm?.date !== null && fm?.date !== "";
     if (tagsOk && typeOk && dateOk) return;
+
+    // The writer may still be typing: flush open editors for this file so
+    // the frontmatter rewrite merges with their buffer instead of racing it.
+    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
+      const view = leaf.view;
+      if (view instanceof MarkdownView && view.file?.path === path) await view.save();
+    }
 
     await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
       const rawTags = front.tags;
@@ -901,7 +968,10 @@ export default class AriadnePlugin extends Plugin {
   private resolveMarkdown(): MarkdownView | null {
     const active = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (active?.file) return active;
-    if (this.lastMarkdown?.file) return this.lastMarkdown;
+    // The remembered view may have been closed since; writing through a
+    // detached editor is a silent no-op at best. leaf.parent is null once
+    // the leaf leaves the workspace tree.
+    if (this.lastMarkdown?.file && this.lastMarkdown.leaf.parent) return this.lastMarkdown;
     for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
       if (leaf.view instanceof MarkdownView && leaf.view.file) return leaf.view;
     }
@@ -968,6 +1038,7 @@ export default class AriadnePlugin extends Plugin {
   onunload(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     for (const timer of this.tagTimers.values()) clearTimeout(timer);
+    this.tensions?.dispose();
     this.workerClient?.dispose();
     if (this.workerBlobUrl) URL.revokeObjectURL(this.workerBlobUrl);
     if (this.ortBlobUrls) {
@@ -977,7 +1048,7 @@ export default class AriadnePlugin extends Plugin {
     this.watcher?.dispose();
     this.scheduler?.dispose();
     // Best-effort: onunload can't await, but the write usually completes.
-    void this.saveIndexNow();
+    if (this.policy.writesIndex) void this.saveIndexNow();
     this.log?.info("unloaded");
   }
 

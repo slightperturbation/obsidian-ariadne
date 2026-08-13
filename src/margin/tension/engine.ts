@@ -78,6 +78,7 @@ export class TensionEngine {
   private failures = 0;
   private budgetExhausted = false;
   private listeners = new Set<() => void>();
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private deps: TensionEngineDeps) {}
 
@@ -85,6 +86,21 @@ export class TensionEngine {
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Coalesced listener notification — many verdicts, one repaint. */
+  private notifySoon(): void {
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      for (const l of this.listeners) l();
+    }, 150);
+  }
+
+  dispose(): void {
+    if (this.notifyTimer) clearTimeout(this.notifyTimer);
+    this.notifyTimer = null;
+    this.listeners.clear();
   }
 
   /** The writer said no to this pair; honor it for the whole session. */
@@ -113,7 +129,9 @@ export class TensionEngine {
       limit: 12,
     });
     const linkedTitles = new Set(
-      [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) => m[1].trim()),
+      [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) =>
+        m[1].trim().split("/").pop()!.trim(),
+      ),
     );
     const { echoes, candidates } = selectCandidates({ results, linkedTitles, profile });
     // Visible with the Debug logging setting: the raw numbers behind why a
@@ -169,7 +187,7 @@ export class TensionEngine {
         continue; // "neither" stays silent — the Margin already shows it as related
       }
 
-      this.scheduleClassify(pairKey, ctx, candidate.title, candidate.snippet);
+      this.scheduleClassify(pairKey, candidate.path, ctx, candidate.title, candidate.snippet);
     }
 
     // Tensions before echoes — a contradiction is the rarer, sharper signal —
@@ -183,6 +201,7 @@ export class TensionEngine {
   /** Fire-and-forget classification; the result lands in the cache. */
   private scheduleClassify(
     pairKey: string,
+    targetPath: string,
     ctx: DraftContext,
     noteTitle: string,
     noteExcerpt: string,
@@ -194,20 +213,32 @@ export class TensionEngine {
 
     this.inFlight.add(pairKey);
     this.classifyCount++;
+    if (this.classifyCount === SESSION_CLASSIFY_MAX) {
+      // Going quiet must be diagnosable — indistinguishable from "no
+      // candidates" is how a cap becomes a ghost bug report.
+      this.deps.log.info(`tension checks paused: session cap of ${SESSION_CLASSIFY_MAX} reached`);
+    }
     const paragraphKey = ctx.key;
-    const targetPath = pairKey.slice(pairKey.indexOf("::") + 2);
     void (async () => {
       const excerpt = (await this.deps.excerptOf?.(targetPath)) ?? noteExcerpt;
+      // The paragraph is bounded like the excerpt is: paragraphAround() walks
+      // to the next blank line, and a note written as one unbroken block
+      // would otherwise ship its whole text per candidate.
+      const paragraph = ctx.text.trim().slice(0, 1200);
       return this.deps.router.run(
         "relation",
-        relationPrompt({ paragraph: ctx.text.trim(), noteTitle, noteExcerpt: excerpt }),
+        relationPrompt({ paragraph, noteTitle, noteExcerpt: excerpt }),
         { schema: RELATION_SCHEMA as unknown as Record<string, unknown>, maxTokens: 200 },
       );
     })()
       .then((text) => {
         this.failures = 0;
-        this.setCache(pairKey, { paragraphKey, verdict: parseRelation(text) });
-        for (const l of this.listeners) l();
+        const verdict = parseRelation(text);
+        this.setCache(pairKey, { paragraphKey, verdict });
+        // "Neither" changes nothing visible — re-rendering (and re-running
+        // retrieval) for it is pure waste; and multiple verdicts landing
+        // together should repaint once, not once each.
+        if (verdict.relation !== "neither") this.notifySoon();
       })
       .catch((err: unknown) => {
         if (err instanceof BudgetExceededError) {

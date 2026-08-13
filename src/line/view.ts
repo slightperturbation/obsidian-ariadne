@@ -47,6 +47,11 @@ export interface AriadneViewDeps {
   onAddTag?: (path: string, tag: string) => void;
   /** Kind tags (daily/journal): lifecycle marks, never topical suggestions. */
   reservedTags?: () => string[];
+  /**
+   * Session-scoped dismissals, owned by the plugin: "for this session" must
+   * survive the sidebar being closed and reopened (which rebuilds the view).
+   */
+  session?: { wanted: Set<string>; tagRows: Set<string>; resurfaced: { dismissed: boolean } };
   /** True when no note dated today exists yet — the day hasn't been opened. */
   todayMissing?: () => boolean;
   /** Create (or open) today's entry, honoring the Daily Notes plugin. */
@@ -90,11 +95,15 @@ export class AriadneView extends ItemView {
   private marginHintEl!: HTMLElement;
   private glyphEl!: HTMLElement;
   private wantedEl!: HTMLElement;
-  /** Wanted topics the user waved off — for this session. */
-  private dismissedWanted = new Set<string>();
-  private dismissedResurfaced = false;
-  /** Notes whose tag-suggestion row was waved off this session. */
-  private dismissedTagRows = new Set<string>();
+  /** Fallback when the plugin doesn't supply shared session state (tests). */
+  private localSession = {
+    wanted: new Set<string>(),
+    tagRows: new Set<string>(),
+    resurfaced: { dismissed: false },
+  };
+  private get session(): NonNullable<AriadneViewDeps["session"]> {
+    return this.deps.session ?? this.localSession;
+  }
 
   private results: ScoredResult[] = [];
   private selected = 0;
@@ -153,6 +162,7 @@ export class AriadneView extends ItemView {
     this.inputEl.setAttribute("aria-label", "Search notes");
     this.inputEl.setAttribute("role", "combobox");
     this.inputEl.setAttribute("aria-expanded", "false");
+    this.inputEl.setAttribute("aria-controls", "ariadne-results-listbox");
     root.appendChild(this.inputEl);
 
     // The keyboard model is otherwise undiscoverable — ⇧↵ especially. On a
@@ -168,6 +178,9 @@ export class AriadneView extends ItemView {
     // Search results — shown only while a query is active, capped at 2/3 height.
     this.resultsEl = doc.createElement("div");
     this.resultsEl.classList.add("ariadne-results");
+    // The options the combobox's aria-activedescendant points into.
+    this.resultsEl.setAttribute("role", "listbox");
+    this.resultsEl.id = "ariadne-results-listbox";
     root.appendChild(this.resultsEl);
 
     // The Margin fills the remaining space below.
@@ -211,6 +224,10 @@ export class AriadneView extends ItemView {
       }) ?? null;
 
     this.renderResults();
+    // The foot's invitations (Today, Still true?, Wanted) don't need a draft
+    // context — a fresh vault with no note open is exactly when "begin
+    // today's entry" matters most.
+    this.renderWanted();
   }
 
   async onClose(): Promise<void> {
@@ -242,6 +259,15 @@ export class AriadneView extends ItemView {
   private onInput(value: string): void {
     this.selected = 0;
     if (this.debounce) clearTimeout(this.debounce);
+    if (!value.trim()) {
+      // Immediately, not after the debounce: Enter inside the 120 ms window
+      // must not open a result from the abandoned query.
+      this.results = [];
+      this.lastStatusHint = undefined;
+      this.queryToken++;
+      this.renderResults();
+      return;
+    }
     this.debounce = setTimeout(() => void this.runQuery(value), DEBOUNCE_MS);
   }
 
@@ -298,6 +324,12 @@ export class AriadneView extends ItemView {
       return;
     }
 
+    this.inputEl.setAttribute("aria-expanded", String(active && this.rowCount > 0));
+    if (active && this.selected < this.results.length) {
+      this.inputEl.setAttribute("aria-activedescendant", `ariadne-opt-row-${this.selected}`);
+    } else {
+      this.inputEl.removeAttribute("aria-activedescendant");
+    }
     renderResults(
       this.resultsEl,
       this.results,
@@ -411,18 +443,30 @@ export class AriadneView extends ItemView {
   /* ── Margin half ────────────────────────────────────────────────────── */
 
   private async refreshMargin(ctx: DraftContext): Promise<void> {
-    if (!this.deps.marginEnabled()) return;
-    const manager = this.deps.manager();
-    if (!manager) return;
     this.lastCtx = ctx;
+    // Margin off is not "panel off": the foot sections (Wanted, Today,
+    // Still true?) have their own toggles and no dependency on retrieval —
+    // render them, show the honest off-state, and skip only the retrieval.
+    if (!this.deps.marginEnabled()) {
+      this.renderMargin([], [], ctx);
+      return;
+    }
+    const manager = this.deps.manager();
+    if (!manager) {
+      this.renderMargin([], [], ctx);
+      return;
+    }
     const token = ++this.marginToken;
     // On a blank line, fall back to whole-note context (title + opening).
     const contextText = ctx.text.trim() || `${ctx.title}\n${ctx.noteText.slice(0, 600)}`;
     // Already-linked notes are not news; and the Margin holds itself to a
     // (looser than ghost text) semantic bar, so an empty section is a valid,
     // honest outcome rather than five cards of noise.
+    // [[folder/Note]] must exclude "Note": link text can be a path.
     const linked = new Set(
-      [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) => m[1].trim()),
+      [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) =>
+        m[1].trim().split("/").pop()!.trim(),
+      ),
     );
     const opts = {
       excludePath: ctx.path,
@@ -437,23 +481,46 @@ export class AriadneView extends ItemView {
     // Without a local model, free text can't be embedded — but the note being
     // written was embedded by whichever device owns the index, so asking in
     // terms of the note keeps the Margin semantic instead of lexical-only.
-    const [results, findings] = await Promise.all([
+    let results: ScoredResult[];
+    let findings: TensionFinding[];
+    try {
+      [results, findings] = await Promise.all([
       manager.canEmbedText() || !manager.hasStoredVectors()
         ? manager.related(contextText, opts)
         : manager.relatedToPath(ctx.path, opts),
-      this.deps.tensions?.analyze(ctx) ?? Promise.resolve([]),
-    ]);
+        this.deps.tensions?.analyze(ctx) ?? Promise.resolve([]),
+      ]);
+    } catch (err) {
+      // A worker hiccup mid-retrieval leaves the previous render standing;
+      // an unhandled rejection would leave it standing AND spam the console.
+      console.warn("[Ariadne] margin refresh failed", err);
+      return;
+    }
     if (token !== this.marginToken) return;
+    // The awaits above take real time (a tension verdict can trigger this
+    // seconds later). If the user has moved to a PDF/canvas/other note, do
+    // not repaint a stale note's cards — their click handlers would act on a
+    // note that is no longer open (a tag click would write ITS frontmatter).
+    const activePath = this.app.workspace.getActiveFile()?.path;
+    if (activePath !== undefined && activePath !== ctx.path) return;
     // A note flagged as tension/echo shouldn't ALSO appear as a plain related
     // card below — one note, one card, the sharper reading wins.
     const flagged = new Set(findings.map((f) => f.path));
-    this.renderMargin(results.filter((r) => !flagged.has(r.path)), findings, ctx);
+    this.renderMargin(
+      results.filter((r) => !flagged.has(r.path)),
+      findings,
+      ctx,
+      results,
+    );
   }
 
   private renderMargin(
     results: ScoredResult[],
     findings: TensionFinding[] = [],
     ctx?: DraftContext,
+    /** Pre-filter results: the taxonomy vote must see the CLOSEST neighbors,
+     * which are exactly the ones the card list filters out (flagged, linked). */
+    tagEvidence: ScoredResult[] = results,
   ): void {
     const doc = this.marginEl.ownerDocument;
     this.marginEl.replaceChildren();
@@ -461,13 +528,9 @@ export class AriadneView extends ItemView {
     if (!this.deps.marginEnabled()) {
       this.marginHintEl.classList.remove("is-hidden");
       this.marginHintEl.textContent = "Margin is off — enable it in Ariadne settings.";
+      this.renderWanted();
       return;
     }
-    this.marginHintEl.textContent = MARGIN_HINT;
-    this.marginHintEl.classList.toggle(
-      "is-hidden",
-      results.length > 0 || findings.length > 0,
-    );
 
     // Tension/echo findings first: rarer, sharper signals than relatedness.
     findings.forEach((f, i) => {
@@ -478,12 +541,23 @@ export class AriadneView extends ItemView {
     // companions — the offer to keep a thought, then this day in past years —
     // before topical relatedness. A logbook wants navigation; a journal
     // wants return.
+    let journalSections = false;
     if (ctx && this.deps.isPeriodic?.(ctx.path)) {
       this.renderPromoteHint(doc, ctx);
       this.renderOnThisDay(this.marginEl, ctx.path);
+      journalSections = this.marginEl.childElementCount > findings.length;
     }
-    if (ctx) this.renderTagSuggestions(doc, ctx, results);
+    if (ctx) this.renderTagSuggestions(doc, ctx, tagEvidence);
     this.renderWanted();
+
+    // With sections above, unlabeled cards would visually belong to the last
+    // label ("On this day"); name them.
+    if (results.length > 0 && (findings.length > 0 || journalSections)) {
+      const label = doc.createElement("div");
+      label.classList.add("ariadne-section-label");
+      label.textContent = "Related";
+      this.marginEl.appendChild(label);
+    }
 
     // Same row component as the search results, so ⇧/⌥/⌘ mean the same thing
     // in both halves of the panel.
@@ -503,6 +577,10 @@ export class AriadneView extends ItemView {
         ),
       );
     });
+    // The hint only when the margin is genuinely empty — with a promote hint
+    // or "On this day" present, "write and notes appear" is already false.
+    this.marginHintEl.textContent = MARGIN_HINT;
+    this.marginHintEl.classList.toggle("is-hidden", this.marginEl.childElementCount > 0);
   }
 
   /**
@@ -573,7 +651,7 @@ export class AriadneView extends ItemView {
     this.renderToday();
     this.renderResurfaced();
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
-      (t) => !this.dismissedWanted.has(t.title),
+      (t) => !this.session.wanted.has(t.title),
     );
     if (topics.length === 0 || !this.deps.onCreateWanted) return;
 
@@ -601,16 +679,39 @@ export class AriadneView extends ItemView {
       dismiss.setAttribute("aria-label", `Dismiss ${topic.title} for this session`);
       dismiss.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        this.dismissedWanted.add(topic.title);
+        this.session.wanted.add(topic.title);
         this.renderWanted();
       });
       head.append(title, count, dismiss);
       row.appendChild(head);
-      row.addEventListener("click", () => this.deps.onCreateWanted!(topic.title));
-      row.setAttribute("role", "button");
       row.setAttribute("aria-label", `Create the note ${topic.title}`);
+      this.actionable(row, (ev?: Event) => {
+        // The dismiss × inside the head must not create the note.
+        void ev;
+        this.deps.onCreateWanted!(topic.title);
+      });
       this.wantedEl.appendChild(row);
     }
+  }
+
+  /**
+   * A div announced as a button must also BE one: focusable, and pressable
+   * with Enter/Space. Every role="button" row goes through here.
+   */
+  private actionable(el: HTMLElement, run: () => void): void {
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    el.addEventListener("click", (ev) => {
+      // Buttons inside the row (dismiss ×) act on their own.
+      if (ev.target instanceof Element && ev.target.closest("button")) return;
+      run();
+    });
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        run();
+      }
+    });
   }
 
   /** A minimal open-on-click row for the foot sections. */
@@ -625,11 +726,8 @@ export class AriadneView extends ItemView {
     label.textContent = title;
     head.appendChild(label);
     row.appendChild(head);
-    row.setAttribute("role", "button");
     row.setAttribute("aria-label", aria);
-    row.addEventListener("click", () =>
-      void this.app.workspace.openLinkText(path, "", false),
-    );
+    this.actionable(row, () => void this.app.workspace.openLinkText(path, "", false));
     return row;
   }
 
@@ -642,7 +740,7 @@ export class AriadneView extends ItemView {
    */
   private renderTagSuggestions(doc: Document, ctx: DraftContext, results: ScoredResult[]): void {
     if (!this.deps.tagSuggestions?.() || !this.deps.tagsOf || !this.deps.onAddTag) return;
-    if (this.dismissedTagRows.has(ctx.path)) return;
+    if (this.session.tagRows.has(ctx.path)) return;
     const own = new Set([
       ...this.deps.tagsOf(ctx.path).map((t) => normalizeTag(t).toLowerCase()),
       // A permanent note near journal entries must not be offered #journal —
@@ -679,7 +777,7 @@ export class AriadneView extends ItemView {
     dismiss.textContent = "×";
     dismiss.setAttribute("aria-label", "Dismiss tag suggestions for this note");
     dismiss.addEventListener("click", () => {
-      this.dismissedTagRows.add(ctx.path);
+      this.session.tagRows.add(ctx.path);
       row.remove();
     });
     row.appendChild(dismiss);
@@ -699,9 +797,8 @@ export class AriadneView extends ItemView {
     const row = doc.createElement("div");
     row.classList.add("ariadne-promote-hint");
     row.textContent = "↳ promote this thought to a note";
-    row.setAttribute("role", "button");
     row.setAttribute("aria-label", "Promote the current paragraph to a note");
-    row.addEventListener("click", () => this.deps.onPromote!());
+    this.actionable(row, () => this.deps.onPromote!());
     this.marginEl.appendChild(row);
   }
 
@@ -737,15 +834,14 @@ export class AriadneView extends ItemView {
     const row = doc.createElement("div");
     row.classList.add("ariadne-promote-hint");
     row.textContent = "↳ begin today's entry";
-    row.setAttribute("role", "button");
     row.setAttribute("aria-label", "Create and open today's journal entry");
-    row.addEventListener("click", () => this.deps.onBeginToday!());
+    this.actionable(row, () => this.deps.onBeginToday!());
     this.wantedEl.appendChild(row);
   }
 
   /** One old, orphaned note a day: the vault reading back. */
   private renderResurfaced(): void {
-    if (this.dismissedResurfaced) return;
+    if (this.session.resurfaced.dismissed) return;
     const pick = this.deps.resurfaced?.();
     if (!pick) return;
     const doc = this.wantedEl.ownerDocument;
@@ -763,7 +859,7 @@ export class AriadneView extends ItemView {
       dismiss.setAttribute("aria-label", "Dismiss for this session");
       dismiss.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        this.dismissedResurfaced = true;
+        this.session.resurfaced.dismissed = true;
         this.renderWanted();
       });
       head.appendChild(dismiss);
@@ -790,20 +886,25 @@ export class AriadneView extends ItemView {
               : " · semantic on";
     // Honesty as UI (PRD §4.6): say which brain answered last, and the real
     // number for cloud spend. "local" is the home box — free, so no figure.
+    const capped = s.capped ? " · capped" : "";
     const brain =
       s.brain === "cloud"
-        ? ` · brain ${s.sessionCostUsd >= 0.005 ? `$${s.sessionCostUsd.toFixed(2)}` : "ready"}`
+        ? ` · brain ${s.sessionCostUsd >= 0.005 ? `$${s.sessionCostUsd.toFixed(2)}` : "ready"}${capped}`
         : s.brain === "local"
-          ? ` · brain local${s.sessionCostUsd >= 0.005 ? ` ($${s.sessionCostUsd.toFixed(2)} cloud)` : ""}`
+          ? ` · brain local${s.sessionCostUsd >= 0.005 ? ` ($${s.sessionCostUsd.toFixed(2)} cloud)` : ""}${capped}`
           : "";
     // A reader device can't embed notes edited since the owner last indexed,
     // so say how many are in that state rather than quietly ranking them worse.
     const stale =
       s.role === "consumer" && s.staleNotes > 0 ? ` · ${s.staleNotes} awaiting desktop` : "";
+    // A reader with nothing to read is the one state the console shouldn't
+    // own: the fix ("index on a desktop first") belongs where the user looks.
+    const readerGap =
+      s.role === "consumer" && s.semantic !== "synced" ? " · no synced index" : "";
     this.glyphEl.textContent =
       s.index === "error"
         ? `index error — ${s.lastError ?? "unknown"}`
-        : `${s.indexedNotes} notes · ${state}${semantic}${stale}${brain}`;
+        : `${s.indexedNotes} notes · ${state}${semantic}${readerGap}${stale}${brain}`;
     this.glyphEl.classList.toggle("is-error", s.index === "error");
   }
 }

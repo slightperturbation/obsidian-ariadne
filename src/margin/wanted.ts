@@ -33,10 +33,15 @@ const MIN_SOURCES = 2;
 export function wantedTopics(unresolved: UnresolvedLinks, limit = 3): WantedTopic[] {
   const byTopic = new Map<string, { sources: number; refs: number }>();
   for (const links of Object.values(unresolved)) {
+    // [[X]] and [[X#section]] in one note are two link KEYS but one source —
+    // counting keys would let a single note fake the corroboration bar.
+    const titlesInSource = new Map<string, number>();
     for (const [target, count] of Object.entries(links)) {
-      // Subpath links ([[X#h]], [[X#^block]]) count toward their note.
       const title = target.split(/[#|]/)[0].trim();
       if (!title || looksPeriodic(title)) continue;
+      titlesInSource.set(title, (titlesInSource.get(title) ?? 0) + count);
+    }
+    for (const [title, count] of titlesInSource) {
       const entry = byTopic.get(title) ?? { sources: 0, refs: 0 };
       entry.sources += 1;
       entry.refs += count;

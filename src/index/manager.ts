@@ -44,6 +44,8 @@ export interface NoteMeta {
   mtime: number;
   folder: string;
   type?: string;
+  /** Frontmatter `date` (ISO) — the time anchor of dated entries. */
+  date?: string;
   linkCount: number;
   chunkCount: number;
 }
@@ -325,21 +327,27 @@ export class IndexManager {
 
     const lists: string[][] = [this.lexical.rankedIds(clean, CANDIDATES, "or")];
     const cosineById = new Map<string, number>();
-    if (this.embedder && this.vectors) {
+    const semanticActive = !!(this.embedder && this.vectors);
+    if (semanticActive) {
       const vhits = await this.semanticHits(clean, false);
       lists.push(vhits.map((h) => h.id));
       for (const h of vhits) cosineById.set(h.id, h.score);
     }
 
     // Gate before the limit is applied, so a filtered-out card doesn't cost a
-    // slot that a good one could have filled.
+    // slot that a good one could have filled. The cosine floor only applies
+    // when this retrieval could produce cosines — on a lexical-only device it
+    // would drop every candidate and leave the Margin permanently, silently
+    // empty.
     const ranked = this.collapseToNotes(lists, (path) => {
       if (path === opts.excludePath) return false;
       if (opts.excludeTitles?.has(this.meta.get(path)?.title ?? "")) return false;
       return true;
     }).filter(
       (entry) =>
-        opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
+        !semanticActive ||
+        opts.minCosine === undefined ||
+        (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
     );
     return this.buildResults(sink(ranked, opts.deprioritize), limit, cosineById, undefined, opts.neighbors);
   }
@@ -391,6 +399,11 @@ export class IndexManager {
         opts.minCosine === undefined || (cosineById.get(entry.chunkId) ?? 0) >= opts.minCosine,
     );
     return this.buildResults(sink(ranked, opts.deprioritize), limit, cosineById, undefined, opts.neighbors);
+  }
+
+  /** Notes indexed without vectors — a consumer's "awaiting desktop" count. */
+  get unembeddedCount(): number {
+    return this.unembedded.size;
   }
 
   /** Read-only note metadata, for surfaces that rank notes without text. */
@@ -501,7 +514,15 @@ export class IndexManager {
     if (filters.type && meta.type !== filters.type) return false;
     if (filters.since) {
       const since = Date.parse(filters.since);
-      if (!Number.isNaN(since) && meta.mtime < since) return false;
+      if (!Number.isNaN(since)) {
+        // A dated entry's `date` property is its time anchor; mtime is when
+        // the FILE was last touched — nearly the inverse question for a
+        // journal (an archival re-save would teleport a 2019 entry into
+        // `since:2026`). Fall back to mtime for notes without an anchor.
+        const anchor = meta.date ? Date.parse(meta.date) : NaN;
+        const when = Number.isNaN(anchor) ? meta.mtime : anchor;
+        if (when < since) return false;
+      }
     }
     return true;
   }

@@ -40,7 +40,7 @@ export function isReflectiveProse(paragraph: string): boolean {
   const lines = text.split("\n").filter((l) => l.trim().length > 0);
   const logLines = lines.filter((l) => LOG_LINE.test(l)).length;
   if (logLines > lines.length / 2) return false;
-  return /[.!?…]/.test(text);
+  return /[.!?…。！？]/.test(text);
 }
 
 /** Is the line the cursor sits on a log line (list item, task, heading)? */

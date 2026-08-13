@@ -29,6 +29,10 @@ const DISMISS_MEMORY = 50;
  */
 export class GhostEngine {
   private dismissed = new Map<string, Set<string>>();
+  /** The context whose suggestion is currently VISIBLE — not the latest one
+   * seen. Esc must record its dismissal against the paragraph that produced
+   * the ghost, and later contexts can arrive (and early-return) while an
+   * older ghost is still on screen. */
   private lastContext?: DraftContext;
   private token = 0;
 
@@ -54,7 +58,6 @@ export class GhostEngine {
     if (!this.deps.enabled()) return;
     const manager = this.deps.manager();
     if (!manager) return;
-    this.lastContext = ctx;
     const token = ++this.token;
 
     const view = this.deps.app.workspace.getActiveViewOfType(MarkdownView);
@@ -113,6 +116,7 @@ export class GhostEngine {
       return;
     }
     const pos = nowView.editor.posToOffset(cursor);
+    this.lastContext = ctx;
     nowCm.dispatch({
       effects: setGhost.of({
         pos,

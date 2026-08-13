@@ -81,20 +81,23 @@ export function suggestTags(
   ownTags: ReadonlySet<string>,
   max = MAX_SUGGESTIONS,
 ): string[] {
-  const score = new Map<string, { weight: number; sources: number }>();
+  // Keyed case-insensitively so #Systems and #systems corroborate each other
+  // instead of splitting the vote; the first-seen casing is what's offered.
+  const score = new Map<string, { display: string; weight: number; sources: number }>();
   for (const n of neighbors) {
     const weight = n.cosine ?? 0.5; // lexical-only neighbors still count, weakly
     for (const tag of new Set(n.tags.map(normalizeTag))) {
       if (!tag || ownTags.has(tag.toLowerCase()) || isLegacyDatedTag(tag)) continue;
-      const entry = score.get(tag) ?? { weight: 0, sources: 0 };
+      const key = tag.toLowerCase();
+      const entry = score.get(key) ?? { display: tag, weight: 0, sources: 0 };
       entry.weight += weight;
       entry.sources += 1;
-      score.set(tag, entry);
+      score.set(key, entry);
     }
   }
-  return [...score.entries()]
-    .filter(([, e]) => e.sources >= 2 || e.weight >= SINGLE_SOURCE_COSINE)
-    .sort((a, b) => b[1].weight - a[1].weight || a[0].localeCompare(b[0]))
-    .map(([tag]) => tag)
+  return [...score.values()]
+    .filter((e) => e.sources >= 2 || e.weight >= SINGLE_SOURCE_COSINE)
+    .sort((a, b) => b.weight - a.weight || a.display.localeCompare(b.display))
+    .map((e) => e.display)
     .slice(0, max);
 }

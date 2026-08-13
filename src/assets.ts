@@ -1,4 +1,4 @@
-import { normalizePath, requestUrl, type App, type PluginManifest } from "obsidian";
+import { Notice, normalizePath, requestUrl, type App, type PluginManifest } from "obsidian";
 import type { Logger } from "./util/logger";
 
 /**
@@ -21,11 +21,20 @@ import type { Logger } from "./util/logger";
 /** GitHub repo the release assets live in. Set before the first release. */
 export const RELEASE_REPO = "dexterba/ariadne";
 
-const RUNTIME_ASSETS = [
-  "index-worker.js",
-  "ort-wasm-simd-threaded.asyncify.mjs",
-  "ort-wasm-simd-threaded.asyncify.wasm",
-] as const;
+/**
+ * Name → minimum plausible size. A truncated download, an HTML error page,
+ * or a Git-LFS pointer would otherwise be written to disk and pass the
+ * `exists` check on every later start — a permanently, silently broken
+ * install with no path to re-heal.
+ */
+const RUNTIME_ASSETS: ReadonlyArray<{ name: string; minBytes: number }> = [
+  { name: "index-worker.js", minBytes: 100_000 },
+  { name: "ort-wasm-simd-threaded.asyncify.mjs", minBytes: 10_000 },
+  { name: "ort-wasm-simd-threaded.asyncify.wasm", minBytes: 1_000_000 },
+];
+
+/** Stamp recording which plugin version fetched the assets beside main.js. */
+const STAMP_FILE = "ariadne-assets.json";
 
 export function assetUrl(version: string, name: string): string {
   return `https://github.com/${RELEASE_REPO}/releases/download/${version}/${name}`;
@@ -43,16 +52,51 @@ export async function ensureRuntimeAssets(
   log: Logger,
 ): Promise<boolean> {
   const adapter = app.vault.adapter;
+  const stampPath = normalizePath(`${manifest.dir}/${STAMP_FILE}`);
+
   const missing: string[] = [];
-  for (const name of RUNTIME_ASSETS) {
+  for (const { name } of RUNTIME_ASSETS) {
     if (!(await adapter.exists(normalizePath(`${manifest.dir}/${name}`)))) missing.push(name);
   }
-  if (missing.length === 0) return true;
 
-  log.info(`runtime assets missing (${missing.join(", ")}) — fetching from release v${manifest.version}`);
-  for (const name of missing) {
+  // Version staleness: a BRAT/community update rewrites only main.js — the
+  // old worker would keep running against the new main across the message
+  // protocol. The stamp says which version fetched the assets; a mismatch
+  // re-fetches. Files present WITHOUT a stamp are a dev build (npm run
+  // build copies them): adopt them as current rather than clobbering.
+  let stale: string[] = [];
+  if (missing.length === 0) {
+    try {
+      const raw = await adapter.read(stampPath).catch(() => "");
+      const stamped = raw ? (JSON.parse(raw) as { version?: string }).version : undefined;
+      if (stamped === undefined) {
+        await adapter.write(stampPath, JSON.stringify({ version: manifest.version }));
+        return true;
+      }
+      if (stamped === manifest.version) return true;
+      stale = RUNTIME_ASSETS.map((a) => a.name);
+      log.info(`runtime assets are from v${stamped} — refreshing for v${manifest.version}`);
+    } catch {
+      return true; // an unreadable stamp must not break a working install
+    }
+  }
+
+  const wanted = missing.length > 0 ? missing : stale;
+  if (missing.length > 0) {
+    log.info(`runtime assets missing (${missing.join(", ")}) — fetching from release v${manifest.version}`);
+  }
+  // Honesty about bytes: ~24 MB is not a silent background detail on a
+  // metered connection.
+  new Notice("Ariadne is downloading its search runtime (~24 MB, one-time).");
+  for (const name of wanted) {
+    const spec = RUNTIME_ASSETS.find((a) => a.name === name)!;
     try {
       const resp = await requestUrl({ url: assetUrl(manifest.version, name), throw: true });
+      if (resp.arrayBuffer.byteLength < spec.minBytes) {
+        throw new Error(
+          `implausibly small (${resp.arrayBuffer.byteLength} B < ${spec.minBytes} B) — not written`,
+        );
+      }
       await adapter.writeBinary(normalizePath(`${manifest.dir}/${name}`), resp.arrayBuffer);
       log.info(`fetched ${name} (${Math.round(resp.arrayBuffer.byteLength / 1024)} KB)`);
     } catch (err) {
@@ -63,5 +107,6 @@ export async function ensureRuntimeAssets(
       return false;
     }
   }
+  await adapter.write(stampPath, JSON.stringify({ version: manifest.version })).catch(() => {});
   return true;
 }

@@ -1,4 +1,4 @@
-import { dayKeyOf, looksPeriodic } from "../core/periodic";
+import { dateOf, dayKeyOf, looksPeriodic } from "../core/periodic";
 import type { NoteMeta } from "../index/manager";
 
 /**
@@ -28,8 +28,8 @@ export function onThisDay(currentPath: string, allPaths: string[]): string[] {
   if (!key) return [];
   return allPaths
     .filter((p) => p !== currentPath && dayKeyOf(p) === key)
-    .sort()
-    .reverse();
+    // By date, newest first — a path sort would order by folder name.
+    .sort((a, b) => (dateOf(b) ?? "").localeCompare(dateOf(a) ?? ""));
 }
 
 /** FNV-1a — deterministic seed from the date string. */

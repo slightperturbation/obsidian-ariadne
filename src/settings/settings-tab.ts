@@ -135,7 +135,7 @@ export class AriadneSettingTab extends PluginSettingTab {
           .setPlaceholder("daily")
           .setValue(this.plugin.settings.dailyTag)
           .onChange(async (v) => {
-            this.plugin.settings.dailyTag = v.trim() || "daily";
+            this.plugin.settings.dailyTag = v.trim().replace(/^#/, "") || "daily";
             await this.plugin.saveSettings();
           }),
       )
@@ -144,7 +144,7 @@ export class AriadneSettingTab extends PluginSettingTab {
           .setPlaceholder("journal")
           .setValue(this.plugin.settings.journalTag)
           .onChange(async (v) => {
-            this.plugin.settings.journalTag = v.trim() || "journal";
+            this.plugin.settings.journalTag = v.trim().replace(/^#/, "") || "journal";
             await this.plugin.saveSettings();
           }),
       );
@@ -255,7 +255,7 @@ export class AriadneSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Ghost link suggestions")
       .setDesc(
-        "Faint inline [[link]] suggestions after a typing pause. Tab accepts, Esc dismisses; on a phone, tap the suggestion to accept and keep typing to dismiss.",
+        "Faint inline [[link]] suggestions after a typing pause. Tab accepts, Esc dismisses; on a touch device, tap to accept and keep typing to dismiss. Needs the embedding model, so it runs on the index owner, not on reader devices.",
       )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.enableGhostText).onChange(async (v) => {
@@ -267,7 +267,8 @@ export class AriadneSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Suggestion reticence")
       .setDesc(
-        "How semantically close a note must be before a ghost link is offered (raw cosine). ~0.75 is chatty, ~0.85 is quiet, ~0.9+ is near-silent.",
+        "How semantically close a note must be before a ghost link is offered (raw cosine). ~0.75 is chatty, ~0.85 is quiet, ~0.9+ is near-silent. The Margin" +
+          "’s own floor follows this dial (slightly looser), so raising it also quiets the cards.",
       )
       .addSlider((s) =>
         s
@@ -356,7 +357,7 @@ export class AriadneSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Session cost limit")
-      .setDesc("Reasoning calls stop once this much (USD) has been spent this session. 0 = no limit.")
+      .setDesc("Cloud reasoning calls stop once this much (USD) has been spent this session. 0 = no limit. Local-model calls are free and continue past the cap.")
       .addText((t) =>
         t.setValue(String(this.plugin.settings.costLimitUsd)).onChange(async (v) => {
           const parsed = Number(v);

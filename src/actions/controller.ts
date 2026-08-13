@@ -57,7 +57,7 @@ import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal"
 import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
 import { clusterThemes, type EntryNeighbors } from "./themes";
-import { dateOf } from "../core/periodic";
+import { dateOf, isoWeekLabel, localISODate } from "../core/periodic";
 import { classifyEntry } from "../margin/tags";
 import { onThisDay, resurfacePick } from "../margin/resurface";
 import { wantedTopics } from "../margin/wanted";
@@ -234,7 +234,7 @@ export class ActionsController {
     change.path = this.uniquePath(change.path);
     try {
       await this.deps.executor.apply(proposal);
-      new Notice(`✓ Created “${scaffold.title}” · reversible with "Undo last Ariadne action".`);
+      new Notice(`✓ Created “${scaffold.title}” · reversible with "Undo last action".`);
       await this.deps.app.workspace.openLinkText(change.path, "", false);
     } catch (err) {
       new Notice(`Not created: ${err instanceof Error ? err.message : String(err)}`);
@@ -484,7 +484,7 @@ export class ActionsController {
     // Pure creation → no preview gate (same as scaffolding); open it after.
     try {
       await this.deps.executor.apply(proposal);
-      new Notice(`✓ Created MoC “${moc.title}” — undoable via "Undo last Ariadne action".`);
+      new Notice(`✓ Created MoC “${moc.title}” — undoable via "Undo last action".`);
       await app.workspace.openLinkText(path, "", false);
     } catch (err) {
       new Notice(`MoC not created: ${err instanceof Error ? err.message : String(err)}`);
@@ -500,6 +500,12 @@ export class ActionsController {
     const file = view?.file;
     if (!manager || !view || !file) {
       new Notice("Open a note to check for a near-duplicate.");
+      return;
+    }
+    if (!manager.canEmbedText()) {
+      new Notice(
+        "Duplicate detection needs the embedding model — on this device the index is read-only.",
+      );
       return;
     }
     await view.save();
@@ -595,14 +601,23 @@ export class ActionsController {
     const text = seed.trim();
     if (!text) return;
     const inbox = normalizePath(this.deps.inboxFolder());
+    // The fallback must pass through sanitizeTitle like every other title:
+    // an ISO timestamp carries ":", which Windows and mobile refuse.
     const title =
-      titleFromContent(text) ?? `Capture ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+      titleFromContent(text) ??
+      sanitizeTitle(`Capture ${localISODate()} ${new Date().toTimeString().slice(0, 5)}`);
     const path = this.uniquePath(`${inbox}/${title}.md`);
-    await this.deps.executor.apply({
-      title: `Capture "${title}"`,
-      changes: [{ type: "create", path, after: `${text}\n` }],
-    });
-    new Notice(`Captured to ${path}`);
+    try {
+      await this.deps.executor.apply({
+        title: `Capture "${title}"`,
+        changes: [{ type: "create", path, after: `${text}\n` }],
+      });
+      new Notice(`Captured to ${path}`);
+    } catch (err) {
+      // A lost capture must never be silent — the prompt is already gone.
+      new Notice(`Capture failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.deps.log.warn(`capture failed: ${String(err)}`);
+    }
   }
 
   /**
@@ -641,7 +656,7 @@ export class ActionsController {
     if (!title && this.deps.router.available()) {
       try {
         title = parseTitle(
-          await this.deps.router.run("scaffold", titlePrompt(text.slice(0, EXCERPT_CHARS)), {
+          await this.deps.router.run("theme", titlePrompt(text.slice(0, EXCERPT_CHARS)), {
             schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
             maxTokens: 100,
           }),
@@ -655,20 +670,46 @@ export class ActionsController {
       return;
     }
 
+    // Capture what the insertion point looked like BEFORE any await: the
+    // title call can take seconds, and the same Editor instance is reused
+    // when the user navigates — writing into stale coordinates would drop a
+    // link into the middle of an unrelated note.
+    const lineAtCapture = insertAt ? editor.getLine(insertAt.line) : undefined;
+
     const inbox = normalizePath(this.deps.inboxFolder());
     const path = this.uniquePath(`${inbox}/${title}.md`);
     const body = `${text}\n\n— promoted from [[${file.basename}]]\n`;
-    await this.deps.executor.apply({
-      title: `Promote "${title}"`,
-      changes: [{ type: "create", path, after: body }],
-    });
+    try {
+      await this.deps.executor.apply({
+        title: `Promote "${title}"`,
+        changes: [{ type: "create", path, after: body }],
+      });
+    } catch (err) {
+      new Notice(`Promote failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
 
     // Appended via the editor, not a file rewrite: an addition in the
     // writer's buffer, reversible with ordinary ⌘Z, and never a whole-file
-    // modify racing their live typing.
+    // modify racing their live typing. Revalidated first, ghost-engine
+    // style: same file still open, same line still present and unchanged.
     const noteName = path.split("/").pop()!.replace(/\.md$/, "");
-    if (insertAt) editor.replaceRange(` [[${noteName}]]`, insertAt);
-    new Notice(`Promoted to ${path} — elaborate it when ready.`);
+    const nowView = this.deps.lastMarkdown();
+    const sameFile = nowView?.file?.path === file.path;
+    const sameLine =
+      sameFile &&
+      insertAt !== undefined &&
+      insertAt.line < nowView!.editor.lineCount() &&
+      nowView!.editor.getLine(insertAt.line) === lineAtCapture;
+    if (insertAt && sameLine) {
+      nowView!.editor.replaceRange(` [[${noteName}]]`, insertAt);
+      new Notice(`Promoted to ${path} — elaborate it when ready.`);
+    } else {
+      new Notice(
+        `Promoted to ${path}. The journal changed while the title was drafted, ` +
+          `so no [[link]] was inserted — add one where it belongs.`,
+      );
+    }
   }
 
   /**
@@ -682,7 +723,7 @@ export class ActionsController {
   async closeTheDay(): Promise<void> {
     const { app } = this.deps;
     const manager = this.deps.manager();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localISODate();
     const allPaths = app.vault.getMarkdownFiles().map((f) => f.path);
     const items: ActionableItem[] = [];
 
@@ -730,10 +771,8 @@ export class ActionsController {
         actions: [
           {
             label: "Triage",
-            run: async () => {
-              await this.triageInbox();
-              return true;
-            },
+            closesModal: true,
+            run: () => this.triageInbox().then(() => true),
           },
         ],
       });
@@ -747,10 +786,8 @@ export class ActionsController {
         actions: [
           {
             label: "Create",
-            run: async () => {
-              await this.createNote(wanted.title);
-              return true;
-            },
+            closesModal: true,
+            run: () => this.createNote(wanted.title).then(() => true),
           },
         ],
       });
@@ -799,9 +836,7 @@ export class ActionsController {
       return;
     }
     const now = new Date();
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const weekAgo = localISODate(new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000));
     // Date-named entries carry their date; journal-folder entries without
     // dated names ("Morning pages 12") fall back to their modification time —
     // a journal is defined by the activity, not the filename.
@@ -812,7 +847,7 @@ export class ActionsController {
       if (d && d >= weekAgo) {
         entries.push({ path: f.path, date: d });
       } else if (!d && this.deps.isJournal(f.path) && f.stat.mtime >= weekAgoMs) {
-        entries.push({ path: f.path, date: new Date(f.stat.mtime).toISOString().slice(0, 10) });
+        entries.push({ path: f.path, date: localISODate(new Date(f.stat.mtime)) });
       }
     }
     entries.sort((a, b) => a.date.localeCompare(b.date));
@@ -856,12 +891,7 @@ export class ActionsController {
       return;
     }
 
-    // ISO week number for a stable, conventional title.
-    const jan4 = new Date(Date.UTC(now.getUTCFullYear(), 0, 4));
-    const week = Math.ceil(
-      ((now.getTime() - jan4.getTime()) / 86_400_000 + jan4.getUTCDay() + 1) / 7,
-    );
-    const title = `Weekly synthesis ${now.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+    const title = `Weekly synthesis ${isoWeekLabel(now)}`;
     const inbox = normalizePath(this.deps.inboxFolder());
     const path = this.uniquePath(`${inbox}/${title}.md`);
     const body = [
@@ -917,6 +947,7 @@ export class ActionsController {
     }
 
     const items: ActionableItem[] = [];
+    let themesModelOk = true;
     await this.withWorkingNotice(`Ariadne is reading ${dated.length} journal entries…`, async () => {
       const neighborhoods: EntryNeighbors[] = [];
       for (const file of dated) {
@@ -937,7 +968,7 @@ export class ActionsController {
       for (const theme of clusterThemes(neighborhoods).slice(0, 5)) {
         // Name it — cheap labeling, so the local box takes it when awake.
         let named: { title: string; gist?: string } | null = null;
-        if (this.deps.router.available()) {
+        if (themesModelOk && this.deps.router.available()) {
           try {
             named = parseTheme(
               await this.deps.router.run("theme", themePrompt(theme.evidence), {
@@ -946,6 +977,7 @@ export class ActionsController {
               }),
             );
           } catch (err) {
+            if (err instanceof BudgetExceededError) themesModelOk = false;
             this.deps.log.warn(`theme naming failed: ${String(err)}`);
           }
         }
@@ -960,6 +992,7 @@ export class ActionsController {
           actions: [
             {
               label: "Create note",
+              closesModal: true,
               run: async () => {
                 // The scaffold's seed carries the theme's own evidence, so
                 // the note starts from what the writer actually wrote.
@@ -1013,13 +1046,17 @@ export class ActionsController {
     }
 
     const items: ActionableItem[] = [];
+    // Two Untitled notes can want the same title: claim each target so the
+    // second gets "Title 2" instead of a rename that rejects at click time.
+    const claimed = new Set<string>();
+    let modelOk = this.deps.router.available();
     await this.withWorkingNotice("Ariadne is reading untitled notes…", async () => {
       for (const file of candidates) {
         const content = await app.vault.read(file);
         // The writer's own first heading/line beats a generated title — and
         // is free. The model is only asked when the note offers nothing.
         let title = titleFromContent(content);
-        if (!title && this.deps.router.available()) {
+        if (!title && modelOk) {
           try {
             title = parseTitle(
               await this.deps.router.run("scaffold", titlePrompt(content.slice(0, EXCERPT_CHARS)), {
@@ -1028,13 +1065,20 @@ export class ActionsController {
               }),
             );
           } catch (err) {
+            if (err instanceof BudgetExceededError) {
+              // Distinguish "cap hit" from "nothing renameable" — a false
+              // explanation is worse than none.
+              modelOk = false;
+              new Notice("Session cost limit reached — titles below use only the notes' own text.");
+            }
             this.deps.log.warn(`title proposal failed for ${file.path}: ${String(err)}`);
           }
         }
         if (!title) continue;
 
         const folder = file.parent?.path && file.parent.path !== "/" ? file.parent.path : "";
-        const toPath = this.uniquePath(folder ? `${folder}/${title}.md` : `${title}.md`);
+        const toPath = this.uniquePath(folder ? `${folder}/${title}.md` : `${title}.md`, claimed);
+        claimed.add(toPath);
         items.push({
           title: `${file.basename} → ${toPath.split("/").pop()!.replace(/\.md$/, "")}`,
           detail: content.replace(/\s+/g, " ").slice(0, 120),
@@ -1079,7 +1123,11 @@ export class ActionsController {
     }).open();
   }
 
+  /** Reset per run; false after the cost cap stops mid-batch model calls. */
+  private triageModelOk = true;
+
   async triageInbox(): Promise<void> {
+    this.triageModelOk = true;
     const { app } = this.deps;
     const manager = this.deps.manager();
     const inbox = normalizePath(this.deps.inboxFolder());
@@ -1101,7 +1149,7 @@ export class ActionsController {
           ? await manager.related(mergeProbe(content), { excludePath: file.path, limit: 1 })
           : [];
         let proposal = decideLocally(content, related[0]);
-        if (!proposal && this.deps.router.available()) {
+        if (!proposal && this.triageModelOk && this.deps.router.available()) {
           try {
             const verdict = parseTriage(
               await this.deps.router.run(
@@ -1112,6 +1160,10 @@ export class ActionsController {
             );
             proposal = { disposition: verdict.disposition, reason: verdict.reason };
           } catch (err) {
+            if (err instanceof BudgetExceededError) {
+              this.triageModelOk = false;
+              new Notice("Session cost limit reached — remaining items default to your judgment.");
+            }
             this.deps.log.warn(`triage failed for ${file.path}: ${String(err)}`);
           }
         }
@@ -1147,9 +1199,11 @@ export class ActionsController {
         };
         const merge = {
           label: "Merge…",
+          // Closing first also makes the opened note the ACTIVE view, so
+          // mergeNote resolves the right source instead of whatever editor
+          // was focused behind the modal.
+          closesModal: true,
           run: async () => {
-            // Reuse the whole merge flow (preview included): open the note so
-            // it is the merge source, then let mergeNote re-detect the target.
             await app.workspace.openLinkText(file.path, "", false);
             await this.mergeNote();
             return false;
@@ -1186,7 +1240,7 @@ export class ActionsController {
     const { app } = this.deps;
     // Declared outside the try: a partial failure must still register an undo
     // for the moves that DID land, or those files (and their rewritten embeds)
-    // become unrevertable and "Undo last Ariadne action" reverses something unrelated.
+    // become unrevertable and "Undo last action" reverses something unrelated.
     const done: Array<AttachmentMove & { size: number; mtime: number }> = [];
     let failure: unknown;
     try {
@@ -1243,7 +1297,7 @@ export class ActionsController {
       );
     } else {
       new Notice(
-        `✓ Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder} — undoable via "Undo last Ariadne action".`,
+        `✓ Swept ${done.length} attachment${done.length === 1 ? "" : "s"} into ${folder} — undoable via "Undo last action".`,
       );
     }
   }
@@ -1280,7 +1334,7 @@ export class ActionsController {
         void (async () => {
           try {
             await this.deps.executor.apply(proposal);
-            new Notice(`✓ ${proposal.title} — undoable via "Undo last Ariadne action".`);
+            new Notice(`✓ ${proposal.title} — undoable via "Undo last action".`);
           } catch (err) {
             new Notice(`Not applied: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -1343,7 +1397,7 @@ export class ActionsController {
         try {
           await this.flushEditorsFor(proposal);
           await this.deps.executor.apply(proposal);
-          new Notice(`✓ ${proposal.title} — undoable via "Undo last Ariadne action".`);
+          new Notice(`✓ ${proposal.title} — undoable via "Undo last action".`);
         } catch (err) {
           new Notice(
             `Not applied: ${err instanceof Error ? err.message : String(err)}`,

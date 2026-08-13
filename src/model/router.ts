@@ -85,7 +85,10 @@ export class ModelRouter {
     // even past the cap — that's the point of having the box.
     if (chosen.brain === "cloud") {
       const limit = this.deps.costLimitUsd();
-      if (limit > 0 && this.sessionCostUsd >= limit) throw new BudgetExceededError(limit);
+      if (limit > 0 && this.sessionCostUsd >= limit) {
+        this.deps.status.set({ capped: true });
+        throw new BudgetExceededError(limit);
+      }
     }
 
     // Serialize: one reasoning call at a time (simple, honest rate limiting).
@@ -109,7 +112,12 @@ export class ModelRouter {
         ({ text, usage } = await this.deps.provider.complete(prompt, opts));
       }
       this.sessionCostUsd += usage.costUsd;
-      this.deps.status.set({ brain, sessionCostUsd: this.sessionCostUsd });
+      const limit = this.deps.costLimitUsd();
+      this.deps.status.set({
+        brain,
+        sessionCostUsd: this.sessionCostUsd,
+        capped: limit > 0 && this.sessionCostUsd >= limit,
+      });
       this.deps.log.info(
         `${task} via ${brain}: ${usage.inputTokens}→${usage.outputTokens} tok, ` +
           `$${usage.costUsd.toFixed(4)}, ${Date.now() - started}ms ` +

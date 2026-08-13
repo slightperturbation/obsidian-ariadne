@@ -1,9 +1,15 @@
-import { App, Modal } from "obsidian";
+import { App, Modal, Notice } from "obsidian";
 
 export interface ItemAction {
   label: string;
   /** Style as the destructive choice (archive, delete). */
   destructive?: boolean;
+  /**
+   * This action opens another modal or a full flow: close THIS modal first.
+   * Closing a modal underneath a newer one pops keymap scopes out of order —
+   * Escape and focus land on the wrong surface.
+   */
+  closesModal?: boolean;
   /** Runs on click. Return true to remove the row (the item is handled). */
   run(): Promise<boolean> | boolean;
 }
@@ -74,10 +80,30 @@ export class ItemActionsModal extends Modal {
         if (action.destructive) btn.classList.add("mod-warning");
         btn.addEventListener("click", () => {
           void (async () => {
-            if (await action.run()) {
-              row.remove();
-              remaining -= 1;
-              if (remaining === 0) this.close();
+            if (action.closesModal) {
+              this.close();
+              await Promise.resolve(action.run()).catch((err: unknown) => {
+                new Notice(`${action.label} failed — see console.`);
+                console.error("[Ariadne]", err);
+              });
+              return;
+            }
+            // Guarded and single-flight: a rename that rejects must say so,
+            // and a double-click must not archive twice (the second move
+            // would land the note in Archive/x 2.md with a second undo).
+            if (btn.disabled) return;
+            btn.disabled = true;
+            try {
+              if (await action.run()) {
+                row.remove();
+                remaining -= 1;
+                if (remaining === 0) this.close();
+              }
+            } catch (err) {
+              new Notice(`${action.label} failed — see console.`);
+              console.error("[Ariadne]", err);
+            } finally {
+              btn.disabled = false;
             }
           })();
         });

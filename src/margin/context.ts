@@ -39,7 +39,26 @@ export function paragraphAround(lines: string[], line: number): ParagraphContext
  * re-suggesting after a dismissal while the writer is still mid-thought.
  * Word-set based, so small edits (typos, punctuation) don't count as change.
  */
+const STOP = new Set(["the", "and", "are", "was", "has", "had", "its", "this", "that"]);
+
 export function paragraphKey(path: string, text: string): string {
-  const words = [...new Set(text.toLowerCase().match(/[a-z0-9]{4,}/g) ?? [])].sort();
+  // Unicode-aware, and ≥3 chars so negators ("not", "nor") count — a key
+  // that can't see negation would keep serving a pre-negation verdict for a
+  // paragraph that now says the opposite. The previous [a-z0-9]{4,} matched
+  // NOTHING in CJK/Cyrillic/Greek text, collapsing every paragraph of such a
+  // note to one identical key: the watcher's dedupe then froze the Margin
+  // for the whole note after its first emit.
+  // 3-char words are kept because negators live there ("not", "nor") — but
+  // stance-free articles/copulas are dropped, or every "the" typed would
+  // churn the key and defeat the dedupe it exists for.
+  const words = [
+    ...new Set(
+      (text.toLowerCase().match(/[\p{L}\p{N}']{3,}/gu) ?? []).filter((w) => !STOP.has(w)),
+    ),
+  ].sort();
+  if (words.length === 0 && text.trim().length > 0) {
+    // Scriptless/symbolic text still needs a content-derived identity.
+    return `${path}::${text.trim().slice(0, 60)}`;
+  }
   return `${path}::${words.join(",")}`;
 }

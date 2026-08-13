@@ -18,6 +18,8 @@ export interface AriadneStatus {
   progressTotal: number;
   /** Cumulative reasoning-model spend this session (USD). */
   sessionCostUsd: number;
+  /** The session cost cap has been reached — cloud calls are refused. */
+  capped: boolean;
   /** Whether this device writes the index or reads a synced one. */
   role: "owner" | "consumer";
   /**
@@ -45,6 +47,7 @@ export class StatusStore {
     progressDone: 0,
     progressTotal: 0,
     sessionCostUsd: 0,
+    capped: false,
     role: "owner",
     staleNotes: 0,
   };

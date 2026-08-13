@@ -145,7 +145,8 @@ function makeEngine(over: {
   return { engine, run };
 }
 
-const flush = () => new Promise((r) => setTimeout(r, 0));
+/** Verdicts land on a microtask; the repaint notification is coalesced (150ms). */
+const flush = () => new Promise((r) => setTimeout(r, 250));
 
 describe("TensionEngine", () => {
   it("surfaces a certain echo immediately, with no model call", async () => {

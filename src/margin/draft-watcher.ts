@@ -29,12 +29,17 @@ type ContextListener = (ctx: DraftContext) => void;
  * on switching notes. Pure coordination: the plugin forwards Obsidian's
  * editor-change / active-leaf events into it, both the Margin view and the
  * ghost engine subscribe, and heavy work (retrieval) happens downstream —
- * so one keystroke never triggers two extractions.
+ * so one keystroke never triggers two context EXTRACTIONS. (Each emitted
+ * context still fans out to three consumers — Margin, ghost, tension — that
+ * currently each run their own retrieval; sharing that is known perf debt,
+ * not an invariant violation.)
  */
 export class DraftWatcher {
   private listeners = new Set<ContextListener>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private lastKey = "";
+  private lastFocusPath = "";
+  private lastFocusAt = 0;
 
   constructor(private pauseMs = 600) {}
 
@@ -56,6 +61,14 @@ export class DraftWatcher {
   onFocusChange(editor: Editor, view: MarkdownView): void {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    // Opening a note in a new leaf fires BOTH file-open and
+    // active-leaf-change; without this, every navigation ran the whole
+    // downstream retrieval fan-out twice.
+    const path = view.file?.path ?? "";
+    const now = Date.now();
+    if (path === this.lastFocusPath && now - this.lastFocusAt < 150) return;
+    this.lastFocusPath = path;
+    this.lastFocusAt = now;
     this.emitFrom(editor, view, true);
   }
 

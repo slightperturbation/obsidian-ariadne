@@ -122,7 +122,8 @@ export const TENSION_CONFIDENCE = 0.75;
  */
 export function keySimilarity(a: string, b: string): number {
   if (a === b) return 1;
-  const wordsOf = (key: string) => new Set(key.slice(key.indexOf("::") + 2).split(","));
+  const wordsOf = (key: string) =>
+    new Set(key.slice(key.indexOf("::") + 2).split(",").filter((w) => w.length > 0));
   const wa = wordsOf(a);
   const wb = wordsOf(b);
   if (wa.size === 0 || wb.size === 0) return 0;

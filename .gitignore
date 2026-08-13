@@ -11,3 +11,4 @@ data.json
 dist/
 coverage/
 .DS_Store
+ariadne-assets.json
