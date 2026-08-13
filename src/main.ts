@@ -1,4 +1,4 @@
-import { Plugin, Platform, TFile, normalizePath, requestUrl } from "obsidian";
+import { Plugin, Platform, TFile, addIcon, normalizePath, requestUrl } from "obsidian";
 import { AriadneSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import { AriadneSettingTab } from "./settings/settings-tab";
 import { StatusStore } from "./core/status";
@@ -121,6 +121,20 @@ export default class AriadnePlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    // Ariadne's thread: a ball of thread with the strand trailing out — the
+    // guide through the labyrinth, not a magnifying glass. Drawn in Lucide's
+    // stroke idiom (100-viewBox equivalent of stroke-width 2 at 24) and
+    // registered as a custom icon so it exists on every Obsidian version.
+    addIcon(
+      "ariadne-thread",
+      `<g fill="none" stroke="currentColor" stroke-width="8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="46" cy="42" r="30"/>
+        <path d="M20 32 C 34 42, 58 42, 72 32"/>
+        <path d="M18 50 C 34 60, 58 60, 74 50"/>
+        <path d="M67 63 C 76 73, 84 79, 92 86"/>
+      </g>`,
+    );
+
     await this.loadSettings();
     this.log = new Logger("Ariadne", this.settings.debugLogging);
     this.status = new StatusStore();
@@ -708,7 +722,7 @@ export default class AriadnePlugin extends Plugin {
     });
     register.call(this, ARIADNE_BASES_VIEW, {
       name: "Related (Ariadne)",
-      icon: "search",
+      icon: "ariadne-thread",
       factory: (controller: never, containerEl: HTMLElement) => new View(controller, containerEl),
     });
   }

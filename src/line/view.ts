@@ -112,7 +112,7 @@ export class AriadneView extends ItemView {
   }
 
   getIcon(): string {
-    return "search";
+    return "ariadne-thread";
   }
 
   async onOpen(): Promise<void> {
@@ -120,6 +120,15 @@ export class AriadneView extends ItemView {
     const doc = root.ownerDocument;
     root.classList.add("ariadne", "ariadne-panel");
     root.replaceChildren();
+
+    // The panel names itself — a sidebar fills with lookalike tabs, and a
+    // quiet wordmark is cheaper to recognize than an icon tooltip. Small-caps
+    // text, no capsule, per the design system.
+    const wordmark = doc.createElement("div");
+    wordmark.classList.add("ariadne-wordmark");
+    wordmark.textContent = "Ariadne";
+    wordmark.setAttribute("aria-hidden", "true");
+    root.appendChild(wordmark);
 
     this.inputEl = doc.createElement("input");
     this.inputEl.type = "text";
