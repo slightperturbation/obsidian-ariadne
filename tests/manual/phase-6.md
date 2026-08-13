@@ -209,3 +209,21 @@ classification needs it; echoes don't).
 - [ ] Known limit: detection reads ISO (2026-08-12) and written
       ("August 12, 2026") names — an exotic daily-note format won't be
       recognized; turn the toggle off in that case.
+
+## 14. Entry auto-tagging + tag suggestions
+
+- [ ] **Daily vs journal.** In a dated note, write only task/bullet lines,
+      wait ~3s → frontmatter gains `daily/<today>`. Replace the content
+      with two narrative paragraphs, wait → the tag becomes
+      `journal/<today>` (the daily/ one is replaced, other tags untouched).
+- [ ] Add your own tag to the same note's frontmatter → Ariadne never
+      touches it, through repeated edits.
+- [ ] An undated note in a journal folder gets its creation date as the
+      tag date.
+- [ ] **Settings.** Auto-tag off → no tags written. Rename the prefixes
+      (e.g. log/reflect) → new tags use them.
+- [ ] **Tag suggestions.** Open a note whose semantic neighbors share a
+      tag it lacks → a quiet `tags  #x #y` row appears in the Margin.
+      Click a tag → it lands in frontmatter and leaves the row. × hides
+      the row for this note this session. Suggestions only ever come from
+      existing tags — never invented, never dated entry tags.

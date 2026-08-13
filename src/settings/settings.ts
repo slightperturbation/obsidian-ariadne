@@ -52,6 +52,16 @@ export interface AriadneSettings {
   enableWanted: boolean;
   /** Invite today's journal entry at the panel foot when none exists yet. */
   enableTodayHint: boolean;
+  /**
+   * Auto-tag dated/journal entries with `<kind>/<ISO date>` in frontmatter
+   * (e.g. journal/2026-08-12) — daily = log-shaped, journal = narrative.
+   * Ariadne manages ONLY its own dated tags and never touches others.
+   */
+  autoTagEntries: boolean;
+  dailyTag: string;
+  journalTag: string;
+  /** Offer tags from semantically-near notes in the Margin (never invented). */
+  enableTagSuggestions: boolean;
 
   // Margin
   enableMargin: boolean;
@@ -106,6 +116,10 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   enableResurfacing: true,
   enableWanted: true,
   enableTodayHint: true,
+  autoTagEntries: true,
+  dailyTag: "daily",
+  journalTag: "journal",
+  enableTagSuggestions: true,
 
   enableMargin: true,
   tensionMode: "quiet",

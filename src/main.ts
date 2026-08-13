@@ -32,6 +32,7 @@ import { dateOf, looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
+import { classifyEntry, entryTag, isManagedEntryTag, normalizeTag } from "./margin/tags";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -95,6 +96,8 @@ export default class AriadnePlugin extends Plugin {
   private backlinkIndex?: Map<string, Set<string>>;
   /** Dangling-topic ranking, same invalidation cadence as the backlinks. */
   private wantedCache?: WantedTopic[];
+  /** Per-path debounce for entry auto-tagging. */
+  private tagTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /**
    * Is this note a journal/dated entry? Three signals, most specific first:
@@ -344,6 +347,9 @@ export default class AriadnePlugin extends Plugin {
           },
           promoteHint: () => this.settings.enablePromoteHint,
           onPromote: () => void this.actions.promoteToNote(),
+          tagSuggestions: () => this.settings.enableTagSuggestions,
+          tagsOf: (path) => this.tagsOf(path),
+          onAddTag: (path, tag) => void this.addTag(path, tag),
           todayMissing: () => {
             if (!this.settings.enableTodayHint) return false;
             const today = new Date().toISOString().slice(0, 10);
@@ -497,6 +503,7 @@ export default class AriadnePlugin extends Plugin {
         this.backlinkIndex = undefined;
         this.wantedCache = undefined;
         markIfNote(file.path);
+        this.maybeAutoTag(file.path);
       }),
     );
     this.registerEvent(
@@ -759,6 +766,99 @@ export default class AriadnePlugin extends Plugin {
     await this.app.workspace.openLinkText(path, "", false);
   }
 
+  /**
+   * Auto-tag a dated/journal entry with `<kind>/<ISO date>` — daily when
+   * log-shaped, journal when narrative dominates (see margin/tags).
+   *
+   * This is the plugin's one unprompted vault write, so its scope is
+   * surgical: only entries the journal detection already claims, only
+   * frontmatter tags matching Ariadne's own dated pattern (anything else in
+   * `tags:` is never touched), idempotent (the common case is a no-op
+   * decided from the metadata cache, no file write), and debounced so
+   * typing never races a frontmatter rewrite. The classification follows
+   * the note as it grows — a to-do list that turns into an essay gets its
+   * daily/ tag replaced by journal/.
+   */
+  private maybeAutoTag(path: string): void {
+    if (!this.settings.autoTagEntries || !this.isJournalPath(path)) return;
+    const prior = this.tagTimers.get(path);
+    if (prior) clearTimeout(prior);
+    this.tagTimers.set(
+      path,
+      setTimeout(() => {
+        this.tagTimers.delete(path);
+        void this.autoTag(path);
+      }, 3_000),
+    );
+  }
+
+  private managedPrefixes(): string[] {
+    return [this.settings.dailyTag, this.settings.journalTag].map((t) => `${t.trim()}/`);
+  }
+
+  private async autoTag(path: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    const iso =
+      dateOf(path) ?? new Date(file.stat.ctime).toISOString().slice(0, 10);
+    const content = await this.app.vault.cachedRead(file);
+    const tag = entryTag(
+      classifyEntry(content),
+      iso,
+      this.settings.dailyTag.trim() || "daily",
+      this.settings.journalTag.trim() || "journal",
+    );
+
+    // Idempotence from the cache: the write (and the changed-event it fires)
+    // only happens when the managed tag is actually wrong or missing.
+    const cached = this.app.metadataCache.getFileCache(file)?.frontmatter?.tags as unknown;
+    const cachedTags = (Array.isArray(cached) ? cached : typeof cached === "string" ? [cached] : [])
+      .filter((t): t is string => typeof t === "string")
+      .map(normalizeTag);
+    const prefixes = this.managedPrefixes();
+    const managed = cachedTags.filter(
+      (t) => isManagedEntryTag(t) && prefixes.some((p) => t.startsWith(p)),
+    );
+    if (managed.length === 1 && managed[0] === tag) return;
+
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      const raw = fm.tags;
+      const tags = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [])
+        .filter((t): t is string => typeof t === "string")
+        .map(normalizeTag)
+        .filter((t) => !(isManagedEntryTag(t) && prefixes.some((p) => t.startsWith(p))));
+      tags.push(tag);
+      fm.tags = tags;
+    });
+    this.log.debug(`auto-tagged ${path} as ${tag}`);
+  }
+
+  /** All tags on a note (inline + frontmatter), for suggestion pooling. */
+  private tagsOf(path: string): string[] {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return [];
+    const cache = this.app.metadataCache.getFileCache(file);
+    const inline = (cache?.tags ?? []).map((t) => t.tag);
+    const fm = cache?.frontmatter?.tags as unknown;
+    const fmTags = Array.isArray(fm) ? fm : typeof fm === "string" ? [fm] : [];
+    return [...inline, ...fmTags.filter((t): t is string => typeof t === "string")].map(
+      normalizeTag,
+    );
+  }
+
+  private async addTag(path: string, tag: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+      const raw = fm.tags;
+      const tags = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [])
+        .filter((t): t is string => typeof t === "string")
+        .map(normalizeTag);
+      if (!tags.some((t) => t.toLowerCase() === tag.toLowerCase())) tags.push(tag);
+      fm.tags = tags;
+    });
+  }
+
   private getWatcher(): DraftWatcher {
     this.watcher ??= new DraftWatcher();
     return this.watcher;
@@ -839,6 +939,7 @@ export default class AriadnePlugin extends Plugin {
 
   onunload(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    for (const timer of this.tagTimers.values()) clearTimeout(timer);
     this.workerClient?.dispose();
     if (this.workerBlobUrl) URL.revokeObjectURL(this.workerBlobUrl);
     if (this.ortBlobUrls) {

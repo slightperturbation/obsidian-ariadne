@@ -112,6 +112,56 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Auto-tag entries")
+      .setDesc(
+        "Tag dated/journal entries with kind/ISO-date in frontmatter — daily/2026-08-12 for " +
+          "log-shaped entries (lists, todos, meeting lines), journal/2026-08-12 when narrative " +
+          "dominates. The tag follows the note as it grows. Ariadne manages only its own dated " +
+          "tags and never touches others.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.autoTagEntries).onChange(async (v) => {
+          this.plugin.settings.autoTagEntries = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Entry tag names")
+      .setDesc("The two tag prefixes, daily and journal, if your taxonomy uses different words.")
+      .addText((t) =>
+        t
+          .setPlaceholder("daily")
+          .setValue(this.plugin.settings.dailyTag)
+          .onChange(async (v) => {
+            this.plugin.settings.dailyTag = v.trim() || "daily";
+            await this.plugin.saveSettings();
+          }),
+      )
+      .addText((t) =>
+        t
+          .setPlaceholder("journal")
+          .setValue(this.plugin.settings.journalTag)
+          .onChange(async (v) => {
+            this.plugin.settings.journalTag = v.trim() || "journal";
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Tag suggestions")
+      .setDesc(
+        "Offer tags in the Margin drawn from semantically-near notes' existing tags — never " +
+          "invented ones, so your taxonomy converges. Click adopts; × dismisses per note.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableTagSuggestions).onChange(async (v) => {
+          this.plugin.settings.enableTagSuggestions = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("On this day")
       .setDesc("In a dated note's Margin, show entries from this date in past months and years.")
       .addToggle((t) =>

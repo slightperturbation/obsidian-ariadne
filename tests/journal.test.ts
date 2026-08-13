@@ -5,6 +5,12 @@ import {
   isReflectiveProse,
   parseFolderList,
 } from "../src/margin/journal";
+import {
+  classifyEntry,
+  entryTag,
+  isManagedEntryTag,
+  suggestTags,
+} from "../src/margin/tags";
 
 describe("isReflectiveProse", () => {
   it("recognizes reflective prose: sentences with real length", () => {
@@ -69,5 +75,75 @@ describe("folder helpers", () => {
       "Morning pages",
     ]);
     expect(parseFolderList("")).toEqual([]);
+  });
+});
+
+describe("classifyEntry", () => {
+  const NARRATIVE =
+    "Today I finally understood why the migration keeps stalling: we are optimizing " +
+    "the part of the system nobody complains about. Writing it down made it obvious.";
+
+  it("a log-shaped entry is a daily note", () => {
+    const entry = [
+      "- [ ] email Sam about the review",
+      "- 9:30 standup",
+      "## Meetings",
+      "- platform sync, migration timelines discussed at length again",
+    ].join("\n\n");
+    expect(classifyEntry(entry)).toBe("daily");
+  });
+
+  it("narrative-dominated entries are journal entries", () => {
+    expect(classifyEntry(`${NARRATIVE}\n\n${NARRATIVE}`)).toBe("journal");
+  });
+
+  it("a to-do list with one thoughtful sentence is still a daily note", () => {
+    const entry = ["- [ ] email Sam", "- [ ] book flights", NARRATIVE].join("\n\n");
+    expect(classifyEntry(entry)).toBe("daily");
+  });
+
+  it("ignores frontmatter and defaults empty to daily", () => {
+    expect(classifyEntry("---\ntags: [x]\n---\n")).toBe("daily");
+  });
+});
+
+describe("entry tags + suggestions", () => {
+  it("entryTag builds kind/ISO-date and isManagedEntryTag recognizes it", () => {
+    expect(entryTag("journal", "2026-08-12", "daily", "journal")).toBe("journal/2026-08-12");
+    expect(entryTag("daily", "2026-08-12", "log", "reflect")).toBe("log/2026-08-12");
+    expect(isManagedEntryTag("journal/2026-08-12")).toBe(true);
+    expect(isManagedEntryTag("evolution")).toBe(false);
+    expect(isManagedEntryTag("project/atlas")).toBe(false);
+  });
+
+  it("suggests only corroborated neighbor tags, never the note's own", () => {
+    const suggested = suggestTags(
+      [
+        { cosine: 0.7, tags: ["#evolution", "biology"] },
+        { cosine: 0.65, tags: ["evolution", "complexity"] },
+        { cosine: 0.6, tags: ["already-mine"] },
+      ],
+      new Set(["already-mine"]),
+    );
+    expect(suggested).toEqual(["evolution"]); // two sources; biology/complexity have one weak source
+  });
+
+  it("one nearly-identical neighbor is evidence enough on its own", () => {
+    expect(suggestTags([{ cosine: 0.9, tags: ["morphogenesis"] }], new Set())).toEqual([
+      "morphogenesis",
+    ]);
+    expect(suggestTags([{ cosine: 0.6, tags: ["morphogenesis"] }], new Set())).toEqual([]);
+  });
+
+  it("never proposes managed entry tags — dated tags are per-entry, not topical", () => {
+    expect(
+      suggestTags(
+        [
+          { cosine: 0.9, tags: ["journal/2026-08-11"] },
+          { cosine: 0.9, tags: ["daily/2026-08-10"] },
+        ],
+        new Set(),
+      ),
+    ).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import type { DraftWatcher, DraftContext } from "../margin/draft-watcher";
 import type { TensionFinding } from "../margin/tension/detect";
 import type { WantedTopic } from "../margin/wanted";
 import { isReflectiveProse } from "../margin/journal";
+import { normalizeTag, suggestTags } from "../margin/tags";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
 export const ARIADNE_VIEW_TYPE = "ariadne-line";
@@ -40,6 +41,10 @@ export interface AriadneViewDeps {
   /** Offer promotion while writing reflective prose in a journal note. */
   promoteHint?: () => boolean;
   onPromote?: () => void;
+  /** Tag suggestions in the Margin: the neighbors' taxonomy, never invented. */
+  tagSuggestions?: () => boolean;
+  tagsOf?: (path: string) => string[];
+  onAddTag?: (path: string, tag: string) => void;
   /** True when no note dated today exists yet — the day hasn't been opened. */
   todayMissing?: () => boolean;
   /** Create (or open) today's entry, honoring the Daily Notes plugin. */
@@ -86,6 +91,8 @@ export class AriadneView extends ItemView {
   /** Wanted topics the user waved off — for this session. */
   private dismissedWanted = new Set<string>();
   private dismissedResurfaced = false;
+  /** Notes whose tag-suggestion row was waved off this session. */
+  private dismissedTagRows = new Set<string>();
 
   private results: ScoredResult[] = [];
   private selected = 0;
@@ -473,6 +480,7 @@ export class AriadneView extends ItemView {
       this.renderPromoteHint(doc, ctx);
       this.renderOnThisDay(this.marginEl, ctx.path);
     }
+    if (ctx) this.renderTagSuggestions(doc, ctx, results);
     this.renderWanted();
 
     // Same row component as the search results, so ⇧/⌥/⌘ mean the same thing
@@ -621,6 +629,54 @@ export class AriadneView extends ItemView {
       void this.app.workspace.openLinkText(path, "", false),
     );
     return row;
+  }
+
+  /**
+   * Tags for this note, drawn from its semantic neighbors' existing tags —
+   * corroborated (two sources) or nearly-identical (one very close source),
+   * and never invented, so the vault's taxonomy converges instead of
+   * sprawling. Click adopts a tag into frontmatter; × waves the row off for
+   * this note this session.
+   */
+  private renderTagSuggestions(doc: Document, ctx: DraftContext, results: ScoredResult[]): void {
+    if (!this.deps.tagSuggestions?.() || !this.deps.tagsOf || !this.deps.onAddTag) return;
+    if (this.dismissedTagRows.has(ctx.path)) return;
+    const own = new Set(this.deps.tagsOf(ctx.path).map((t) => normalizeTag(t).toLowerCase()));
+    const suggested = suggestTags(
+      results.map((r) => ({ cosine: r.cosine, tags: this.deps.tagsOf!(r.path) })),
+      own,
+    );
+    if (suggested.length === 0) return;
+
+    const row = doc.createElement("div");
+    row.classList.add("ariadne-tag-suggestions");
+    const label = doc.createElement("span");
+    label.classList.add("ariadne-kind-label");
+    label.textContent = "tags";
+    row.appendChild(label);
+    for (const tag of suggested) {
+      const el = doc.createElement("button");
+      el.type = "button";
+      el.classList.add("ariadne-tag-suggestion");
+      el.textContent = `#${tag}`;
+      el.setAttribute("aria-label", `Add the tag ${tag} to this note`);
+      el.addEventListener("click", () => {
+        this.deps.onAddTag!(ctx.path, tag);
+        el.remove();
+      });
+      row.appendChild(el);
+    }
+    const dismiss = doc.createElement("button");
+    dismiss.type = "button";
+    dismiss.classList.add("ariadne-dismiss");
+    dismiss.textContent = "×";
+    dismiss.setAttribute("aria-label", "Dismiss tag suggestions for this note");
+    dismiss.addEventListener("click", () => {
+      this.dismissedTagRows.add(ctx.path);
+      row.remove();
+    });
+    row.appendChild(dismiss);
+    this.marginEl.appendChild(row);
   }
 
   /**
