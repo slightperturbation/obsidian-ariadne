@@ -32,7 +32,7 @@ import { dateOf, looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
-import { classifyEntry, entryTag, isManagedEntryTag, normalizeTag } from "./margin/tags";
+import { classifyEntry, entryTag, isLegacyDatedTag, normalizeTag } from "./margin/tags";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -107,7 +107,13 @@ export default class AriadnePlugin extends Plugin {
    */
   private isJournalPath = (path: string): boolean => {
     if (looksPeriodic(path)) return true;
-    return inFolders(path, this.journalFolders());
+    if (inFolders(path, this.journalFolders())) return true;
+    // Fourth signal: an entry Ariadne (or the writer) already marked. Lets an
+    // undated entry outside any configured folder keep its journal treatment.
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return false;
+    const type = this.app.metadataCache.getFileCache(file)?.frontmatter?.type as unknown;
+    return typeof type === "string" && this.managedKinds().includes(type);
   };
 
   private journalFolders(): string[] {
@@ -351,6 +357,7 @@ export default class AriadnePlugin extends Plugin {
           tagSuggestions: () => this.settings.enableTagSuggestions,
           tagsOf: (path) => this.tagsOf(path),
           onAddTag: (path, tag) => void this.addTag(path, tag),
+          reservedTags: () => this.managedKinds(),
           todayMissing: () => {
             if (!this.settings.enableTodayHint) return false;
             const today = new Date().toISOString().slice(0, 10);
@@ -793,45 +800,65 @@ export default class AriadnePlugin extends Plugin {
     );
   }
 
-  private managedPrefixes(): string[] {
-    return [this.settings.dailyTag, this.settings.journalTag].map((t) => `${t.trim()}/`);
+  private managedKinds(): string[] {
+    return [
+      this.settings.dailyTag.trim() || "daily",
+      this.settings.journalTag.trim() || "journal",
+      // Always recognized, so renaming the setting doesn't strand old marks.
+      "daily",
+      "journal",
+    ];
   }
 
   private async autoTag(path: string): Promise<void> {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return;
-    const iso =
-      dateOf(path) ?? new Date(file.stat.ctime).toISOString().slice(0, 10);
+    const iso = dateOf(path) ?? new Date(file.stat.ctime).toISOString().slice(0, 10);
     const content = await this.app.vault.cachedRead(file);
-    const tag = entryTag(
+    const kind = entryTag(
       classifyEntry(content),
-      iso,
       this.settings.dailyTag.trim() || "daily",
       this.settings.journalTag.trim() || "journal",
     );
+    const kinds = this.managedKinds();
 
     // Idempotence from the cache: the write (and the changed-event it fires)
-    // only happens when the managed tag is actually wrong or missing.
-    const cached = this.app.metadataCache.getFileCache(file)?.frontmatter?.tags as unknown;
-    const cachedTags = (Array.isArray(cached) ? cached : typeof cached === "string" ? [cached] : [])
+    // only happens when something is actually wrong or missing.
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter as
+      | Record<string, unknown>
+      | undefined;
+    const raw = fm?.tags;
+    const cachedTags = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [])
       .filter((t): t is string => typeof t === "string")
       .map(normalizeTag);
-    const prefixes = this.managedPrefixes();
-    const managed = cachedTags.filter(
-      (t) => isManagedEntryTag(t) && prefixes.some((p) => t.startsWith(p)),
-    );
-    if (managed.length === 1 && managed[0] === tag) return;
+    const prefixes = kinds.map((k) => `${k}/`);
+    const tagsOk =
+      cachedTags.includes(kind) &&
+      !cachedTags.some((t) => t !== kind && kinds.includes(t)) &&
+      !cachedTags.some((t) => isLegacyDatedTag(t) && prefixes.some((p) => t.startsWith(p)));
+    // `type` is managed only while it's empty or one of our values — a hand-set
+    // type on a dated note (say, type: review) is the writer's call and stands.
+    const type = typeof fm?.type === "string" ? (fm.type as string) : undefined;
+    const typeOk = type !== undefined && !kinds.includes(type) ? true : type === kind;
+    // `date` is written only when absent: a hand-set date always wins.
+    const dateOk = fm?.date !== undefined && fm?.date !== null && fm?.date !== "";
+    if (tagsOk && typeOk && dateOk) return;
 
-    await this.app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
-      const raw = fm.tags;
-      const tags = (Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [])
+    await this.app.fileManager.processFrontMatter(file, (front: Record<string, unknown>) => {
+      const rawTags = front.tags;
+      const tags = (Array.isArray(rawTags) ? rawTags : typeof rawTags === "string" ? [rawTags] : [])
         .filter((t): t is string => typeof t === "string")
         .map(normalizeTag)
-        .filter((t) => !(isManagedEntryTag(t) && prefixes.some((p) => t.startsWith(p))));
-      tags.push(tag);
-      fm.tags = tags;
+        .filter((t) => !(t !== kind && kinds.includes(t)))
+        .filter((t) => !(isLegacyDatedTag(t) && prefixes.some((p) => t.startsWith(p))));
+      if (!tags.includes(kind)) tags.push(kind);
+      front.tags = tags;
+
+      const currentType = typeof front.type === "string" ? front.type : undefined;
+      if (currentType === undefined || kinds.includes(currentType)) front.type = kind;
+      if (front.date === undefined || front.date === null || front.date === "") front.date = iso;
     });
-    this.log.debug(`auto-tagged ${path} as ${tag}`);
+    this.log.debug(`marked ${path}: #${kind}, type=${kind}, date`);
   }
 
   /** All tags on a note (inline + frontmatter), for suggestion pooling. */

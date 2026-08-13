@@ -112,12 +112,13 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Auto-tag entries")
+      .setName("Mark entries automatically")
       .setDesc(
-        "Tag dated/journal entries with kind/ISO-date in frontmatter — daily/2026-08-12 for " +
-          "log-shaped entries (lists, todos, meeting lines), journal/2026-08-12 when narrative " +
-          "dominates. The tag follows the note as it grows. Ariadne manages only its own dated " +
-          "tags and never touches others.",
+        "Give dated/journal entries time-anchored structure: a kind tag (#daily for log-shaped " +
+          "entries, #journal when narrative dominates), a matching type property, and a date " +
+          "property with the standardized ISO date — so timelines, Bases views, and queries like " +
+          "type:journal since:2026-01-01 have real structure to work with. The kind follows the " +
+          "note as it grows. A hand-set type or date always wins; other tags are never touched.",
       )
       .addToggle((t) =>
         t.setValue(this.plugin.settings.autoTagEntries).onChange(async (v) => {

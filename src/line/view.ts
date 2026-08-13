@@ -45,6 +45,8 @@ export interface AriadneViewDeps {
   tagSuggestions?: () => boolean;
   tagsOf?: (path: string) => string[];
   onAddTag?: (path: string, tag: string) => void;
+  /** Kind tags (daily/journal): lifecycle marks, never topical suggestions. */
+  reservedTags?: () => string[];
   /** True when no note dated today exists yet — the day hasn't been opened. */
   todayMissing?: () => boolean;
   /** Create (or open) today's entry, honoring the Daily Notes plugin. */
@@ -641,7 +643,12 @@ export class AriadneView extends ItemView {
   private renderTagSuggestions(doc: Document, ctx: DraftContext, results: ScoredResult[]): void {
     if (!this.deps.tagSuggestions?.() || !this.deps.tagsOf || !this.deps.onAddTag) return;
     if (this.dismissedTagRows.has(ctx.path)) return;
-    const own = new Set(this.deps.tagsOf(ctx.path).map((t) => normalizeTag(t).toLowerCase()));
+    const own = new Set([
+      ...this.deps.tagsOf(ctx.path).map((t) => normalizeTag(t).toLowerCase()),
+      // A permanent note near journal entries must not be offered #journal —
+      // kind tags mark lifecycle, and lifecycle never propagates by topic.
+      ...(this.deps.reservedTags?.() ?? []).map((t) => t.toLowerCase()),
+    ]);
     const suggested = suggestTags(
       results.map((r) => ({ cosine: r.cosine, tags: this.deps.tagsOf!(r.path) })),
       own,

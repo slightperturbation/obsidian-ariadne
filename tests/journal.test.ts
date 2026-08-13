@@ -8,7 +8,7 @@ import {
 import {
   classifyEntry,
   entryTag,
-  isManagedEntryTag,
+  isLegacyDatedTag,
   suggestTags,
 } from "../src/margin/tags";
 
@@ -108,12 +108,13 @@ describe("classifyEntry", () => {
 });
 
 describe("entry tags + suggestions", () => {
-  it("entryTag builds kind/ISO-date and isManagedEntryTag recognizes it", () => {
-    expect(entryTag("journal", "2026-08-12", "daily", "journal")).toBe("journal/2026-08-12");
-    expect(entryTag("daily", "2026-08-12", "log", "reflect")).toBe("log/2026-08-12");
-    expect(isManagedEntryTag("journal/2026-08-12")).toBe(true);
-    expect(isManagedEntryTag("evolution")).toBe(false);
-    expect(isManagedEntryTag("project/atlas")).toBe(false);
+  it("entryTag is the plain kind name — the date lives in the date property", () => {
+    expect(entryTag("journal", "daily", "journal")).toBe("journal");
+    expect(entryTag("daily", "log", "reflect")).toBe("log");
+    // The short-lived dated scheme is recognized only for cleanup.
+    expect(isLegacyDatedTag("journal/2026-08-12")).toBe(true);
+    expect(isLegacyDatedTag("evolution")).toBe(false);
+    expect(isLegacyDatedTag("project/atlas")).toBe(false);
   });
 
   it("suggests only corroborated neighbor tags, never the note's own", () => {
@@ -135,7 +136,7 @@ describe("entry tags + suggestions", () => {
     expect(suggestTags([{ cosine: 0.6, tags: ["morphogenesis"] }], new Set())).toEqual([]);
   });
 
-  it("never proposes managed entry tags — dated tags are per-entry, not topical", () => {
+  it("never proposes legacy dated tags, and kind tags are excludable as reserved", () => {
     expect(
       suggestTags(
         [
@@ -145,5 +146,16 @@ describe("entry tags + suggestions", () => {
         new Set(),
       ),
     ).toEqual([]);
+    // Kind tags mark lifecycle; callers pass them as reserved (own-set union)
+    // so a permanent note near journal entries is never offered #journal.
+    expect(
+      suggestTags(
+        [
+          { cosine: 0.9, tags: ["journal", "evolution"] },
+          { cosine: 0.7, tags: ["journal", "evolution"] },
+        ],
+        new Set(["journal", "daily"]),
+      ),
+    ).toEqual(["evolution"]);
   });
 });

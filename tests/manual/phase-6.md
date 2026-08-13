@@ -210,18 +210,22 @@ classification needs it; echoes don't).
       ("August 12, 2026") names — an exotic daily-note format won't be
       recognized; turn the toggle off in that case.
 
-## 14. Entry auto-tagging + tag suggestions
+## 14. Entry marking (kind tag + type/date properties) + tag suggestions
 
 - [ ] **Daily vs journal.** In a dated note, write only task/bullet lines,
-      wait ~3s → frontmatter gains `daily/<today>`. Replace the content
-      with two narrative paragraphs, wait → the tag becomes
-      `journal/<today>` (the daily/ one is replaced, other tags untouched).
-- [ ] Add your own tag to the same note's frontmatter → Ariadne never
-      touches it, through repeated edits.
-- [ ] An undated note in a journal folder gets its creation date as the
-      tag date.
-- [ ] **Settings.** Auto-tag off → no tags written. Rename the prefixes
-      (e.g. log/reflect) → new tags use them.
+      wait ~3s → frontmatter gains `#daily`, `type: daily`, and
+      `date: <today>`. Replace the content with two narrative paragraphs,
+      wait → tag and type flip to journal; date stays.
+- [ ] Add your own tag to the note → never touched. Hand-set `type: review`
+      or your own `date` → Ariadne leaves both alone thereafter.
+- [ ] An undated note in a journal folder gets its creation date as `date`.
+- [ ] **The structure pays off:** in the Line, `type:journal` finds the
+      narrative entries; a Bases view can sort/filter on the `date`
+      property.
+- [ ] A permanent note whose neighbors are journal entries is never
+      offered `#journal` as a tag suggestion — kind is lifecycle, not topic.
+- [ ] **Settings.** Marking off → nothing written. Rename the kind names
+      (e.g. log/reflect) → new marks use them.
 - [ ] **Tag suggestions.** Open a note whose semantic neighbors share a
       tag it lacks → a quiet `tags  #x #y` row appears in the Margin.
       Click a tag → it lands in frontmatter and leaves the row. × hides

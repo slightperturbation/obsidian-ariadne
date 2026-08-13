@@ -8,9 +8,16 @@ import { isReflectiveProse } from "./journal";
  * (lists, todos, meeting lines, loose fragments) is a *daily note*; one
  * dominated by narrative prose is a *journal entry*. The bar is deliberately
  * asymmetric — a to-do list with one thoughtful sentence is still a daily
- * note; narrative must dominate to claim the journal tag. The resulting tag
- * is nested, `<kind>/<ISO date>`, so one tag carries both the classification
- * and the standardized date (e.g. `journal/2026-08-12`).
+ * note; narrative must dominate to claim the journal kind.
+ *
+ * Time-anchored notes get *structure*, not just a label, because the point
+ * of the anchoring is future use — timelines, "every journal entry from
+ * 2026". A dated tag per entry would mint a new tag every day and can't
+ * answer range queries; so the kind is a plain tag (`#daily`/`#journal`)
+ * plus a `type` property (the vault's existing convention, already
+ * queryable as `type:journal` in the Line), and the standardized ISO date
+ * is a real `date` property — sortable, range-filterable, and what a Bases
+ * timeline groups on.
  *
  * **Suggestion** mirrors the echo/tension tiering, with one governing rule:
  * Ariadne never invents a tag. Candidates come only from the tags already on
@@ -37,13 +44,16 @@ export function classifyEntry(content: string): EntryKind {
   return reflective > log ? "journal" : "daily";
 }
 
-/** The managed tag for an entry: `<kind prefix>/<ISO date>`. */
-export function entryTag(kind: EntryKind, isoDate: string, dailyTag: string, journalTag: string): string {
-  return `${kind === "journal" ? journalTag : dailyTag}/${isoDate}`;
+/** The managed kind tag for an entry — plain, undated. */
+export function entryTag(kind: EntryKind, dailyTag: string, journalTag: string): string {
+  return kind === "journal" ? journalTag : dailyTag;
 }
 
-/** Tags Ariadne manages (and may replace): anything ending in /YYYY-MM-DD. */
-export function isManagedEntryTag(tag: string): boolean {
+/**
+ * A dated tag from the short-lived earlier scheme (`kind/YYYY-MM-DD`) —
+ * recognized only to clean it up; the date now lives in the `date` property.
+ */
+export function isLegacyDatedTag(tag: string): boolean {
   return /\/\d{4}-\d{2}-\d{2}$/.test(tag);
 }
 
@@ -75,7 +85,7 @@ export function suggestTags(
   for (const n of neighbors) {
     const weight = n.cosine ?? 0.5; // lexical-only neighbors still count, weakly
     for (const tag of new Set(n.tags.map(normalizeTag))) {
-      if (!tag || ownTags.has(tag.toLowerCase()) || isManagedEntryTag(tag)) continue;
+      if (!tag || ownTags.has(tag.toLowerCase()) || isLegacyDatedTag(tag)) continue;
       const entry = score.get(tag) ?? { weight: 0, sources: 0 };
       entry.weight += weight;
       entry.sources += 1;
