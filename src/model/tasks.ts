@@ -405,3 +405,65 @@ export function parseSynthesis(text: string): string[] {
   }
   return [];
 }
+
+/* ── Publish screening: hold or clear, failing toward hold ────────────── */
+
+export const PUBLISH_SCREEN_SCHEMA = {
+  type: "object",
+  properties: {
+    verdict: {
+      type: "string",
+      enum: ["hold", "clear"],
+      description:
+        "hold = anything personal, emotional, intimate, health- or finance-related, venting, confidential, or about identifiable private individuals; clear = impersonal ideas, concepts, references — the kind of note written for a public digital garden",
+    },
+    reason: {
+      type: "string",
+      description:
+        "For hold: one terse fragment (≤12 words, lowercase start) naming what makes it private. Omit for clear.",
+    },
+  },
+  required: ["verdict"],
+  additionalProperties: false,
+} as const;
+
+export function publishScreenPrompt(input: {
+  title: string;
+  content: string;
+  localFlags: string[];
+}): string {
+  return [
+    `A writer keeps a public digital garden ("working with the garage door open") and a private journal in one vault. Judge whether this note is safe to publish to the PUBLIC web.`,
+    ``,
+    `HOLD anything with: personal or emotional disclosure; the writer's relationships, family, or named private individuals; health, therapy, or intimacy; personal finances; venting or unprocessed feelings; confidential work details.`,
+    `CLEAR only notes that are confidently impersonal: ideas, concepts, book notes, techniques — things written about the world rather than about the writer's life.`,
+    `When uncertain, HOLD. A wrongly-held note costs one click; a wrongly-cleared note is on the internet.`,
+    ``,
+    ...(input.localFlags.length > 0
+      ? [`Local scanners flagged: ${input.localFlags.join("; ")}.`, ``]
+      : []),
+    `Note "${input.title}":`,
+    input.content,
+  ].join("\n");
+}
+
+export function parsePublishScreen(text: string): { verdict: "hold" | "clear"; reason?: string } {
+  try {
+    const parsed = JSON.parse(text) as { verdict?: unknown; reason?: unknown };
+    if (parsed.verdict === "clear") return { verdict: "clear" };
+    if (parsed.verdict === "hold") {
+      return {
+        verdict: "hold",
+        reason:
+          typeof parsed.reason === "string" && parsed.reason.trim()
+            ? parsed.reason.trim().replace(/\.$/, "")
+            : undefined,
+      };
+    }
+  } catch {
+    /* fall through */
+  }
+  // The inverse of every other parser here: malformed output must HOLD.
+  // Failing open on a privacy gate is not a degradation, it's a breach.
+  return { verdict: "hold", reason: "screening answer was unreadable" };
+}

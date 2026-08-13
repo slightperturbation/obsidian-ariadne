@@ -65,6 +65,15 @@ export interface AriadneSettings {
   /** Local hour (0–23) after which the panel offers "close the day". */
   closeDayHour: number;
 
+  // Publishing
+  /** The departure lounge: screen notes before Obsidian Publish uploads. */
+  enablePublishReview: boolean;
+  /**
+   * Folders that are categorically private (never publish candidates), on
+   * top of journal detection. Comma-separated.
+   */
+  privateFolders: string;
+
   // Margin
   enableMargin: boolean;
   /**
@@ -123,6 +132,9 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   journalTag: "journal",
   enableTagSuggestions: true,
   closeDayHour: 18,
+
+  enablePublishReview: true,
+  privateFolders: "Journal, Inbox, Archive",
 
   enableMargin: true,
   tensionMode: "quiet",

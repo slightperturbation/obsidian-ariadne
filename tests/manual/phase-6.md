@@ -285,3 +285,29 @@ classification needs it; echoes don't).
       "＋ Create note "…" · ⇧ capture to Inbox". ⇧↵ (or ⇧-click) captures
       instantly to the Inbox with no model call; plain ↵ scaffolds as
       before. On touch, the row carries a Capture button.
+
+## 18. The departure lounge (publish review)
+
+Needs the Obsidian Publish core plugin enabled.
+
+- [ ] **Affordance.** With Publish enabled and unscreened changes, the
+      Vault zone shows "↳ review for publish · N changed". With Publish
+      disabled or the setting off, it never appears.
+- [ ] **Screening.** Run it. A personal/emotional note is HELD with a
+      reason; a clean idea note is CLEARED and its frontmatter gains
+      `publish: true`; held notes gain `publish: false`. A cleared note
+      with links to journal entries or TODOs lands in "needs polish".
+- [ ] **The bedroom has no door.** Journal entries and private-folder
+      notes never appear in the modal at all — the summary says so.
+- [ ] **Loud override.** A held note's "Override…" arms to "Yes, publish
+      this" (destructive style) and only a second click within 5s
+      releases it. It's remembered as overridden.
+- [ ] **Fail-safe.** With no API key: flagged notes are held on local
+      signals; unflagged ones say "awaiting your review" and clear only
+      by your click. Nothing auto-clears.
+- [ ] **Cost.** Re-running without edits screens nothing (ledger hash
+      match). Editing one note → next run screens exactly one.
+- [ ] **The actuator.** Open Obsidian's Publish dialog and upload the
+      cleared notes — Ariadne never uploads anything itself.
+- [ ] **Auto-marking.** New journal entries automatically carry
+      `publish: false` in frontmatter (defense in depth).

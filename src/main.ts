@@ -33,6 +33,7 @@ import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
 import { classifyEntry, entryTag, isLegacyDatedTag, normalizeTag } from "./margin/tags";
+import type { PublishLedger } from "./publish/screen";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -105,6 +106,23 @@ export default class AriadnePlugin extends Plugin {
     date: string;
     pick: { path: string; title: string; line?: string } | null;
   };
+  private publishLedgerCache?: PublishLedger;
+  private publishCount?: { at: number; n: number };
+
+  private publishLedgerPath(): string {
+    return normalizePath(`${this.manifest.dir}/ariadne-publish.json`);
+  }
+
+  /** Is the Obsidian Publish core plugin present and enabled? */
+  private publishAvailable(): boolean {
+    const plugin = (
+      this.app as unknown as {
+        internalPlugins?: { getPluginById?: (id: string) => { enabled?: boolean } | null };
+      }
+    ).internalPlugins?.getPluginById?.("publish");
+    return !!plugin && plugin.enabled !== false;
+  }
+
   /** Once-per-session theme teaser: cluster count without naming or modal. */
   private themesTeaserCount?: number;
   private themesScanned = false;
@@ -202,6 +220,28 @@ export default class AriadnePlugin extends Plugin {
       inboxFolder: () => this.settings.inboxFolder,
       archiveFolder: () => this.settings.archiveFolder,
       isJournal: (path) => this.isJournalPath(path),
+      privateFolders: () => [
+        ...parseFolderList(this.settings.privateFolders),
+        ...this.journalFolders(),
+      ],
+      publishLedger: {
+        load: async () => {
+          if (this.publishLedgerCache) return this.publishLedgerCache;
+          try {
+            const raw = await this.app.vault.adapter.read(this.publishLedgerPath());
+            this.publishLedgerCache = JSON.parse(raw) as PublishLedger;
+          } catch {
+            this.publishLedgerCache = {};
+          }
+          return this.publishLedgerCache;
+        },
+        save: async (ledger) => {
+          this.publishLedgerCache = ledger;
+          await this.app.vault.adapter
+            .write(this.publishLedgerPath(), JSON.stringify(ledger))
+            .catch((err) => this.log.warn(`publish ledger save failed: ${String(err)}`));
+        },
+      },
       log: this.log,
     });
     this.status.set({
@@ -302,6 +342,12 @@ export default class AriadnePlugin extends Plugin {
       id: "resolve-untitled",
       name: "Resolve untitled notes",
       callback: () => void this.actions.resolveUntitled(),
+    });
+
+    this.addCommand({
+      id: "review-for-publish",
+      name: "Review notes for publish",
+      callback: () => void this.actions.reviewForPublish(),
     });
 
     this.addCommand({
@@ -419,6 +465,17 @@ export default class AriadnePlugin extends Plugin {
           onThemes: () => void this.actions.findJournalThemes(),
           promotedToday: () => this.actions.promotedToday(),
           onCapture: (seed) => void this.actions.captureThought(seed),
+          publishChanged: () => {
+            if (!this.settings.enablePublishReview || !this.publishAvailable()) return 0;
+            if (!this.publishCount || Date.now() - this.publishCount.at > 30_000) {
+              this.publishCount = { at: Date.now(), n: this.publishCount?.n ?? 0 };
+              void this.actions.publishChangedCount().then((n) => {
+                this.publishCount = { at: Date.now(), n };
+              });
+            }
+            return this.publishCount.n;
+          },
+          onPublishReview: () => void this.actions.reviewForPublish(),
           onSplit: () => void this.actions.splitNote(),
           onMerge: () => void this.actions.mergeNote(),
           touch: () => this.policy.touch,
@@ -941,7 +998,8 @@ export default class AriadnePlugin extends Plugin {
     const typeOk = type !== undefined && !kinds.includes(type) ? true : type === kind;
     // `date` is written only when absent: a hand-set date always wins.
     const dateOk = fm?.date !== undefined && fm?.date !== null && fm?.date !== "";
-    if (tagsOk && typeOk && dateOk) return;
+    const publishOk = fm?.publish !== undefined;
+    if (tagsOk && typeOk && dateOk && publishOk) return;
 
     // The writer may still be typing: flush open editors for this file so
     // the frontmatter rewrite merges with their buffer instead of racing it.
@@ -963,6 +1021,9 @@ export default class AriadnePlugin extends Plugin {
       const currentType = typeof front.type === "string" ? front.type : undefined;
       if (currentType === undefined || kinds.includes(currentType)) front.type = kind;
       if (front.date === undefined || front.date === null || front.date === "") front.date = iso;
+      // Defense in depth for the bedroom: a journal entry carries an explicit
+      // publish: false unless the writer has said otherwise by hand.
+      if (front.publish === undefined) front.publish = false;
     });
     this.log.debug(`marked ${path}: #${kind}, type=${kind}, date`);
   }

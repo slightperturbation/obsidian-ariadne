@@ -206,6 +206,35 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("Publishing").setHeading();
+
+    new Setting(containerEl)
+      .setName("Review before publish")
+      .setDesc(
+        "The departure lounge (needs the Obsidian Publish plugin): screens changed notes — " +
+          "personal, emotional, or about people → held; impersonal ideas → cleared and marked " +
+          "publish: true. Journals and private folders are never offered. Holds release only via " +
+          "a per-note two-step override. Obsidian's Publish dialog does the actual uploading.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enablePublishReview).onChange(async (v) => {
+          this.plugin.settings.enablePublishReview = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Private folders")
+      .setDesc(
+        "Never publish candidates, in addition to journal detection. Comma-separated.",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.privateFolders).onChange(async (v) => {
+          this.plugin.settings.privateFolders = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName("Margin").setHeading();
 
     new Setting(containerEl)

@@ -57,6 +57,14 @@ import { ItemActionsModal, type ActionableItem } from "../ui/item-actions-modal"
 import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
 import { clusterThemes, type EntryNeighbors } from "./themes";
+import {
+  changedSince,
+  contentHash,
+  personalSignals,
+  polishProblems,
+  type LedgerEntry,
+  type PublishLedger,
+} from "../publish/screen";
 import { dateOf, isoWeekLabel, localISODate } from "../core/periodic";
 import { classifyEntry } from "../margin/tags";
 import { onThisDay, resurfacePick } from "../margin/resurface";
@@ -66,6 +74,9 @@ import {
   TRIAGE_SCHEMA,
   THEME_SCHEMA,
   SYNTHESIS_SCHEMA,
+  PUBLISH_SCREEN_SCHEMA,
+  parsePublishScreen,
+  publishScreenPrompt,
   parseTitle,
   parseTriage,
   parseTheme,
@@ -112,6 +123,10 @@ export class ActionsController {
       archiveFolder: () => string;
       /** Journal/dated-entry detection (names + configured folders). */
       isJournal: (path: string) => boolean;
+      /** Categorically-private folders (publishing). */
+      privateFolders: () => string[];
+      /** The publish ledger's home (plugin-dir JSON, adapter-backed). */
+      publishLedger: { load(): Promise<PublishLedger>; save(l: PublishLedger): Promise<void> };
       log: Logger;
     },
   ) {}
@@ -907,6 +922,234 @@ export class ActionsController {
     ].join("\n");
     await this.deps.executor.apply({ title: `Create "${title}"`, changes: [{ type: "create", path, after: body }] });
     await app.workspace.openLinkText(path, "", false);
+  }
+
+  /* ── Publishing: the departure lounge ───────────────────────────────── */
+
+  /** Notes screened per review run — bounds reads and model calls. */
+  private static readonly SCREEN_BATCH = 15;
+
+  /** Tier 0: is this note even a candidate? The bedroom never is. */
+  private isPublishCandidate(path: string): boolean {
+    if (this.deps.isJournal(path)) return false;
+    const folders = this.deps.privateFolders();
+    return !folders.some((f) => f.length > 0 && (path === f || path.startsWith(`${f}/`)));
+  }
+
+  /** Changed-candidate count for the Vault affordance — mtime-cheap. */
+  async publishChangedCount(): Promise<number> {
+    const ledger = await this.deps.publishLedger.load();
+    const files = this.deps.app.vault
+      .getMarkdownFiles()
+      .filter((f) => this.isPublishCandidate(f.path))
+      .map((f) => ({ path: f.path, mtime: f.stat.mtime }));
+    return changedSince(ledger, files).length;
+  }
+
+  /**
+   * The departure lounge. Screens changed candidates (tier 1 local nets →
+   * tier 2 model, biased to hold, parse failure = hold), embodies the
+   * verdicts as `publish:` frontmatter, and presents the full ledger for
+   * review. Obsidian's own Publish dialog remains the actuator: this flow
+   * cannot upload anything, and a held note can only be released by a loud
+   * two-step per-note override. With no model, nothing auto-clears — every
+   * candidate awaits the human's explicit clear, which is the correct
+   * reviewer of last resort.
+   */
+  async reviewForPublish(): Promise<void> {
+    const { app } = this.deps;
+    const ledger = await this.deps.publishLedger.load();
+    const candidates = app.vault.getMarkdownFiles().filter((f) => this.isPublishCandidate(f.path));
+
+    // Drop ledger entries for notes that moved into the bedroom or vanished.
+    const candidatePaths = new Set(candidates.map((f) => f.path));
+    for (const path of Object.keys(ledger)) {
+      if (!candidatePaths.has(path)) delete ledger[path];
+    }
+
+    const stale = new Set(
+      changedSince(
+        ledger,
+        candidates.map((f) => ({ path: f.path, mtime: f.stat.mtime })),
+      ),
+    );
+    const batch = candidates.filter((f) => stale.has(f.path)).slice(0, ActionsController.SCREEN_BATCH);
+
+    let modelOk = this.deps.router.available();
+    await this.withWorkingNotice(
+      batch.length > 0 ? `Ariadne is screening ${batch.length} changed note(s)…` : "Ariadne is checking the ledger…",
+      async () => {
+        for (const file of batch) {
+          const content = await app.vault.cachedRead(file);
+          const hash = contentHash(content);
+          const prior = ledger[file.path];
+          if (prior?.hash === hash) {
+            // mtime moved but content didn't (e.g. frontmatter-only churn we
+            // wrote ourselves) — keep the verdict, refresh the probe.
+            prior.mtime = file.stat.mtime;
+            continue;
+          }
+          const flags = personalSignals(content);
+          let entry: LedgerEntry;
+          if (modelOk) {
+            try {
+              const verdict = parsePublishScreen(
+                await this.deps.router.run(
+                  "scaffold",
+                  publishScreenPrompt({
+                    title: file.basename,
+                    content: content.slice(0, 2000),
+                    localFlags: flags,
+                  }),
+                  { schema: PUBLISH_SCREEN_SCHEMA as unknown as Record<string, unknown>, maxTokens: 150 },
+                ),
+              );
+              if (verdict.verdict === "hold") {
+                entry = {
+                  hash,
+                  mtime: file.stat.mtime,
+                  state: "held",
+                  reasons: [verdict.reason ?? "personal content", ...flags].slice(0, 3),
+                };
+              } else {
+                const problems = this.polishFor(file.path, content);
+                entry = {
+                  hash,
+                  mtime: file.stat.mtime,
+                  state: problems.length > 0 ? "polish" : "cleared",
+                  reasons: problems,
+                };
+              }
+            } catch (err) {
+              if (err instanceof BudgetExceededError) {
+                modelOk = false;
+                new Notice("Session cost limit reached — remaining notes await your review.");
+              }
+              this.deps.log.warn(`publish screen failed for ${file.path}: ${String(err)}`);
+              entry = { hash, mtime: file.stat.mtime, state: "unreviewed", reasons: flags };
+            }
+          } else if (flags.length > 0) {
+            // No model: a locally-flagged note is held, not merely queued.
+            entry = {
+              hash,
+              mtime: file.stat.mtime,
+              state: "held",
+              reasons: [...flags, "no model to review — held on local signals"],
+            };
+          } else {
+            entry = { hash, mtime: file.stat.mtime, state: "unreviewed", reasons: [] };
+          }
+          ledger[file.path] = entry;
+          await this.embodyVerdict(file.path, entry);
+        }
+      },
+    );
+    await this.deps.publishLedger.save(ledger);
+    this.presentPublishReview(ledger, stale.size - batch.length);
+  }
+
+  /** Polish problems for a cleared note — including the bedroom-link leak. */
+  private polishFor(path: string, content: string): string[] {
+    const { app } = this.deps;
+    const resolved = app.metadataCache.resolvedLinks[path] ?? {};
+    const privateLinks = Object.keys(resolved)
+      .filter((target) => target.endsWith(".md") && !this.isPublishCandidate(target))
+      .map((t) => t.split("/").pop()!.replace(/\.md$/, ""));
+    const unresolvedLinks = Object.keys(app.metadataCache.unresolvedLinks[path] ?? {});
+    return polishProblems({ content, privateLinks, unresolvedLinks });
+  }
+
+  /** Advice embodied: the verdict becomes the note's `publish:` frontmatter. */
+  private async embodyVerdict(path: string, entry: LedgerEntry): Promise<void> {
+    const file = this.deps.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    const shouldPublish = entry.state === "cleared" || entry.overridden === true;
+    await this.deps.app.fileManager
+      .processFrontMatter(file, (fm: Record<string, unknown>) => {
+        fm.publish = shouldPublish;
+      })
+      .catch((err) => this.deps.log.warn(`publish mark failed for ${path}: ${String(err)}`));
+  }
+
+  private presentPublishReview(ledger: PublishLedger, remaining: number): void {
+    const { app } = this.deps;
+    const rows = Object.entries(ledger);
+    const held = rows.filter(([, e]) => e.state === "held" && !e.overridden);
+    const unreviewed = rows.filter(([, e]) => e.state === "unreviewed");
+    const polish = rows.filter(([, e]) => e.state === "polish");
+    const cleared = rows.filter(([, e]) => e.state === "cleared" || e.overridden);
+
+    const open = (path: string) => ({
+      label: "Open",
+      run: () => {
+        void app.workspace.openLinkText(path, "", false);
+        return false;
+      },
+    });
+    const clearAction = (path: string, entry: LedgerEntry) => ({
+      label: "Clear",
+      run: async () => {
+        entry.state = "cleared";
+        entry.reasons = [];
+        await this.embodyVerdict(path, entry);
+        await this.deps.publishLedger.save(ledger);
+        return true;
+      },
+    });
+
+    const items: ActionableItem[] = [];
+    for (const [path, entry] of held) {
+      items.push({
+        title: path.split("/").pop()!.replace(/\.md$/, ""),
+        detail: `held — ${entry.reasons.join("; ") || "personal content"}`,
+        actions: [
+          open(path),
+          {
+            label: "Override…",
+            destructive: true,
+            confirmLabel: "Yes, publish this",
+            run: async () => {
+              entry.overridden = true;
+              await this.embodyVerdict(path, entry);
+              await this.deps.publishLedger.save(ledger);
+              return true;
+            },
+          },
+        ],
+      });
+    }
+    for (const [path, entry] of unreviewed) {
+      items.push({
+        title: path.split("/").pop()!.replace(/\.md$/, ""),
+        detail: "awaiting your review" + (entry.reasons.length ? ` — ${entry.reasons.join("; ")}` : ""),
+        actions: [open(path), clearAction(path, entry)],
+      });
+    }
+    for (const [path, entry] of polish) {
+      items.push({
+        title: path.split("/").pop()!.replace(/\.md$/, ""),
+        detail: `needs polish — ${entry.reasons.join("; ")}`,
+        actions: [open(path), { ...clearAction(path, entry), label: "Clear anyway" }],
+      });
+    }
+
+    if (items.length === 0) {
+      new Notice(
+        `All ${cleared.length} candidate notes are cleared and marked publish: true. ` +
+          `Open Obsidian's Publish dialog to upload.` +
+          (remaining > 0 ? ` (${remaining} more changed notes — run again.)` : ""),
+      );
+      return;
+    }
+    new ItemActionsModal(app, {
+      title: "Review for publish",
+      description:
+        `Cleared: ${cleared.length} (marked publish: true). Journals and private folders are ` +
+        `never offered here — that exception is a hand-written publish: true, deliberately ` +
+        `outside this flow. Obsidian's Publish dialog does the uploading; publish what's cleared.` +
+        (remaining > 0 ? ` ${remaining} more changed notes await the next run.` : ""),
+      items,
+    }).open();
   }
 
   /** Recent dated entries examined for recurring themes. */

@@ -76,6 +76,9 @@ export interface AriadneViewDeps {
   promotedToday?: () => number;
   /** Zero-ceremony capture of the query text (⇧↵ on the create row). */
   onCapture?: (seed: string) => void;
+  /** Changed publish candidates since the last review (0 = quiet). */
+  publishChanged?: () => number;
+  onPublishReview?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
@@ -754,6 +757,15 @@ export class AriadneView extends ItemView {
         `recurring themes · ${themeCount}`,
         "Review recurring journal themes without a permanent note",
         () => this.deps.onThemes!(),
+      );
+    }
+    const publishChanged = this.deps.publishChanged?.() ?? 0;
+    if (publishChanged > 0 && this.deps.onPublishReview) {
+      this.verbRow(
+        this.wantedEl,
+        `review for publish · ${publishChanged} changed`,
+        "Screen changed notes before publishing",
+        () => this.deps.onPublishReview!(),
       );
     }
   }

@@ -10,6 +10,12 @@ export interface ItemAction {
    * Escape and focus land on the wrong surface.
    */
   closesModal?: boolean;
+  /**
+   * Two-step confirmation: the first click arms the button with this label
+   * (styled destructive); only a second click within 5 s runs. For actions
+   * whose mistake is expensive — publishing a held note is the archetype.
+   */
+  confirmLabel?: string;
   /** Runs on click. Return true to remove the row (the item is handled). */
   run(): Promise<boolean> | boolean;
 }
@@ -79,6 +85,21 @@ export class ItemActionsModal extends Modal {
         btn.textContent = action.label;
         if (action.destructive) btn.classList.add("mod-warning");
         btn.addEventListener("click", () => {
+          if (action.confirmLabel && btn.dataset.armed !== "1") {
+            btn.dataset.armed = "1";
+            const original = btn.textContent;
+            btn.textContent = action.confirmLabel;
+            btn.classList.add("mod-warning");
+            window.setTimeout(() => {
+              if (btn.dataset.armed === "1") {
+                btn.dataset.armed = "";
+                btn.textContent = original;
+                if (!action.destructive) btn.classList.remove("mod-warning");
+              }
+            }, 5000);
+            return;
+          }
+          btn.dataset.armed = "";
           void (async () => {
             if (action.closesModal) {
               this.close();
