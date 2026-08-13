@@ -701,6 +701,7 @@ export class ActionsController {
       insertAt !== undefined &&
       insertAt.line < nowView!.editor.lineCount() &&
       nowView!.editor.getLine(insertAt.line) === lineAtCapture;
+    this.notePromotion();
     if (insertAt && sameLine) {
       nowView!.editor.replaceRange(` [[${noteName}]]`, insertAt);
       new Notice(`Promoted to ${path} — elaborate it when ready.`);
@@ -918,13 +919,16 @@ export class ActionsController {
    * call — local box when awake) and one keystroke to become a scaffolded
    * note whose seed carries the journal evidence.
    */
-  async findJournalThemes(): Promise<void> {
+  /**
+   * The free half of theme discovery: gather + cluster, no model, no modal.
+   * Shared by the full command and the Vault zone's once-per-session teaser.
+   * Returns null when the device can't answer (no stored vectors) or the
+   * journal is too thin to cluster.
+   */
+  async gatherThemeClusters(): Promise<ReturnType<typeof clusterThemes> | null> {
     const { app } = this.deps;
     const manager = this.deps.manager();
-    if (!manager?.hasStoredVectors()) {
-      new Notice("Themes need the semantic index — wait for it to finish, or check the glyph.");
-      return;
-    }
+    if (!manager?.hasStoredVectors()) return null;
     // Only narrative entries seed themes. A log-shaped daily note recurs for
     // operational reasons — the same project's meeting notes cluster tightly
     // every week — and proposing that as a "recurring theme" would be a
@@ -938,34 +942,40 @@ export class ActionsController {
     for (const f of candidates) {
       if (classifyEntry(await app.vault.cachedRead(f)) === "journal") dated.push(f);
     }
-    this.deps.log.debug(
-      `themes: ${dated.length} narrative entries of ${candidates.length} dated`,
-    );
-    if (dated.length < 3) {
-      new Notice("Not enough narrative journal entries to look for themes yet.");
+    this.deps.log.debug(`themes: ${dated.length} narrative entries of ${candidates.length} dated`);
+    if (dated.length < 3) return null;
+
+    const neighborhoods: EntryNeighbors[] = [];
+    for (const file of dated) {
+      const hits = await manager.relatedToPath(file.path, { limit: 8 });
+      if (hits.length === 0) continue; // no vectors yet (edited on a reader)
+      neighborhoods.push({
+        path: file.path,
+        hits: hits.map((h) => ({
+          path: h.path,
+          title: h.title,
+          snippet: h.snippet,
+          cosine: h.cosine,
+          periodic: this.deps.isJournal(h.path),
+        })),
+      });
+    }
+    return clusterThemes(neighborhoods);
+  }
+
+  async findJournalThemes(): Promise<void> {
+    const { app } = this.deps;
+    const manager = this.deps.manager();
+    if (!manager?.hasStoredVectors()) {
+      new Notice("Themes need the semantic index — wait for it to finish, or check the glyph.");
       return;
     }
 
     const items: ActionableItem[] = [];
     let themesModelOk = true;
-    await this.withWorkingNotice(`Ariadne is reading ${dated.length} journal entries…`, async () => {
-      const neighborhoods: EntryNeighbors[] = [];
-      for (const file of dated) {
-        const hits = await manager.relatedToPath(file.path, { limit: 8 });
-        if (hits.length === 0) continue; // no vectors yet (edited on a reader)
-        neighborhoods.push({
-          path: file.path,
-          hits: hits.map((h) => ({
-            path: h.path,
-            title: h.title,
-            snippet: h.snippet,
-            cosine: h.cosine,
-            periodic: this.deps.isJournal(h.path),
-          })),
-        });
-      }
-
-      for (const theme of clusterThemes(neighborhoods).slice(0, 5)) {
+    await this.withWorkingNotice(`Ariadne is reading the journal…`, async () => {
+      const clusters = (await this.gatherThemeClusters()) ?? [];
+      for (const theme of clusters.slice(0, 5)) {
         // Name it — cheap labeling, so the local box takes it when awake.
         let named: { title: string; gist?: string } | null = null;
         if (themesModelOk && this.deps.router.available()) {
@@ -1125,6 +1135,18 @@ export class ActionsController {
 
   /** Reset per run; false after the cost cap stops mid-batch model calls. */
   private triageModelOk = true;
+  /** Promotions made today (session-scoped) — the Today zone's tally. */
+  private promotedOn = { date: "", count: 0 };
+
+  promotedToday(): number {
+    return this.promotedOn.date === localISODate() ? this.promotedOn.count : 0;
+  }
+
+  private notePromotion(): void {
+    const today = localISODate();
+    if (this.promotedOn.date !== today) this.promotedOn = { date: today, count: 0 };
+    this.promotedOn.count += 1;
+  }
 
   async triageInbox(): Promise<void> {
     this.triageModelOk = true;

@@ -71,6 +71,9 @@ const SNIPPET_MAX = 160;
 const VECTOR_FLOOR = 0.6;
 /** How many chunks to pull from each ranked list before fusing. */
 const CANDIDATES = 100;
+/** How long an embed+scan result may be reused (one pause's fan-out). */
+const SEMANTIC_MEMO_MS = 10_000;
+const SEMANTIC_MEMO_MAX = 8;
 
 /** Frontmatter values worth searching (aliases, tags) flattened to text. */
 function searchableMeta(frontmatter?: Record<string, unknown>): string {
@@ -125,6 +128,8 @@ export class IndexManager {
   revision = 0;
   /** Notes touched since the last successful save — drives delta writes. */
   private dirtySincePersist = new Set<string>();
+  /** Short-lived memo of embed+scan results (see semanticHits). */
+  private semanticCache = new Map<string, { at: number; revision: number; hits: VectorHit[] }>();
 
   constructor(private embedder?: EmbeddingProvider) {
     if (embedder) {
@@ -434,16 +439,35 @@ export class IndexManager {
    * a single round trip; otherwise it falls back to embed-then-search.
    */
   private async semanticHits(text: string, asQuery: boolean): Promise<VectorHit[]> {
+    // One typing pause fans out to three consumers (Margin, tension, ghost)
+    // that all ask about the same paragraph — this memo makes that one
+    // embedding + one scan instead of three. Keyed on the revision so an
+    // index update invalidates it; TTL-bounded so it can never serve stale
+    // results across pauses.
+    const key = `${asQuery ? "q" : "d"}:${text}`;
+    const cached = this.semanticCache.get(key);
+    if (cached && cached.revision === this.revision && Date.now() - cached.at < SEMANTIC_MEMO_MS) {
+      return cached.hits;
+    }
+
     const store = this.vectors!;
     const floor = this.embedder!.floor ?? VECTOR_FLOOR;
+    let hits: VectorHit[];
     if (store.embedAndSearch) {
-      return store.embedAndSearch(text, { asQuery, limit: CANDIDATES, floor });
+      hits = await store.embedAndSearch(text, { asQuery, limit: CANDIDATES, floor });
+    } else {
+      const vec =
+        asQuery && this.embedder!.embedQuery
+          ? await this.embedder!.embedQuery(text)
+          : (await this.embedder!.embed([text]))[0];
+      hits = await store.search(vec, CANDIDATES, floor);
     }
-    const vec =
-      asQuery && this.embedder!.embedQuery
-        ? await this.embedder!.embedQuery(text)
-        : (await this.embedder!.embed([text]))[0];
-    return store.search(vec, CANDIDATES, floor);
+    this.semanticCache.set(key, { at: Date.now(), revision: this.revision, hits });
+    if (this.semanticCache.size > SEMANTIC_MEMO_MAX) {
+      const oldest = this.semanticCache.keys().next().value;
+      if (oldest !== undefined) this.semanticCache.delete(oldest);
+    }
+    return hits;
   }
 
   /**

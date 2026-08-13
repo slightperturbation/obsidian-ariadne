@@ -69,6 +69,13 @@ export interface AriadneViewDeps {
   /** Contextual verbs for the Now zone. */
   onSplit?: () => void;
   onMerge?: () => void;
+  /** Uncaptured theme clusters from the session's one background scan. */
+  themesTeaser?: () => number;
+  onThemes?: () => void;
+  /** Promotions made today — the Today row's tally. */
+  promotedToday?: () => number;
+  /** Zero-ceremony capture of the query text (⇧↵ on the create row). */
+  onCapture?: (seed: string) => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
@@ -392,11 +399,30 @@ export class AriadneView extends ItemView {
       const row = doc.createElement("div");
       row.classList.add("ariadne-row", "ariadne-do-row");
       if (this.selected === this.results.length) row.classList.add("is-selected");
-      row.textContent = `＋ Create note “${this.inputEl.value.trim()}”`;
+      const canCapture = !!this.deps.onCapture;
+      row.textContent =
+        `＋ Create note “${this.inputEl.value.trim()}”` +
+        (canCapture && !this.touch ? "  ·  ⇧ capture to Inbox" : "");
       row.addEventListener("mousedown", (ev) => {
+        if (ev.target instanceof Element && ev.target.closest("button")) return;
         ev.preventDefault();
-        this.deps.onCreateNote?.(this.inputEl.value.trim());
+        // ⇧: the thought isn't ready to be a note — it's ready to be KEPT.
+        // Capture is instant and local; scaffolding shapes and costs.
+        if (ev.shiftKey && canCapture) this.deps.onCapture!(this.inputEl.value.trim());
+        else this.deps.onCreateNote?.(this.inputEl.value.trim());
       });
+      if (canCapture && this.touch) {
+        const btn = doc.createElement("button");
+        btn.type = "button";
+        btn.classList.add("ariadne-row-action");
+        btn.textContent = "Capture";
+        btn.setAttribute("aria-label", "Capture the query to the Inbox");
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this.deps.onCapture!(this.inputEl.value.trim());
+        });
+        row.appendChild(btn);
+      }
       row.addEventListener("mousemove", () => {
         if (this.selected !== this.results.length) {
           this.selected = this.results.length;
@@ -435,7 +461,11 @@ export class AriadneView extends ItemView {
     if (ev.key === "Enter") {
       ev.preventDefault();
       if (this.canCreate && this.selected === this.results.length) {
-        this.deps.onCreateNote?.(this.inputEl.value.trim());
+        if (ev.shiftKey && this.deps.onCapture) {
+          this.deps.onCapture(this.inputEl.value.trim());
+        } else {
+          this.deps.onCreateNote?.(this.inputEl.value.trim());
+        }
         return;
       }
       const result = this.results[this.selected];
@@ -717,6 +747,15 @@ export class AriadneView extends ItemView {
     this.renderWantedRows(doc, topics);
     this.renderResurfaced();
     this.renderInboxRow(doc);
+    const themeCount = this.deps.themesTeaser?.() ?? 0;
+    if (themeCount > 0 && this.deps.onThemes) {
+      this.verbRow(
+        this.wantedEl,
+        `recurring themes · ${themeCount}`,
+        "Review recurring journal themes without a permanent note",
+        () => this.deps.onThemes!(),
+      );
+    }
   }
 
   /** Inbox as an open loop with its count — the triage flow, one click away. */
@@ -931,7 +970,15 @@ export class AriadneView extends ItemView {
       const entry = this.deps.todayEntry?.();
       if (entry) {
         const name = entry.split("/").pop()!.replace(/\.md$/, "");
-        this.todayEl.appendChild(this.footRowEl(name, entry, `Open today's entry ${name}`));
+        const row = this.footRowEl(name, entry, `Open today's entry ${name}`);
+        const promoted = this.deps.promotedToday?.() ?? 0;
+        if (promoted > 0) {
+          const tally = this.todayEl.ownerDocument.createElement("span");
+          tally.classList.add("ariadne-wanted-count");
+          tally.textContent = `${promoted} promoted`;
+          row.querySelector(".ariadne-row-head")?.appendChild(tally);
+        }
+        this.todayEl.appendChild(row);
       }
     }
     if (this.deps.closeDayDue?.() && this.deps.onCloseDay) {

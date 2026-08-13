@@ -269,3 +269,19 @@ classification needs it; echoes don't).
 - [ ] **Now-zone verbs.** A long unstructured permanent note (2500+ chars,
       <2 headings) → "↳ split this note". A near-duplicate (cosine ≥.95)
       in view → "↳ merge with "X"" instead. Journal notes keep promote.
+
+## 17. Perf pass + zone completions
+
+- [ ] **One embedding per pause.** With debug logging on, a typing pause
+      produces ONE worker embed for the paragraph (Margin, tension, and
+      ghost share it) instead of three.
+- [ ] **Themes teaser.** After the index settles (first idle with vectors),
+      the Vault zone gains "↳ recurring themes · N" if uncaptured clusters
+      exist — computed once per session, no model calls. Click runs the
+      full themes flow with naming.
+- [ ] **Promoted tally.** Promote a thought from today's entry → the Today
+      row reads "<entry> · 1 promoted" (session-scoped).
+- [ ] **⇧↵ capture.** Type a thought in the Line → the create row reads
+      "＋ Create note "…" · ⇧ capture to Inbox". ⇧↵ (or ⇧-click) captures
+      instantly to the Inbox with no model call; plain ↵ scaffolds as
+      before. On touch, the row carries a Capture button.

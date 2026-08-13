@@ -105,6 +105,9 @@ export default class AriadnePlugin extends Plugin {
     date: string;
     pick: { path: string; title: string; line?: string } | null;
   };
+  /** Once-per-session theme teaser: cluster count without naming or modal. */
+  private themesTeaserCount?: number;
+  private themesScanned = false;
   /** Panel dismissals ("for this session") — survive view rebuilds. */
   private panelSession = {
     wanted: new Set<string>(),
@@ -412,6 +415,10 @@ export default class AriadnePlugin extends Plugin {
               .length;
           },
           onTriage: () => void this.actions.triageInbox(),
+          themesTeaser: () => this.themesTeaserCount ?? 0,
+          onThemes: () => void this.actions.findJournalThemes(),
+          promotedToday: () => this.actions.promotedToday(),
+          onCapture: (seed) => void this.actions.captureThought(seed),
           onSplit: () => void this.actions.splitNote(),
           onMerge: () => void this.actions.mergeNote(),
           touch: () => this.policy.touch,
@@ -520,6 +527,7 @@ export default class AriadnePlugin extends Plugin {
       {
         onIdle: () => {
           this.scheduleSave();
+          this.maybeScanThemes();
           // Live, not boot-time: a reader edits notes all session, and the
           // owner's fresh shards arrive over Sync mid-session.
           if (!this.policy.loadsModel && this.manager) {
@@ -983,6 +991,26 @@ export default class AriadnePlugin extends Plugin {
       if (!tags.some((t) => t.toLowerCase() === tag.toLowerCase())) tags.push(tag);
       fm.tags = tags;
     });
+  }
+
+  /**
+   * The Vault zone's themes teaser: once per session, after the index first
+   * goes idle with vectors on hand, count the uncaptured theme clusters —
+   * the free half only (retrieval + clustering, no model, no modal). Bounded
+   * and off the typing path; the full command runs only on click.
+   */
+  private maybeScanThemes(): void {
+    if (this.themesScanned || !this.manager?.hasStoredVectors()) return;
+    this.themesScanned = true;
+    void this.actions
+      .gatherThemeClusters()
+      .then((clusters) => {
+        this.themesTeaserCount = clusters?.length ?? 0;
+        if (this.themesTeaserCount > 0) {
+          this.log.info(`themes teaser: ${this.themesTeaserCount} uncaptured clusters`);
+        }
+      })
+      .catch((err) => this.log.warn(`theme scan failed: ${String(err)}`));
   }
 
   private getWatcher(): DraftWatcher {
