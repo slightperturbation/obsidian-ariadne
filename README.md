@@ -190,7 +190,7 @@ Manual test script: [tests/manual/phase-1.md](tests/manual/phase-1.md).
 Not yet in the community-plugin directory. To install the beta:
 
 1. Install **BRAT** (Beta Reviewers Auto-update Tester) from Community plugins.
-2. BRAT settings → *Add beta plugin* → this repository's GitHub slug.
+2. BRAT settings → *Add beta plugin* → this repository's GitHub slug (`slightperturbation/obsidian-ariadne`).
 3. Enable **Ariadne** in Community plugins.
 
 BRAT downloads `manifest.json`, `main.js`, and `styles.css`; on first run with
@@ -201,7 +201,7 @@ falls back to lexical and the console says which file is missing.
 
 ## Releasing
 
-1. Set `RELEASE_REPO` in `src/assets.ts` to the real GitHub slug (once).
+1. `RELEASE_REPO` in `src/assets.ts` carries the GitHub slug (`slightperturbation/obsidian-ariadne`) — already set; change it only if the repo moves.
 2. Bump `manifest.json`/`versions.json` (`npm version …` runs `version-bump.mjs`).
 3. Commit, tag with the bare version (`0.6.0`, no `v` — BRAT and `assetUrl()`
    both expect tag = manifest version), push the tag.
