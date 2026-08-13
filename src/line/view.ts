@@ -15,7 +15,6 @@ const DEBOUNCE_MS = 120;
 const WARMING_HINT = "Index is warming up…";
 const SEARCHING_HINT = "Searching…";
 const KEY_LEGEND = "↑↓ move · ↵ open · ⌘↵ pane · ⌥↵ link · ⇧↵ weave";
-const MARGIN_HINT = "Write, and related notes appear here.";
 const CARD_LIMIT = 5;
 
 export interface AriadneViewDeps {
@@ -36,8 +35,8 @@ export interface AriadneViewDeps {
   wantedTopics?: () => WantedTopic[];
   /** Past entries sharing today's month-day (when a dated note is open). */
   onThisDay?: (currentPath: string) => string[];
-  /** Today's "still true?" resurfaced note, if any. */
-  resurfaced?: () => { path: string; title: string } | null;
+  /** Today's "still true?" resurfaced note, with its opening line once read. */
+  resurfaced?: () => { path: string; title: string; line?: string } | null;
   /** Offer promotion while writing reflective prose in a journal note. */
   promoteHint?: () => boolean;
   onPromote?: () => void;
@@ -56,6 +55,20 @@ export interface AriadneViewDeps {
   todayMissing?: () => boolean;
   /** Create (or open) today's entry, honoring the Daily Notes plugin. */
   onBeginToday?: () => void;
+  /** Today's entry path once it exists — the Today zone's anchor row. */
+  todayEntry?: () => string | null;
+  /** The evening has arrived (per the configured hour). */
+  closeDayDue?: () => boolean;
+  onCloseDay?: () => void;
+  /** It's the week's edge (Sunday). */
+  synthesisDue?: () => boolean;
+  onWeeklySynthesis?: () => void;
+  /** Inbox size, for the Vault zone's triage row. */
+  inboxCount?: () => number;
+  onTriage?: () => void;
+  /** Contextual verbs for the Now zone. */
+  onSplit?: () => void;
+  onMerge?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
@@ -95,6 +108,7 @@ export class AriadneView extends ItemView {
   private marginHintEl!: HTMLElement;
   private glyphEl!: HTMLElement;
   private wantedEl!: HTMLElement;
+  private todayEl!: HTMLElement;
   /** Fallback when the plugin doesn't supply shared session state (tests). */
   private localSession = {
     wanted: new Set<string>(),
@@ -167,12 +181,16 @@ export class AriadneView extends ItemView {
 
     // The keyboard model is otherwise undiscoverable — ⇧↵ especially. On a
     // touch device it would describe keys that don't exist, so the rows carry
-    // their own Link/Weave buttons instead (see rowEl).
+    // their own Link/Weave buttons instead (see rowEl). Shown only while the
+    // input is focused: teaching material appears when it's usable — a
+    // legend for keys you can't currently press would be furniture.
     if (!this.touch) {
       const legend = doc.createElement("div");
       legend.classList.add("ariadne-keys");
       legend.textContent = KEY_LEGEND;
       root.appendChild(legend);
+      this.inputEl.addEventListener("focus", () => legend.classList.add("is-visible"));
+      this.inputEl.addEventListener("blur", () => legend.classList.remove("is-visible"));
     }
 
     // Search results — shown only while a query is active, capped at 2/3 height.
@@ -183,21 +201,25 @@ export class AriadneView extends ItemView {
     this.resultsEl.id = "ariadne-results-listbox";
     root.appendChild(this.resultsEl);
 
-    // The Margin fills the remaining space below.
+    // The concentric zones: reading downward moves outward from the point of
+    // attention — the thought under the cursor (Now), the day around it
+    // (Today), the vault around that (Vault). Position encodes distance, so
+    // the eye learns where a class of information lives and stops searching.
     const marginWrap = doc.createElement("div");
-    marginWrap.classList.add("ariadne-margin-section");
+    marginWrap.classList.add("ariadne-margin-section", "ariadne-zone");
     this.marginHintEl = doc.createElement("div");
-    this.marginHintEl.classList.add("ariadne-empty");
-    this.marginHintEl.textContent = MARGIN_HINT;
+    this.marginHintEl.classList.add("ariadne-empty", "is-hidden");
     this.marginEl = doc.createElement("div");
     this.marginEl.classList.add("ariadne-cards");
     marginWrap.append(this.marginHintEl, this.marginEl);
     root.appendChild(marginWrap);
 
-    // Topics wanting notes — the vault's open loops, kept at the foot where
-    // they read as an invitation rather than a task list.
+    this.todayEl = doc.createElement("div");
+    this.todayEl.classList.add("ariadne-zone");
+    root.appendChild(this.todayEl);
+
     this.wantedEl = doc.createElement("div");
-    this.wantedEl.classList.add("ariadne-wanted");
+    this.wantedEl.classList.add("ariadne-wanted", "ariadne-zone");
     root.appendChild(this.wantedEl);
 
     this.glyphEl = doc.createElement("div");
@@ -528,6 +550,7 @@ export class AriadneView extends ItemView {
     if (!this.deps.marginEnabled()) {
       this.marginHintEl.classList.remove("is-hidden");
       this.marginHintEl.textContent = "Margin is off — enable it in Ariadne settings.";
+      this.marginEl.parentElement?.classList.remove("has-content");
       this.renderWanted();
       return;
     }
@@ -546,6 +569,24 @@ export class AriadneView extends ItemView {
       this.renderPromoteHint(doc, ctx);
       this.renderOnThisDay(this.marginEl, ctx.path);
       journalSections = this.marginEl.childElementCount > findings.length;
+    } else if (ctx) {
+      // Contextual verbs for permanent notes — the panel noticing occasions,
+      // never listing capabilities. At most one: a near-duplicate this close
+      // outranks structural advice.
+      const top = tagEvidence[0];
+      if (top?.cosine !== undefined && top.cosine >= 0.95 && this.deps.onMerge) {
+        this.verbRow(this.marginEl, `merge with “${top.title}”`, `Merge with ${top.title}`, () =>
+          this.deps.onMerge!(),
+        );
+      } else if (
+        this.deps.onSplit &&
+        ctx.noteText.length > 2500 &&
+        (ctx.noteText.match(/^##\s/gm)?.length ?? 0) < 2
+      ) {
+        this.verbRow(this.marginEl, "split this note", "Split this note into atomic notes", () =>
+          this.deps.onSplit!(),
+        );
+      }
     }
     if (ctx) this.renderTagSuggestions(doc, ctx, tagEvidence);
     this.renderWanted();
@@ -577,10 +618,17 @@ export class AriadneView extends ItemView {
         ),
       );
     });
-    // The hint only when the margin is genuinely empty — with a promote hint
-    // or "On this day" present, "write and notes appear" is already false.
-    this.marginHintEl.textContent = MARGIN_HINT;
-    this.marginHintEl.classList.toggle("is-hidden", this.marginEl.childElementCount > 0);
+    // An empty Now zone is empty — no rule, no label, no tautology telling
+    // the writer that writing produces notes. Content earns the apparatus.
+    this.marginHintEl.classList.add("is-hidden");
+    const hasContent = this.marginEl.childElementCount > 0;
+    this.marginEl.parentElement?.classList.toggle("has-content", hasContent);
+    if (hasContent) {
+      const label = doc.createElement("div");
+      label.classList.add("ariadne-zone-label");
+      label.textContent = "now";
+      this.marginEl.insertBefore(label, this.marginEl.firstChild);
+    }
   }
 
   /**
@@ -647,19 +695,53 @@ export class AriadneView extends ItemView {
    */
   private renderWanted(): void {
     if (!this.wantedEl) return;
-    this.wantedEl.replaceChildren();
     this.renderToday();
-    this.renderResurfaced();
+    this.wantedEl.replaceChildren();
+    this.renderVaultRows();
+    this.wantedEl.classList.toggle("has-content", this.wantedEl.childElementCount > 0);
+    if (this.wantedEl.childElementCount > 0) {
+      const doc = this.wantedEl.ownerDocument;
+      const label = doc.createElement("div");
+      label.classList.add("ariadne-zone-label");
+      label.textContent = "vault";
+      this.wantedEl.insertBefore(label, this.wantedEl.firstChild);
+    }
+  }
+
+  /** The Vault zone: the vault's open loops — wanted, the daily reading, the inbox. */
+  private renderVaultRows(): void {
+    const doc = this.wantedEl.ownerDocument;
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
       (t) => !this.session.wanted.has(t.title),
     );
-    if (topics.length === 0 || !this.deps.onCreateWanted) return;
+    this.renderWantedRows(doc, topics);
+    this.renderResurfaced();
+    this.renderInboxRow(doc);
+  }
 
-    const doc = this.wantedEl.ownerDocument;
-    const label = doc.createElement("div");
-    label.classList.add("ariadne-section-label");
-    label.textContent = "Wanted";
-    this.wantedEl.appendChild(label);
+  /** Inbox as an open loop with its count — the triage flow, one click away. */
+  private renderInboxRow(doc: Document): void {
+    const count = this.deps.inboxCount?.() ?? 0;
+    if (count === 0 || !this.deps.onTriage) return;
+    const row = doc.createElement("div");
+    row.classList.add("ariadne-row", "ariadne-confidence-faint");
+    const head = doc.createElement("div");
+    head.classList.add("ariadne-row-head");
+    const title = doc.createElement("span");
+    title.classList.add("ariadne-row-title");
+    title.textContent = "Inbox → triage";
+    const n = doc.createElement("span");
+    n.classList.add("ariadne-wanted-count");
+    n.textContent = String(count);
+    head.append(title, n);
+    row.appendChild(head);
+    row.setAttribute("aria-label", `Triage ${count} Inbox notes`);
+    this.actionable(row, () => this.deps.onTriage!());
+    this.wantedEl.appendChild(row);
+  }
+
+  private renderWantedRows(doc: Document, topics: import("../margin/wanted").WantedTopic[]): void {
+    if (topics.length === 0 || !this.deps.onCreateWanted) return;
 
     for (const topic of topics) {
       const row = doc.createElement("div");
@@ -817,41 +899,78 @@ export class AriadneView extends ItemView {
     }
   }
 
-  /**
-   * The day's own invitation: when no dated entry exists for today, one quiet
-   * row offers to begin it. Same spirit as Wanted — the panel surfaces an
-   * open loop, one click closes it — but pointed at the day rather than a
-   * topic: a journal practice lives or dies on the entry getting started.
-   * The row vanishes on its own once the entry exists.
-   */
-  private renderToday(): void {
-    if (!this.deps.todayMissing?.() || !this.deps.onBeginToday) return;
-    const doc = this.wantedEl.ownerDocument;
-    const label = doc.createElement("div");
-    label.classList.add("ariadne-section-label");
-    label.textContent = "Today";
-    this.wantedEl.appendChild(label);
-    const row = doc.createElement("div");
+  /** A "↳ verb" row — the panel's one idiom for an applicable action. */
+  private verbRow(container: HTMLElement, text: string, aria: string, run: () => void): void {
+    const row = container.ownerDocument.createElement("div");
     row.classList.add("ariadne-promote-hint");
-    row.textContent = "↳ begin today's entry";
-    row.setAttribute("aria-label", "Create and open today's journal entry");
-    this.actionable(row, () => this.deps.onBeginToday!());
-    this.wantedEl.appendChild(row);
+    row.textContent = `↳ ${text}`;
+    row.setAttribute("aria-label", aria);
+    this.actionable(row, run);
+    container.appendChild(row);
   }
 
-  /** One old, orphaned note a day: the vault reading back. */
+  /**
+   * The Today zone: where the day stands, and what the hour asks for. A verb
+   * appears only on its occasion — begin when no entry exists, close the day
+   * in the evening, synthesis on Sundays. A verb that appears only when it
+   * applies is information; a permanent button is furniture.
+   */
+  private renderToday(): void {
+    if (!this.todayEl) return;
+    this.todayEl.replaceChildren();
+    const doc = this.todayEl.ownerDocument;
+
+    if (this.deps.todayMissing?.() && this.deps.onBeginToday) {
+      this.verbRow(
+        this.todayEl,
+        "begin today's entry",
+        "Create and open today's journal entry",
+        () => this.deps.onBeginToday!(),
+      );
+    } else {
+      const entry = this.deps.todayEntry?.();
+      if (entry) {
+        const name = entry.split("/").pop()!.replace(/\.md$/, "");
+        this.todayEl.appendChild(this.footRowEl(name, entry, `Open today's entry ${name}`));
+      }
+    }
+    if (this.deps.closeDayDue?.() && this.deps.onCloseDay) {
+      this.verbRow(this.todayEl, "close the day", "Review the day's open loops", () =>
+        this.deps.onCloseDay!(),
+      );
+    }
+    if (this.deps.synthesisDue?.() && this.deps.onWeeklySynthesis) {
+      this.verbRow(this.todayEl, "weekly synthesis", "Draw questions from the week", () =>
+        this.deps.onWeeklySynthesis!(),
+      );
+    }
+
+    this.todayEl.classList.toggle("has-content", this.todayEl.childElementCount > 0);
+    if (this.todayEl.childElementCount > 0) {
+      const label = doc.createElement("div");
+      label.classList.add("ariadne-zone-label");
+      label.textContent = "today";
+      this.todayEl.insertBefore(label, this.todayEl.firstChild);
+    }
+  }
+
+  /**
+   * The daily reading: one old, barely-linked note a day, speaking its own
+   * opening line — marginalia from a past self. Denser, truer, and quieter
+   * than a placeholder hint.
+   */
   private renderResurfaced(): void {
     if (this.session.resurfaced.dismissed) return;
     const pick = this.deps.resurfaced?.();
     if (!pick) return;
     const doc = this.wantedEl.ownerDocument;
-    const label = doc.createElement("div");
-    label.classList.add("ariadne-section-label");
-    label.textContent = "Still true?";
-    this.wantedEl.appendChild(label);
     const row = this.footRowEl(pick.title, pick.path, `Revisit ${pick.title}`);
     const head = row.querySelector(".ariadne-row-head");
     if (head) {
+      const still = doc.createElement("span");
+      still.classList.add("ariadne-wanted-count");
+      still.textContent = "still true?";
+      head.appendChild(still);
       const dismiss = doc.createElement("button");
       dismiss.type = "button";
       dismiss.classList.add("ariadne-dismiss");
@@ -863,6 +982,12 @@ export class AriadneView extends ItemView {
         this.renderWanted();
       });
       head.appendChild(dismiss);
+    }
+    if (pick.line) {
+      const line = doc.createElement("div");
+      line.classList.add("ariadne-row-snippet", "ariadne-reading");
+      line.textContent = `“${pick.line}”`;
+      row.appendChild(line);
     }
     this.wantedEl.appendChild(row);
   }

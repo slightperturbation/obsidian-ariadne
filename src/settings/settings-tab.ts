@@ -163,6 +163,20 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Close-the-day hour")
+      .setDesc("Local hour after which the panel offers the evening review (0–23).")
+      .addSlider((sl) =>
+        sl
+          .setLimits(0, 23, 1)
+          .setValue(this.plugin.settings.closeDayHour)
+          .setDynamicTooltip()
+          .onChange(async (v) => {
+            this.plugin.settings.closeDayHour = v;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
       .setName("On this day")
       .setDesc("In a dated note's Margin, show entries from this date in past months and years.")
       .addToggle((t) =>

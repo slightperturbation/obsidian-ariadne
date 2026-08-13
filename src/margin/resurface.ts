@@ -65,3 +65,27 @@ export function resurfacePick(
   if (candidates.length === 0) return null;
   return candidates[fnv1a(isoDate) % candidates.length];
 }
+
+/**
+ * The opening line of a note, for the daily reading: the resurfaced pick is
+ * shown speaking one sentence — marginalia from a past self — rather than as
+ * a bare title. First substantive line, first sentence, bounded.
+ */
+export function openingLine(content: string, max = 90): string | null {
+  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "");
+  for (const raw of body.split(/\r?\n/)) {
+    const line = raw
+      .trim()
+      .replace(/^#{1,6}\s+/, "")
+      .replace(/^[-*+]\s+(\[.\]\s+)?/, "")
+      .replace(/\[\[([^\]|]+)\|?([^\]]*)\]\]/g, (_, t, a) => a || t)
+      .replace(/[*_`>]/g, "")
+      .trim();
+    if (line.length < 8) continue;
+    const sentence = /^(.*?[.!?…。！？])\s/.exec(line + " ")?.[1] ?? line;
+    if (sentence.length <= max) return sentence;
+    const cut = sentence.lastIndexOf(" ", max - 1);
+    return (cut > 30 ? sentence.slice(0, cut) : sentence.slice(0, max - 1)) + "…";
+  }
+  return null;
+}

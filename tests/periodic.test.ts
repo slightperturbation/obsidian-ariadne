@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dayKeyOf, dateOf, looksPeriodic } from "../src/core/periodic";
-import { onThisDay, resurfacePick } from "../src/margin/resurface";
+import { onThisDay, openingLine, resurfacePick } from "../src/margin/resurface";
 import { IndexManager } from "../src/index/manager";
 import { HashEmbedder } from "../src/index/embeddings/hash-embedder";
 import type { SourceNote } from "../src/core/types";
@@ -125,5 +125,30 @@ describe("resurfacing", () => {
       expect(["Agents.md", "Morphogenesis.md"]).toContain(pick.path);
     }
     expect(resurfacePick([meta("Fresh.md", 0, now)], "2026-08-11", now)).toBeNull();
+  });
+});
+
+describe("openingLine (the daily reading)", () => {
+  it("finds the first substantive sentence, unwrapping markup", () => {
+    const md = "---\ntype: note\n---\n\n# Agents\n\n*[[Agency|Agency]]* is the capacity to set one's own goals. More text follows.";
+    expect(openingLine(md)).toBe("Agency is the capacity to set one's own goals.");
+  });
+
+  it("bounds long lines at a word break with an ellipsis", () => {
+    const long = "word ".repeat(40).trim() + ".";
+    const line = openingLine(long)!;
+    expect(line.length).toBeLessThanOrEqual(91);
+    expect(line.endsWith("…")).toBe(true);
+  });
+
+  it("skips headings-only and trivial content", () => {
+    expect(openingLine("# Title\n## Sub\n")).toBeNull();
+    expect(openingLine("---\ntags: [x]\n---\n")).toBeNull();
+  });
+
+  it("strips list markers so a bullet note still reads", () => {
+    expect(openingLine("- [ ] Fleeting thought about morphogenesis and constraint.")).toBe(
+      "Fleeting thought about morphogenesis and constraint.",
+    );
   });
 });

@@ -62,6 +62,8 @@ export interface AriadneSettings {
   journalTag: string;
   /** Offer tags from semantically-near notes in the Margin (never invented). */
   enableTagSuggestions: boolean;
+  /** Local hour (0–23) after which the panel offers "close the day". */
+  closeDayHour: number;
 
   // Margin
   enableMargin: boolean;
@@ -120,6 +122,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   dailyTag: "daily",
   journalTag: "journal",
   enableTagSuggestions: true,
+  closeDayHour: 18,
 
   enableMargin: true,
   tensionMode: "quiet",

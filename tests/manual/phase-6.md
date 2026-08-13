@@ -246,3 +246,26 @@ classification needs it; echoes don't).
       dated note triggers no tension/echo analysis; the same block in a
       permanent note stays eligible. A reflective paragraph in the dated
       note gets the full apparatus.
+
+## 16. The zone grammar
+
+- [ ] The panel reads as zones, top to bottom: input → results (when
+      searching) → **now** → **today** → **vault** → glyph, each opened by
+      a hairline + lowercase small-caps label. Empty zones show nothing —
+      no rule, no label.
+- [ ] **Legend fades.** The key legend appears only while the input is
+      focused, fades out on blur.
+- [ ] **No tautology.** With nothing related, the Now zone is simply
+      absent — no "Write, and related notes appear here."
+- [ ] **Daily reading.** The Still true? note in the Vault zone shows its
+      opening line in quotes, italic — after the first repaint of the day.
+- [ ] **Today zone.** Before the entry exists: "↳ begin today's entry".
+      After: today's entry as a row. Past the configured hour (Settings →
+      Journaling → Close-the-day hour): "↳ close the day". On Sunday:
+      "↳ weekly synthesis".
+- [ ] **Vault zone.** Wanted topics ("wanted by N"), the daily reading
+      ("still true?"), and "Inbox → triage · N" when the Inbox is
+      non-empty — clicking runs triage.
+- [ ] **Now-zone verbs.** A long unstructured permanent note (2500+ chars,
+      <2 headings) → "↳ split this note". A near-duplicate (cosine ≥.95)
+      in view → "↳ merge with "X"" instead. Journal notes keep promote.

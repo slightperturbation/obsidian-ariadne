@@ -431,3 +431,46 @@
 .is-mobile .ariadne-tag-suggestion {
   min-height: 44px;
 }
+
+/* ── Zone grammar (concentric panel) ─────────────────────────────────────
+   Position encodes distance from the cursor: Now → Today → Vault, each
+   opened by a hairline rule and a quiet lowercase label. Content earns the
+   apparatus: an empty zone shows neither. */
+
+.ariadne-zone {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: var(--size-4-3);
+  padding-top: var(--size-4-2);
+}
+
+.ariadne-zone:not(.has-content) {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.ariadne-zone-label {
+  font-variant: small-caps;
+  letter-spacing: 0.14em;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  margin-bottom: var(--size-4-1);
+  user-select: none;
+}
+
+/* The keyboard legend is teaching material: present while the input is
+   focused (when the keys are usable), gone otherwise. */
+.ariadne-keys {
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.ariadne-keys.is-visible {
+  opacity: 0.8;
+}
+
+/* The daily reading — the resurfaced note speaking its opening line. */
+.ariadne-reading {
+  font-style: italic;
+  color: var(--text-muted);
+}

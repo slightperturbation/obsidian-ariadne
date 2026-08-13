@@ -30,7 +30,7 @@ import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
 import { dateOf, localISODate, looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
-import { onThisDay, resurfacePick } from "./margin/resurface";
+import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
 import { classifyEntry, entryTag, isLegacyDatedTag, normalizeTag } from "./margin/tags";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
@@ -101,7 +101,10 @@ export default class AriadnePlugin extends Plugin {
   /** "Begin today's entry" was actioned; heals a format-blind detection. */
   private todayHandled?: string;
   private beginningToday = false;
-  private resurfacedCache?: { date: string; pick: { path: string; title: string } | null };
+  private resurfacedCache?: {
+    date: string;
+    pick: { path: string; title: string; line?: string } | null;
+  };
   /** Panel dismissals ("for this session") — survive view rebuilds. */
   private panelSession = {
     wanted: new Set<string>(),
@@ -361,13 +364,23 @@ export default class AriadnePlugin extends Plugin {
             // each pause bought nothing.
             const today = localISODate();
             if (this.resurfacedCache?.date !== today) {
-              this.resurfacedCache = {
-                date: today,
-                pick: resurfacePick(this.manager.noteMetas(), today, Date.now(), this.isJournalPath),
-              };
+              const pick = resurfacePick(this.manager.noteMetas(), today, Date.now(), this.isJournalPath);
+              this.resurfacedCache = { date: today, pick };
+              // The daily reading: fetch the pick's opening line lazily; it
+              // appears on the next repaint.
+              if (pick) {
+                const file = this.app.vault.getAbstractFileByPath(pick.path);
+                if (file instanceof TFile) {
+                  void this.app.vault.cachedRead(file).then((content) => {
+                    const entry = this.resurfacedCache;
+                    if (entry?.date === today && entry.pick?.path === pick.path) {
+                      entry.pick.line = openingLine(content) ?? undefined;
+                    }
+                  });
+                }
+              }
             }
-            const pick = this.resurfacedCache.pick;
-            return pick ? { path: pick.path, title: pick.title } : null;
+            return this.resurfacedCache.pick;
           },
           promoteHint: () => this.settings.enablePromoteHint,
           onPromote: () => void this.actions.promoteToNote(),
@@ -383,6 +396,24 @@ export default class AriadnePlugin extends Plugin {
             return !this.app.vault.getMarkdownFiles().some((f) => dateOf(f.path) === today);
           },
           onBeginToday: () => void this.beginTodaysEntry(),
+          todayEntry: () => {
+            const today = localISODate();
+            return (
+              this.app.vault.getMarkdownFiles().find((f) => dateOf(f.path) === today)?.path ?? null
+            );
+          },
+          closeDayDue: () => new Date().getHours() >= this.settings.closeDayHour,
+          onCloseDay: () => void this.actions.closeTheDay(),
+          synthesisDue: () => new Date().getDay() === 0,
+          onWeeklySynthesis: () => void this.actions.weeklySynthesis(),
+          inboxCount: () => {
+            const inbox = normalizePath(this.settings.inboxFolder);
+            return this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(`${inbox}/`))
+              .length;
+          },
+          onTriage: () => void this.actions.triageInbox(),
+          onSplit: () => void this.actions.splitNote(),
+          onMerge: () => void this.actions.mergeNote(),
           touch: () => this.policy.touch,
           tensions: this.tensions,
           lineBias: () => biasOf(this.settings.lineSerendipity),
