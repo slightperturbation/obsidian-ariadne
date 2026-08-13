@@ -5,6 +5,6 @@
   "minAppVersion": "1.7.2",
   "description": "One line to search and connect your notes; a margin that suggests links and structure as you write. Local-first, approval-first.",
   "author": "Brian Allen (Dexter)",
-  "authorUrl": "",
+  "authorUrl": "https://github.com/slightperturbation",
   "isDesktopOnly": false
 }

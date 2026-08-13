@@ -19,7 +19,7 @@ fs.writeFileSync("ariadne-assets.json", JSON.stringify({ version: manifestVersio
 
 const banner = `/*
 Ariadne — generated bundle; do not edit directly.
-Source and license: https://github.com/  (set on publish)
+Source and license: https://github.com/slightperturbation/obsidian-ariadne
 */`;
 
 const prod = process.argv[2] === "production";

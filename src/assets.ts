@@ -19,7 +19,7 @@ import type { Logger } from "./util/logger";
  */
 
 /** GitHub repo the release assets live in. Set before the first release. */
-export const RELEASE_REPO = "dexterba/ariadne";
+export const RELEASE_REPO = "slightperturbation/obsidian-ariadne";
 
 /**
  * Name → minimum plausible size. A truncated download, an HTML error page,
