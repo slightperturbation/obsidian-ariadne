@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  JOURNAL_AFFINITY_FLAG,
+  JOURNAL_AFFINITY_HOLD,
   changedSince,
   contentHash,
+  journalAffinity,
   personalSignals,
   polishProblems,
+  selectPrecedents,
   type PublishLedger,
 } from "../src/publish/screen";
 import { parsePublishScreen, publishScreenPrompt } from "../src/model/tasks";
@@ -100,5 +104,54 @@ describe("ledger diffing", () => {
   it("contentHash is stable and content-sensitive", () => {
     expect(contentHash("abc")).toBe(contentHash("abc"));
     expect(contentHash("abc")).not.toBe(contentHash("abd"));
+  });
+});
+
+describe("the embedding ensemble", () => {
+  const neighbor = (path: string, cosine: number, journal: boolean) => ({
+    path,
+    title: path.replace(/\.md$/, ""),
+    cosine,
+    journal,
+  });
+
+  it("journalAffinity is the cosine-weighted journal share of the neighborhood", () => {
+    expect(
+      journalAffinity([
+        neighbor("2026-08-01.md", 0.8, true),
+        neighbor("Zettel.md", 0.8, false),
+      ]),
+    ).toBeCloseTo(0.5);
+    expect(journalAffinity([neighbor("2026-08-01.md", 0.9, true)])).toBe(1);
+    expect(journalAffinity([neighbor("Zettel.md", 0.9, false)])).toBe(0);
+    expect(journalAffinity([])).toBe(0); // no vectors → no signal, never a clear
+  });
+
+  it("thresholds: flag before hold, hold only at high affinity", () => {
+    expect(JOURNAL_AFFINITY_FLAG).toBeLessThan(JOURNAL_AFFINITY_HOLD);
+  });
+
+  it("selectPrecedents returns only HUMAN decisions, nearest first", () => {
+    const ledger: PublishLedger = {
+      "human-clear.md": { hash: 1, mtime: 1, state: "cleared", reasons: [], human: true },
+      "model-clear.md": { hash: 1, mtime: 1, state: "cleared", reasons: [] },
+      "human-hold.md": { hash: 1, mtime: 1, state: "held", reasons: ["private people"], human: true },
+      "override.md": { hash: 1, mtime: 1, state: "held", reasons: [], overridden: true, human: true },
+    };
+    const precedents = selectPrecedents(
+      [
+        neighbor("human-clear.md", 0.9, false),
+        neighbor("model-clear.md", 0.85, false), // model verdicts never feed the model
+        neighbor("human-hold.md", 0.8, false),
+        neighbor("override.md", 0.7, false),
+        neighbor("unknown.md", 0.6, false),
+      ],
+      ledger,
+    );
+    expect(precedents).toEqual([
+      { title: "human-clear", decision: "cleared", reason: undefined },
+      { title: "human-hold", decision: "held", reason: "private people" },
+      { title: "override", decision: "cleared", reason: undefined }, // an override IS a publish decision
+    ]);
   });
 });

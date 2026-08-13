@@ -311,3 +311,22 @@ Needs the Obsidian Publish core plugin enabled.
       cleared notes — Ariadne never uploads anything itself.
 - [ ] **Auto-marking.** New journal entries automatically carry
       `publish: false` in frontmatter (defense in depth).
+
+## 19. Screening v2 (ensemble + precedents)
+
+- [ ] **Full text.** A note that is impersonal for its first pages and
+      personal only in its final paragraph is HELD (no truncation window
+      to slip).
+- [ ] **Journal register.** A candidate note written in your journal's
+      voice but without flag keywords is flagged "reads like your journal
+      entries (semantic)"; with no model configured and high affinity, it
+      holds outright.
+- [ ] **Precedents.** Override a hold (or hand-clear a note); screen a
+      similar new note → debug the prompt (Debug logging) and see "The
+      writer's own decisions on the most similar notes". Your decisions
+      steer future verdicts; the model's own past verdicts never do.
+- [ ] **Bootstrap.** A note with hand-set `publish: true/false` from
+      before Ariadne is honored without a model call and becomes a
+      precedent.
+- [ ] **Manifest.** Cleared notes are listed as rows — one-click "Hold"
+      overrules the model in the safe direction (and becomes a precedent).

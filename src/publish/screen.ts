@@ -37,6 +37,13 @@ export interface LedgerEntry {
   reasons: string[];
   /** The writer explicitly overrode a hold. Loud, per-note, remembered. */
   overridden?: boolean;
+  /**
+   * A HUMAN made this call (override, manual clear/hold, or a hand-set
+   * publish flag predating Ariadne). Human decisions are precedents: future
+   * candidates are screened alongside their nearest ones, so classification
+   * improves with use instead of staying frozen in a prompt.
+   */
+  human?: boolean;
 }
 
 export type PublishLedger = Record<string, LedgerEntry>;
@@ -140,4 +147,68 @@ export function changedSince(
       return !entry || entry.mtime < f.mtime;
     })
     .map((f) => f.path);
+}
+
+/* ── The embedding ensemble ───────────────────────────────────────────── */
+
+export interface ScreenNeighbor {
+  path: string;
+  title: string;
+  cosine?: number;
+  /** Journal/dated entry? */
+  journal: boolean;
+}
+
+/**
+ * How much a candidate READS like the writer's journal, regardless of
+ * vocabulary: cosine-weighted share of its nearest neighbors that are
+ * journal entries. This is the signal regex can't provide — writing about
+ * people and feelings in the journal's register without journal keywords
+ * still lands near journal entries in embedding space.
+ */
+export function journalAffinity(neighbors: ScreenNeighbor[]): number {
+  let journal = 0;
+  let total = 0;
+  for (const n of neighbors) {
+    if (n.cosine === undefined) continue;
+    total += n.cosine;
+    if (n.journal) journal += n.cosine;
+  }
+  return total > 0 ? journal / total : 0;
+}
+
+/** Affinity at which "reads like your journal" becomes a red flag. */
+export const JOURNAL_AFFINITY_FLAG = 0.5;
+/** Affinity at which, with NO model available, the note holds outright. */
+export const JOURNAL_AFFINITY_HOLD = 0.65;
+
+export interface Precedent {
+  title: string;
+  decision: "cleared" | "held";
+  reason?: string;
+}
+
+/**
+ * The writer's own nearest prior decisions — dynamic few-shot, retrieved by
+ * similarity rather than frozen in the prompt. Only HUMAN decisions qualify:
+ * feeding the model its own past verdicts would just amplify its biases.
+ */
+export function selectPrecedents(
+  neighbors: ScreenNeighbor[],
+  ledger: PublishLedger,
+  max = 3,
+): Precedent[] {
+  const out: Precedent[] = [];
+  for (const n of neighbors) {
+    const entry = ledger[n.path];
+    if (!entry?.human) continue;
+    const published = entry.state === "cleared" || entry.overridden === true;
+    out.push({
+      title: n.title,
+      decision: published ? "cleared" : "held",
+      reason: entry.reasons[0],
+    });
+    if (out.length >= max) break;
+  }
+  return out;
 }

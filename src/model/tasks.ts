@@ -431,7 +431,22 @@ export function publishScreenPrompt(input: {
   title: string;
   content: string;
   localFlags: string[];
+  /** The writer's own nearest prior decisions — dynamic few-shot. */
+  precedents?: Array<{ title: string; decision: "cleared" | "held"; reason?: string }>;
 }): string {
+  const precedents =
+    input.precedents && input.precedents.length > 0
+      ? [
+          `The writer's own decisions on the most similar notes:`,
+          ...input.precedents.map(
+            (p) =>
+              `- "${p.title}" → ${p.decision === "cleared" ? "published" : "held"}${
+                p.reason ? ` (${p.reason})` : ""
+              }`,
+          ),
+          ``,
+        ]
+      : [];
   return [
     `A writer keeps a public digital garden ("working with the garage door open") and a private journal in one vault. Judge whether this note is safe to publish to the PUBLIC web.`,
     ``,
@@ -439,10 +454,11 @@ export function publishScreenPrompt(input: {
     `CLEAR only notes that are confidently impersonal: ideas, concepts, book notes, techniques — things written about the world rather than about the writer's life.`,
     `When uncertain, HOLD. A wrongly-held note costs one click; a wrongly-cleared note is on the internet.`,
     ``,
+    ...precedents,
     ...(input.localFlags.length > 0
       ? [`Local scanners flagged: ${input.localFlags.join("; ")}.`, ``]
       : []),
-    `Note "${input.title}":`,
+    `Note "${input.title}" (complete):`,
     input.content,
   ].join("\n");
 }

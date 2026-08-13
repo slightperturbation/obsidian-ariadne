@@ -58,12 +58,17 @@ import { decideLocally, isUntitledName, titleFromContent } from "./triage";
 import { paragraphAround } from "../margin/context";
 import { clusterThemes, type EntryNeighbors } from "./themes";
 import {
+  JOURNAL_AFFINITY_FLAG,
+  JOURNAL_AFFINITY_HOLD,
   changedSince,
   contentHash,
+  journalAffinity,
   personalSignals,
   polishProblems,
+  selectPrecedents,
   type LedgerEntry,
   type PublishLedger,
+  type ScreenNeighbor,
 } from "../publish/screen";
 import { dateOf, isoWeekLabel, localISODate } from "../core/periodic";
 import { classifyEntry } from "../margin/tags";
@@ -975,11 +980,30 @@ export class ActionsController {
     );
     const batch = candidates.filter((f) => stale.has(f.path)).slice(0, ActionsController.SCREEN_BATCH);
 
+    // Bootstrap precedents: a hand-set `publish:` flag with no ledger entry
+    // is a decision the writer made before (or outside) Ariadne — honor it,
+    // record it as a human precedent, and don't second-guess it with a call.
+    for (const file of candidates) {
+      if (ledger[file.path]) continue;
+      const flag = app.metadataCache.getFileCache(file)?.frontmatter?.publish;
+      if (typeof flag !== "boolean") continue;
+      ledger[file.path] = {
+        hash: contentHash(await app.vault.cachedRead(file)),
+        mtime: file.stat.mtime,
+        state: flag ? "cleared" : "held",
+        reasons: flag ? [] : ["hand-marked publish: false"],
+        human: true,
+      };
+      stale.delete(file.path);
+    }
+
     let modelOk = this.deps.router.available();
+    const manager = this.deps.manager();
     await this.withWorkingNotice(
       batch.length > 0 ? `Ariadne is screening ${batch.length} changed note(s)…` : "Ariadne is checking the ledger…",
       async () => {
         for (const file of batch) {
+          if (ledger[file.path]?.human && ledger[file.path].mtime >= file.stat.mtime) continue;
           const content = await app.vault.cachedRead(file);
           const hash = contentHash(content);
           const prior = ledger[file.path];
@@ -990,6 +1014,26 @@ export class ActionsController {
             continue;
           }
           const flags = personalSignals(content);
+
+          // The embedding ensemble: the note's stored vectors already know
+          // its neighborhood — full-note by construction, model-free, and it
+          // catches the register regex can't (writing about people and
+          // feelings without journal keywords still LANDS near the journal).
+          let neighbors: ScreenNeighbor[] = [];
+          if (manager?.hasStoredVectors()) {
+            neighbors = (await manager.relatedToPath(file.path, { limit: 8 })).map((h) => ({
+              path: h.path,
+              title: h.title,
+              cosine: h.cosine,
+              journal: this.deps.isJournal(h.path),
+            }));
+          }
+          const affinity = journalAffinity(neighbors);
+          if (affinity >= JOURNAL_AFFINITY_FLAG) {
+            flags.push("reads like your journal entries (semantic)");
+          }
+          const precedents = selectPrecedents(neighbors, ledger);
+
           let entry: LedgerEntry;
           if (modelOk) {
             try {
@@ -998,8 +1042,13 @@ export class ActionsController {
                   "scaffold",
                   publishScreenPrompt({
                     title: file.basename,
-                    content: content.slice(0, 2000),
+                    // Complete text: he doesn't write that much, and a note
+                    // that turns personal in its last paragraph must not
+                    // slip a truncation window. The cap is a guard against
+                    // pathological pastes, not a screening budget.
+                    content: content.slice(0, 20_000),
                     localFlags: flags,
+                    precedents,
                   }),
                   { schema: PUBLISH_SCREEN_SCHEMA as unknown as Record<string, unknown>, maxTokens: 150 },
                 ),
@@ -1028,8 +1077,9 @@ export class ActionsController {
               this.deps.log.warn(`publish screen failed for ${file.path}: ${String(err)}`);
               entry = { hash, mtime: file.stat.mtime, state: "unreviewed", reasons: flags };
             }
-          } else if (flags.length > 0) {
-            // No model: a locally-flagged note is held, not merely queued.
+          } else if (flags.length > 0 || affinity >= JOURNAL_AFFINITY_HOLD) {
+            // No model: a locally-flagged or journal-shaped note is held,
+            // not merely queued.
             entry = {
               hash,
               mtime: file.stat.mtime,
@@ -1091,6 +1141,7 @@ export class ActionsController {
       run: async () => {
         entry.state = "cleared";
         entry.reasons = [];
+        entry.human = true; // a precedent for future screening
         await this.embodyVerdict(path, entry);
         await this.deps.publishLedger.save(ledger);
         return true;
@@ -1110,6 +1161,7 @@ export class ActionsController {
             confirmLabel: "Yes, publish this",
             run: async () => {
               entry.overridden = true;
+              entry.human = true; // a precedent for future screening
               await this.embodyVerdict(path, entry);
               await this.deps.publishLedger.save(ledger);
               return true;
@@ -1132,11 +1184,33 @@ export class ActionsController {
         actions: [open(path), { ...clearAction(path, entry), label: "Clear anyway" }],
       });
     }
+    // The cleared list IS the outbound manifest — it must be scannable, and
+    // overruling the model toward safety takes exactly one click.
+    for (const [path, entry] of cleared) {
+      items.push({
+        title: path.split("/").pop()!.replace(/\.md$/, ""),
+        detail: entry.overridden ? "cleared — by your override" : "cleared",
+        actions: [
+          open(path),
+          {
+            label: "Hold",
+            run: async () => {
+              entry.state = "held";
+              entry.overridden = false;
+              entry.reasons = ["held by you"];
+              entry.human = true;
+              await this.embodyVerdict(path, entry);
+              await this.deps.publishLedger.save(ledger);
+              return true;
+            },
+          },
+        ],
+      });
+    }
 
     if (items.length === 0) {
       new Notice(
-        `All ${cleared.length} candidate notes are cleared and marked publish: true. ` +
-          `Open Obsidian's Publish dialog to upload.` +
+        `Nothing to review. Open Obsidian's Publish dialog to upload.` +
           (remaining > 0 ? ` (${remaining} more changed notes — run again.)` : ""),
       );
       return;
