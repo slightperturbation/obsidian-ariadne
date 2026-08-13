@@ -50,6 +50,8 @@ export interface AriadneSettings {
   enableResurfacing: boolean;
   /** The Wanted section (dangling topics ranked by demand) at the panel foot. */
   enableWanted: boolean;
+  /** Invite today's journal entry at the panel foot when none exists yet. */
+  enableTodayHint: boolean;
 
   // Margin
   enableMargin: boolean;
@@ -103,6 +105,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   enableOnThisDay: true,
   enableResurfacing: true,
   enableWanted: true,
+  enableTodayHint: true,
 
   enableMargin: true,
   tensionMode: "quiet",

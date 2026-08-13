@@ -28,7 +28,7 @@ import { ActionsController } from "./actions/controller";
 import { PromptModal } from "./ui/prompt-modal";
 import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
-import { looksPeriodic } from "./core/periodic";
+import { dateOf, looksPeriodic } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
@@ -344,6 +344,12 @@ export default class AriadnePlugin extends Plugin {
           },
           promoteHint: () => this.settings.enablePromoteHint,
           onPromote: () => void this.actions.promoteToNote(),
+          todayMissing: () => {
+            if (!this.settings.enableTodayHint) return false;
+            const today = new Date().toISOString().slice(0, 10);
+            return !this.app.vault.getMarkdownFiles().some((f) => dateOf(f.path) === today);
+          },
+          onBeginToday: () => void this.beginTodaysEntry(),
           touch: () => this.policy.touch,
           tensions: this.tensions,
           lineBias: () => biasOf(this.settings.lineSerendipity),
@@ -725,6 +731,32 @@ export default class AriadnePlugin extends Plugin {
       icon: "ariadne-thread",
       factory: (controller: never, containerEl: HTMLElement) => new View(controller, containerEl),
     });
+  }
+
+  /**
+   * Create/open today's entry. The Daily Notes core plugin owns the user's
+   * date format, folder, and template, so when it's enabled its own command
+   * does the work; the fallback (plugin disabled) is a plain ISO-named note
+   * in the first journal folder.
+   */
+  private async beginTodaysEntry(): Promise<void> {
+    const commands = (
+      this.app as unknown as {
+        commands?: { executeCommandById?: (id: string) => boolean };
+      }
+    ).commands;
+    if (commands?.executeCommandById?.("daily-notes")) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const folder = this.journalFolders()[0] ?? "";
+    const path = normalizePath(folder ? `${folder}/${today}.md` : `${today}.md`);
+    if (!this.app.vault.getAbstractFileByPath(path)) {
+      if (folder && !this.app.vault.getAbstractFileByPath(folder)) {
+        await this.app.vault.createFolder(folder).catch(() => {});
+      }
+      await this.app.vault.create(path, "").catch(() => {});
+    }
+    await this.app.workspace.openLinkText(path, "", false);
   }
 
   private getWatcher(): DraftWatcher {

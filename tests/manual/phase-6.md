@@ -196,3 +196,16 @@ classification needs it; echoes don't).
 - [ ] **Every surface has a switch.** Toggling off Promote hint /
       On this day / Still true? / Wanted topics removes exactly that
       surface and nothing else.
+
+## 13. Today's-entry invitation
+
+- [ ] With no note dated today, the panel foot shows **Today →
+      "↳ begin today's entry"**. Click → with the Daily Notes plugin
+      enabled, its own command runs (your format, folder, template);
+      without it, an ISO-named note is created in the first journal
+      folder. Either way the entry opens and the row disappears.
+- [ ] With today's entry already existing, the row never appears.
+- [ ] Settings → Journaling → "Invite today's entry" off → row gone.
+- [ ] Known limit: detection reads ISO (2026-08-12) and written
+      ("August 12, 2026") names — an exotic daily-note format won't be
+      recognized; turn the toggle off in that case.

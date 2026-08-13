@@ -99,6 +99,19 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Invite today's entry")
+      .setDesc(
+        "When no note dated today exists, offer to begin it at the panel foot. " +
+          "Uses the Daily Notes plugin's format and template when enabled.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.enableTodayHint).onChange(async (v) => {
+          this.plugin.settings.enableTodayHint = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("On this day")
       .setDesc("In a dated note's Margin, show entries from this date in past months and years.")
       .addToggle((t) =>

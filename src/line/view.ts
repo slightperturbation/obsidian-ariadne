@@ -40,6 +40,10 @@ export interface AriadneViewDeps {
   /** Offer promotion while writing reflective prose in a journal note. */
   promoteHint?: () => boolean;
   onPromote?: () => void;
+  /** True when no note dated today exists yet — the day hasn't been opened. */
+  todayMissing?: () => boolean;
+  /** Create (or open) today's entry, honoring the Daily Notes plugin. */
+  onBeginToday?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (title: string) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
@@ -556,6 +560,7 @@ export class AriadneView extends ItemView {
   private renderWanted(): void {
     if (!this.wantedEl) return;
     this.wantedEl.replaceChildren();
+    this.renderToday();
     this.renderResurfaced();
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
       (t) => !this.dismissedWanted.has(t.title),
@@ -650,6 +655,29 @@ export class AriadneView extends ItemView {
       const title = p.split("/").pop()!.replace(/\.md$/, "");
       container.appendChild(this.footRowEl(title, p, `Open ${title}`));
     }
+  }
+
+  /**
+   * The day's own invitation: when no dated entry exists for today, one quiet
+   * row offers to begin it. Same spirit as Wanted — the panel surfaces an
+   * open loop, one click closes it — but pointed at the day rather than a
+   * topic: a journal practice lives or dies on the entry getting started.
+   * The row vanishes on its own once the entry exists.
+   */
+  private renderToday(): void {
+    if (!this.deps.todayMissing?.() || !this.deps.onBeginToday) return;
+    const doc = this.wantedEl.ownerDocument;
+    const label = doc.createElement("div");
+    label.classList.add("ariadne-section-label");
+    label.textContent = "Today";
+    this.wantedEl.appendChild(label);
+    const row = doc.createElement("div");
+    row.classList.add("ariadne-promote-hint");
+    row.textContent = "↳ begin today's entry";
+    row.setAttribute("role", "button");
+    row.setAttribute("aria-label", "Create and open today's journal entry");
+    row.addEventListener("click", () => this.deps.onBeginToday!());
+    this.wantedEl.appendChild(row);
   }
 
   /** One old, orphaned note a day: the vault reading back. */
