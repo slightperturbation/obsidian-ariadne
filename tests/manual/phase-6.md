@@ -330,3 +330,18 @@ Needs the Obsidian Publish core plugin enabled.
       precedent.
 - [ ] **Manifest.** Cleared notes are listed as rows — one-click "Hold"
       overrules the model in the safe direction (and becomes a precedent).
+
+## 20. Real-vault periodic fixes (0.6.1)
+
+- [ ] **Actuator verified.** With the Daily Notes plugin misconfigured
+      (non-daily folder/format), "begin today's entry" detects that no
+      dated note appeared, says so, and creates a real entry itself.
+- [ ] **Convention respected.** The fallback names today's entry in the
+      journal folder's own dominant format (ISO / ISO+weekday / written /
+      day-first), defaulting to ISO.
+- [ ] **Hybrid weeklies count.** `2025-W18-May01`-style names are detected
+      as periodic (demoted, journal-kind, never publish candidates via
+      folder settings).
+- [ ] **Loud misconfiguration.** A journalFolders/privateFolders entry
+      matching no real folder logs a warning always, and Notices when
+      publish review is live.

@@ -29,7 +29,7 @@ const PERIODIC_PATTERNS: RegExp[] = [
   // 28 June 2026
   new RegExp(`^\\d{1,2} (${MONTHS}) \\d{4}$`, "i"),
   // 2026-W31 weekly, 2026-07 monthly, 2026-Q3 quarterly, 2026 yearly
-  /^\d{4}-W\d{1,2}$/i,
+  /^\d{4}-W\d{1,2}(\b|_|$)/i,
   /^\d{4}-\d{2}$/,
   /^\d{4}-Q[1-4]$/i,
   /^\d{4}$/,
@@ -111,4 +111,61 @@ export function isoWeekLabel(at: Date = new Date()): string {
   const jan1 = Date.UTC(year, 0, 1);
   const week = Math.ceil(((date.getTime() - jan1) / 86_400_000 + 1) / 7);
   return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+/* ── Entry-name format inference ─────────────────────────────────────── */
+
+export type DateNameStyle = "iso" | "iso-weekday" | "written" | "day-first";
+
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/**
+ * Which date-name convention a journal folder actually uses, inferred from
+ * its existing entries. A vault's journal is defined by the writer's habit,
+ * not by the plugin's preference — creating "2026-08-13.md" into a folder of
+ * "August 13, 2026.md" files would fork the convention mid-shelf. Dominant
+ * style wins; ties and empty folders fall back to ISO (natural sort order).
+ */
+export function inferDateNameFormat(basenames: string[]): DateNameStyle {
+  const counts: Record<DateNameStyle, number> = {
+    iso: 0,
+    "iso-weekday": 0,
+    written: 0,
+    "day-first": 0,
+  };
+  for (const raw of basenames) {
+    const base = raw.replace(/\.md$/i, "").trim();
+    if (/^\d{4}-\d{2}-\d{2} \S/.test(base)) counts["iso-weekday"]++;
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(base)) counts.iso++;
+    else if (new RegExp(`^(${MONTHS}) \\d{1,2}, \\d{4}$`, "i").test(base)) counts.written++;
+    else if (new RegExp(`^\\d{1,2} (${MONTHS}) \\d{4}$`, "i").test(base)) counts["day-first"]++;
+  }
+  let best: DateNameStyle = "iso";
+  let bestCount = 0;
+  for (const style of ["iso", "iso-weekday", "written", "day-first"] as const) {
+    if (counts[style] > bestCount) {
+      best = style;
+      bestCount = counts[style];
+    }
+  }
+  return best;
+}
+
+/** Today's entry basename in the folder's own convention. */
+export function formatDateName(at: Date, style: DateNameStyle): string {
+  const iso = localISODate(at);
+  switch (style) {
+    case "iso":
+      return iso;
+    case "iso-weekday":
+      return `${iso} ${WEEKDAYS[at.getDay()]}`;
+    case "written":
+      return `${MONTH_NAMES[at.getMonth()]} ${at.getDate()}, ${at.getFullYear()}`;
+    case "day-first":
+      return `${at.getDate()} ${MONTH_NAMES[at.getMonth()]} ${at.getFullYear()}`;
+  }
 }

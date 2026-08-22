@@ -1,4 +1,4 @@
-import { Plugin, Platform, TFile, addIcon, normalizePath, requestUrl } from "obsidian";
+import { Notice, Plugin, Platform, TFile, TFolder, addIcon, normalizePath, requestUrl } from "obsidian";
 import { AriadneSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import { AriadneSettingTab } from "./settings/settings-tab";
 import { StatusStore } from "./core/status";
@@ -28,7 +28,13 @@ import { ActionsController } from "./actions/controller";
 import { PromptModal } from "./ui/prompt-modal";
 import { RetirementModal, surveyIncumbents } from "./actions/retirement";
 import { ensureRuntimeAssets } from "./assets";
-import { dateOf, localISODate, looksPeriodic } from "./core/periodic";
+import {
+  dateOf,
+  formatDateName,
+  inferDateNameFormat,
+  localISODate,
+  looksPeriodic,
+} from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
@@ -554,6 +560,7 @@ export default class AriadnePlugin extends Plugin {
     // still resolving and vault events replay the initial file scan.
     this.app.workspace.onLayoutReady(() => {
       void this.startIndexing();
+      this.warnFolderSettings();
       // The Line is an always-present surface (PRD §3.1). A plugin reload
       // detaches its leaves and Obsidian doesn't reliably restore them, so a
       // hot-reload during development — or any update — silently removed the
@@ -897,10 +904,35 @@ export default class AriadnePlugin extends Plugin {
           commands?: { executeCommandById?: (id: string) => boolean };
         }
       ).commands;
-      if (commands?.executeCommandById?.("daily-notes")) return;
+      if (commands?.executeCommandById?.("daily-notes")) {
+        // Verify the actuator. The core plugin's config is whatever the user
+        // last set it to — one real vault had "daily notes" pointed at a
+        // WEEKLY folder and format for a year. If no note dated today
+        // appears, the command did something else; fall through and create a
+        // real entry rather than trusting the name of the command.
+        for (let i = 0; i < 4; i++) {
+          await new Promise((r) => window.setTimeout(r, 400));
+          if (this.app.vault.getMarkdownFiles().some((f) => dateOf(f.path) === today)) return;
+        }
+        this.log.warn("daily-notes command produced no note dated today — creating one directly");
+        new Notice(
+          "The Daily Notes plugin didn't create a dated note (check its folder/format) — " +
+            "Ariadne created today's entry instead.",
+        );
+      }
 
+      // Name the entry in the journal's own convention, not ours: creating
+      // "2026-08-13" into a shelf of "August 13, 2026" files would fork the
+      // format mid-shelf.
       const folder = this.journalFolders()[0] ?? "";
-      const path = normalizePath(folder ? `${folder}/${today}.md` : `${today}.md`);
+      const names = folder
+        ? this.app.vault
+            .getMarkdownFiles()
+            .filter((f) => f.path.startsWith(`${folder}/`))
+            .map((f) => f.basename)
+        : [];
+      const name = formatDateName(new Date(), inferDateNameFormat(names));
+      const path = normalizePath(folder ? `${folder}/${name}.md` : `${name}.md`);
       if (!this.app.vault.getAbstractFileByPath(path)) {
         if (folder && !this.app.vault.getAbstractFileByPath(folder)) {
           await this.app.vault.createFolder(folder).catch(() => {});
@@ -1072,6 +1104,30 @@ export default class AriadnePlugin extends Plugin {
         }
       })
       .catch((err) => this.log.warn(`theme scan failed: ${String(err)}`));
+  }
+
+  /**
+   * Folder settings that match nothing protect nothing — and for
+   * privateFolders that silence is a privacy hazard (one real vault ran with
+   * journalFolders naming a folder that didn't exist; tier-0 publish
+   * protection was resting entirely on filename heuristics). Log always;
+   * Notice when the stakes are live (publish review enabled and available).
+   */
+  private warnFolderSettings(): void {
+    const existing = new Set(
+      this.app.vault.getAllLoadedFiles().flatMap((f) => (f instanceof TFolder ? [f.path] : [])),
+    );
+    const report = (label: string, entries: string[]) => {
+      const missing = entries.filter((f) => !existing.has(f));
+      if (missing.length === 0) return;
+      const msg = `${label} matched no existing folder: ${missing.join(", ")} — protection may not apply.`;
+      this.log.warn(msg);
+      if (this.settings.enablePublishReview && this.publishAvailable()) {
+        new Notice(`Ariadne: ${msg} Check Settings → Ariadne.`, 10_000);
+      }
+    };
+    report("Journal folders", parseFolderList(this.settings.journalFolders));
+    report("Private folders", parseFolderList(this.settings.privateFolders));
   }
 
   private getWatcher(): DraftWatcher {

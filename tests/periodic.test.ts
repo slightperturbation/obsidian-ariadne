@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dayKeyOf, dateOf, looksPeriodic } from "../src/core/periodic";
+import { dayKeyOf, dateOf, formatDateName, inferDateNameFormat, looksPeriodic } from "../src/core/periodic";
 import { onThisDay, openingLine, resurfacePick } from "../src/margin/resurface";
 import { IndexManager } from "../src/index/manager";
 import { HashEmbedder } from "../src/index/embeddings/hash-embedder";
@@ -150,5 +150,39 @@ describe("openingLine (the daily reading)", () => {
     expect(openingLine("- [ ] Fleeting thought about morphogenesis and constraint.")).toBe(
       "Fleeting thought about morphogenesis and constraint.",
     );
+  });
+});
+
+describe("date-name format inference", () => {
+  it("infers the journal's own convention, dominant style wins", () => {
+    expect(inferDateNameFormat(["2025-04-20", "2026-06-28", "Adventures"])).toBe("iso");
+    expect(inferDateNameFormat(["April 20, 2025", "June 28, 2026", "2026-01-01"])).toBe("written");
+    expect(inferDateNameFormat(["2024-05-19 Sunday.md", "2024-05-20 Monday.md"])).toBe(
+      "iso-weekday",
+    );
+    expect(inferDateNameFormat(["8 June 2025", "9 June 2025"])).toBe("day-first");
+  });
+
+  it("empty or undated folders fall back to ISO — natural sort order", () => {
+    expect(inferDateNameFormat([])).toBe("iso");
+    expect(inferDateNameFormat(["Adventures", "Workplaces"])).toBe("iso");
+  });
+
+  it("formatDateName renders each style for a local date", () => {
+    const d = new Date(2026, 7, 13); // Aug 13 2026, a Thursday
+    expect(formatDateName(d, "iso")).toBe("2026-08-13");
+    expect(formatDateName(d, "iso-weekday")).toBe("2026-08-13 Thursday");
+    expect(formatDateName(d, "written")).toBe("August 13, 2026");
+    expect(formatDateName(d, "day-first")).toBe("13 August 2026");
+  });
+});
+
+describe("hybrid weekly names", () => {
+  it("looksPeriodic accepts week-prefixed names like 2025-W18-May01", () => {
+    expect(looksPeriodic("Periodic/Weekly/2025-W18-May01.md")).toBe(true);
+    expect(looksPeriodic("2026-W34-Aug16.md")).toBe(true);
+    expect(looksPeriodic("2025-W20.md")).toBe(true);
+    // But a W mid-word is not a week note.
+    expect(looksPeriodic("2025-Windmills.md")).toBe(false);
   });
 });
