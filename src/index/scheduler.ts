@@ -10,6 +10,10 @@ export interface SchedulerOptions {
   batchBudgetMs?: number;
   /** Called after a drain leaves the queue empty — the persistence hook. */
   onIdle?: () => void;
+  /** Called after every batch while a drain is running. A vault-wide embed
+   * backfill is ONE drain that can run for hours, so onIdle alone means no
+   * persistence for hours — the caller throttles this into periodic saves. */
+  onProgress?: () => void;
 }
 
 type LoadNote = (path: string) => Promise<SourceNote | null>;
@@ -40,6 +44,7 @@ export class IncrementalScheduler {
   private readonly debounceMs: number;
   private readonly batchBudgetMs: number;
   private readonly onIdle?: () => void;
+  private readonly onProgress?: () => void;
 
   constructor(
     private manager: IndexManager,
@@ -50,6 +55,7 @@ export class IncrementalScheduler {
     this.debounceMs = opts.debounceMs ?? 400;
     this.batchBudgetMs = opts.batchBudgetMs ?? 12;
     this.onIdle = opts.onIdle;
+    this.onProgress = opts.onProgress;
   }
 
   private isQueued(path: string): boolean {
@@ -156,6 +162,11 @@ export class IncrementalScheduler {
           progressDone: this.burstDone,
           progressTotal: this.burstTotal,
         });
+        try {
+          this.onProgress?.();
+        } catch {
+          /* progress hooks must never break the drain */
+        }
         await yieldToUI();
         // A path re-queued above would otherwise spin this loop immediately;
         // let the debounce reschedule it instead.

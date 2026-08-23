@@ -19,6 +19,7 @@ export class WorkerClient {
   private loading?: Promise<void>;
   private nextId = 1;
   private pending = new Map<number, Pending>();
+  private disposed = false;
 
   constructor(
     private opts: { workerUrl: string; model: string; wasmPaths?: OrtWasmPaths },
@@ -73,7 +74,11 @@ export class WorkerClient {
     build: (id: number) => WorkerRequest,
     transfer?: Transferable[],
   ): Promise<WorkerResponse> {
+    // Fail fast, not silently: a post to a terminated worker never answers,
+    // so without this a post-dispose request hung its caller forever.
+    if (this.disposed) throw new Error("index worker disposed");
     await this.ready();
+    if (this.disposed) throw new Error("index worker disposed");
     const id = this.nextId++;
     return new Promise<WorkerResponse>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -101,6 +106,7 @@ export class WorkerClient {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.worker?.terminate();
     this.worker = undefined;
     this.failAll(new Error("index worker disposed"));

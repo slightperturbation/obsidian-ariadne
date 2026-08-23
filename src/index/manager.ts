@@ -136,6 +136,11 @@ export class IndexManager {
   private dirtySincePersist = new Set<string>();
   /** Short-lived memo of embed+scan results (see semanticHits). */
   private semanticCache = new Map<string, { at: number; revision: number; hits: VectorHit[] }>();
+  /** Same idea for the lexical OR leg of related(): one typing pause fans
+   * out to three consumers asking about the same paragraph, and the scan
+   * runs synchronously on the main thread — sharing it is a freeze fix,
+   * not just a saving. */
+  private lexicalOrCache = new Map<string, { at: number; revision: number; ids: string[] }>();
 
   constructor(private embedder?: EmbeddingProvider) {
     if (embedder) {
@@ -361,7 +366,7 @@ export class IndexManager {
     const clean = text.replace(/\[\[|\]\]/g, " ").replace(/\s+/g, " ").trim();
     if (!clean) return [];
 
-    const lists: string[][] = [this.lexical.rankedIds(clean, CANDIDATES, "or")];
+    const lists: string[][] = [this.lexicalOrIds(clean)];
     const cosineById = new Map<string, number>();
     const semanticActive = !!(this.embedder && this.vectors) && opts.semantic !== false;
     if (semanticActive) {
@@ -469,6 +474,21 @@ export class IndexManager {
    * RRF. Where the store can embed and search in one step (the worker), that's
    * a single round trip; otherwise it falls back to embed-then-search.
    */
+  /** Memoized lexical OR retrieval for paragraph contexts (see cache note). */
+  private lexicalOrIds(clean: string): string[] {
+    const cached = this.lexicalOrCache.get(clean);
+    if (cached && cached.revision === this.revision && Date.now() - cached.at < SEMANTIC_MEMO_MS) {
+      return cached.ids;
+    }
+    const ids = this.lexical.rankedIds(clean, CANDIDATES, "or");
+    this.lexicalOrCache.set(clean, { at: Date.now(), revision: this.revision, ids });
+    if (this.lexicalOrCache.size > SEMANTIC_MEMO_MAX) {
+      const oldest = this.lexicalOrCache.keys().next().value;
+      if (oldest !== undefined) this.lexicalOrCache.delete(oldest);
+    }
+    return ids;
+  }
+
   private async semanticHits(text: string, asQuery: boolean): Promise<VectorHit[]> {
     // One typing pause fans out to three consumers (Margin, tension, ghost)
     // that all ask about the same paragraph — this memo makes that one

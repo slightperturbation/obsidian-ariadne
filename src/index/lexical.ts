@@ -20,6 +20,36 @@ export interface LexicalHit {
 const titleFromPath = (path: string): string =>
   (path.split("/").pop() ?? path).replace(/\.md$/i, "");
 
+/** Function words carry no overlap signal for context matching. */
+const CONTEXT_STOP = new Set([
+  "the", "and", "are", "was", "were", "has", "had", "have", "its", "this",
+  "that", "with", "for", "not", "but", "you", "your", "they", "them", "their",
+  "then", "than", "there", "here", "what", "when", "where", "which", "who",
+  "how", "why", "can", "could", "would", "should", "will", "just", "about",
+  "into", "over", "from", "been", "being", "because", "also", "only", "some",
+  "more", "most", "very", "much", "many", "like", "one", "two", "all", "any",
+]);
+
+/** How many terms a paragraph-context query may carry. */
+const CONTEXT_TERM_CAP = 16;
+
+/**
+ * Reduce free text to its most distinctive terms for an OR overlap query.
+ * Longer words are the cheap proxy for rarer words — good enough here, since
+ * OR scoring only needs the strong terms to be present, not a perfect IDF
+ * ordering. Keeps retrieval cost bounded no matter how long the paragraph is.
+ */
+export function contextTerms(text: string): string {
+  const seen = new Set<string>();
+  for (const w of text.toLowerCase().match(/[\p{L}\p{N}']{3,}/gu) ?? []) {
+    if (!CONTEXT_STOP.has(w)) seen.add(w);
+  }
+  return [...seen]
+    .sort((a, b) => b.length - a.length)
+    .slice(0, CONTEXT_TERM_CAP)
+    .join(" ");
+}
+
 /**
  * BM25 lexical index over note chunks (MiniSearch under the hood). Pure-JS and
  * iOS-safe. Provides the always-available search floor that works with no model
@@ -105,10 +135,19 @@ export class LexicalIndex {
     mode: "and" | "or" = "and",
     keepPath?: (path: string) => boolean,
   ): LexicalHit[] {
-    if (!query.trim()) return [];
+    // OR mode exists for whole draft paragraphs, and they need the opposite
+    // search posture from a typed query: exact terms only, and few of them.
+    // The constructor's fuzzy+prefix defaults are right for a 2-word search
+    // box but catastrophic for an 80-term paragraph — fuzzy walks the whole
+    // vocabulary per term, and this runs on the main thread at every typing
+    // pause (the 2-second freeze of the 0.6.4 incident).
+    const effective = mode === "or" ? contextTerms(query) : query;
+    if (!effective.trim()) return [];
     return this.engine
-      .search(query, {
-        ...(mode === "or" ? { combineWith: "OR" as const } : {}),
+      .search(effective, {
+        ...(mode === "or"
+          ? { combineWith: "OR" as const, fuzzy: false, prefix: false }
+          : {}),
         ...(keepPath ? { filter: (r) => keepPath(r.path as string) } : {}),
       })
       .slice(0, limit)

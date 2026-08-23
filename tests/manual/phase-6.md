@@ -408,3 +408,22 @@ Needs the Obsidian Publish core plugin enabled.
       off → every created note goes to the Inbox folder.
 - [ ] **Undo intact.** "Undo last action" after a placed create removes the
       note from wherever it landed.
+
+## 24. Idle CPU + typing freezes (0.6.5)
+
+- [ ] **No typing freezes.** With a large vault, type in a long note and
+      pause repeatedly → no multi-second hangs; DevTools console shows no
+      `[Violation] 'setTimeout' handler took …ms` from Ariadne.
+- [ ] **Backfill converges across sessions.** During a vault-wide embed
+      backfill, `index/vectors-*.bin` grow every ~2 minutes (mid-drain
+      saves). Quit and relaunch mid-backfill → the status glyph's
+      "indexing X/Y" total SHRINKS each session instead of resetting to the
+      whole vault.
+- [ ] **Idle means idle.** Once "indexing X/Y" completes and the glyph goes
+      quiet, the Obsidian renderer process sits near 0% CPU.
+- [ ] **Quit-time save works.** Disable/re-enable Ariadne (a clean unload):
+      vector files keep their size (no 8-byte wipe), and reload does not
+      re-embed already-embedded notes.
+- [ ] **Margin quality holds.** Related/tension cards for a paragraph still
+      surface obviously-related notes (exact-term overlap + semantic), and
+      Line search still tolerates typos (fuzzy stays on for typed queries).

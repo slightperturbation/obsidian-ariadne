@@ -75,6 +75,10 @@ const obsidianFetch: typeof fetch = async (input, init) => {
 
 /** Debounce between the index going idle and a snapshot hitting disk. */
 const SAVE_DELAY_MS = 5_000;
+/** Minimum spacing of mid-drain (backfill) saves. */
+const MID_DRAIN_SAVE_MS = 90_000;
+/** Queue depth below which a drain is "about to finish" — let onIdle save. */
+const MID_DRAIN_MIN_REMAINING = 50;
 
 /**
  * Ariadne — plugin entry point.
@@ -94,6 +98,8 @@ export default class AriadnePlugin extends Plugin {
   private io?: FileIO;
   private indexDir!: string;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastMidDrainSaveAt = 0;
+  private lastMidDrainDone = 0;
   private saving = false;
   private lastSavedRevision = -1;
   private ortBlobUrls?: OrtWasmPaths;
@@ -630,6 +636,7 @@ export default class AriadnePlugin extends Plugin {
       (path) => this.source!.loadPath(path),
       this.status,
       {
+        onProgress: () => this.maybeMidDrainSave(),
         onIdle: () => {
           this.scheduleSave();
           this.maybeScanThemes();
@@ -875,6 +882,31 @@ export default class AriadnePlugin extends Plugin {
       this.saveTimer = null;
       if (this.policy.writesIndex) void this.saveIndexNow();
     }, SAVE_DELAY_MS);
+  }
+
+  /**
+   * Persistence during a long drain. The embed backfill is one drain that can
+   * run for hours; without this, its vectors lived only in worker memory and
+   * every restart re-embedded the vault from zero (the 100%-CPU incident).
+   * Saving mid-drain lets the backfill converge across sessions.
+   */
+  private maybeMidDrainSave(): void {
+    if (!this.policy.writesIndex || this.saving) return;
+    const s = this.status.get();
+    // Small drains (a typing pause, a handful of edits) finish in seconds and
+    // get the normal onIdle save; only a drain with a long road ahead needs
+    // checkpointing.
+    if (s.progressTotal - s.progressDone < MID_DRAIN_MIN_REMAINING) return;
+    const now = Date.now();
+    if (now - this.lastMidDrainSaveAt < MID_DRAIN_SAVE_MS) return;
+    const started = this.lastMidDrainSaveAt !== 0;
+    this.lastMidDrainSaveAt = now;
+    if (started && s.progressTotal > 0) {
+      const rate = ((s.progressDone - this.lastMidDrainDone) / (MID_DRAIN_SAVE_MS / 60_000)).toFixed(0);
+      this.log.debug(`backfill: ${s.progressDone}/${s.progressTotal} notes, ~${rate}/min`);
+    }
+    this.lastMidDrainDone = s.progressDone;
+    void this.saveIndexNow();
   }
 
   private async saveIndexNow(): Promise<void> {
@@ -1299,16 +1331,26 @@ export default class AriadnePlugin extends Plugin {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     for (const timer of this.tagTimers.values()) clearTimeout(timer);
     this.tensions?.dispose();
-    this.workerClient?.dispose();
-    if (this.workerBlobUrl) URL.revokeObjectURL(this.workerBlobUrl);
-    if (this.ortBlobUrls) {
-      URL.revokeObjectURL(this.ortBlobUrls.mjs);
-      URL.revokeObjectURL(this.ortBlobUrls.wasm);
-    }
     this.watcher?.dispose();
     this.scheduler?.dispose();
-    // Best-effort: onunload can't await, but the write usually completes.
-    if (this.policy.writesIndex) void this.saveIndexNow();
+    // The final save must run while the worker is still alive: snapshot()
+    // asks it for every vector, and a request to a terminated worker never
+    // answers — the old dispose-then-save order was why quit-time saves
+    // silently persisted zero vectors (the 100%-CPU incident). Best-effort:
+    // onunload can't await, but on a plugin reload the microtasks complete;
+    // the worker is torn down right after the write either way.
+    const client = this.workerClient;
+    this.workerClient = undefined;
+    const teardown = () => {
+      client?.dispose();
+      if (this.workerBlobUrl) URL.revokeObjectURL(this.workerBlobUrl);
+      if (this.ortBlobUrls) {
+        URL.revokeObjectURL(this.ortBlobUrls.mjs);
+        URL.revokeObjectURL(this.ortBlobUrls.wasm);
+      }
+    };
+    if (this.policy.writesIndex) void this.saveIndexNow().finally(teardown);
+    else teardown();
     this.log?.info("unloaded");
   }
 

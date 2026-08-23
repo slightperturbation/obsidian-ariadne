@@ -222,3 +222,35 @@ describe("IncrementalScheduler", () => {
     expect(scheduler.pending).toBe(0);
   });
 });
+
+describe("onProgress (mid-drain persistence hook)", () => {
+  it("fires during a drain, and a throwing hook cannot break it", async () => {
+    const notes = Array.from({ length: 6 }, (_, i) => note(`n${i}.md`, `# n${i}\n\nbody ${i}`));
+    const store = new Map(notes.map((n) => [n.path, n]));
+    const manager = new IndexManager();
+    let calls = 0;
+    const scheduler = new IncrementalScheduler(
+      manager,
+      async (path) => {
+        // Each load overruns the 0ms budget, forcing one note per batch —
+        // so the drain provably spans several batches (= progress ticks).
+        await new Promise((r) => setTimeout(r, 2));
+        return store.get(path) ?? null;
+      },
+      undefined,
+      {
+        debounceMs: 5,
+        batchBudgetMs: 0,
+        onProgress: () => {
+          calls++;
+          throw new Error("hook exploded");
+        },
+      },
+    );
+    scheduler.enqueueAll(notes.map((n) => n.path));
+    await scheduler.flush();
+    expect(calls).toBeGreaterThan(1);
+    expect(manager.noteCount).toBe(6);
+    scheduler.dispose();
+  });
+});
