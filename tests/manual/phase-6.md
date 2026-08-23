@@ -345,3 +345,31 @@ Needs the Obsidian Publish core plugin enabled.
 - [ ] **Loud misconfiguration.** A journalFolders/privateFolders entry
       matching no real folder logs a warning always, and Notices when
       publish review is live.
+
+## 21. Journaling assists (0.6.2)
+
+- [ ] **Threads.** Open a blank (or near-blank) journal entry with a
+      previous entry containing reflective prose → the Margin's journal
+      section leads with **Threads**: "yesterday" (or weekday) with the
+      last reflective paragraph's first sentence, and a weekly-synthesis
+      question when one exists (same pick all day). Click opens the
+      source; ⌥-click or "↳ quote" inserts `> yesterday: "…"` at the
+      cursor — your words, quoted, never generated prose.
+- [ ] **Deep link.** `open "obsidian://ariadne-today?vault=<name>"` from
+      a terminal (or an OS Reminder/Shortcut) opens/creates today's
+      entry directly.
+- [ ] **Journal privacy.** Settings → Journaling → Journal model calls:
+      *Local box only* with the box asleep → tension checks on journal
+      paragraphs silently skip (echoes still appear); weekly synthesis
+      says the box is unreachable; NOTHING journal-flavored reaches the
+      cloud (verify via glyph cost staying flat). *None* → no model
+      calls on journal content at all.
+- [ ] **Continuity.** With no entry today, the begin verb reads
+      "↳ begin today's entry · last wrote yesterday/Tuesday/N days ago".
+      No streak counters anywhere.
+- [ ] **The chain.** A dated entry's Margin shows "← <previous entry>";
+      clicking walks the journal backward.
+- [ ] **Invite on launch** (off by default): enabled, first launch of a
+      day with no entry → one clickable Notice; click begins the entry.
+- [ ] **Tally persists.** Promote a thought, restart Obsidian → the
+      Today row still shows "· 1 promoted".

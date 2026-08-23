@@ -132,6 +132,13 @@ export class ActionsController {
       privateFolders: () => string[];
       /** The publish ledger's home (plugin-dir JSON, adapter-backed). */
       publishLedger: { load(): Promise<PublishLedger>; save(l: PublishLedger): Promise<void> };
+      /** Which brain may read journal content (tension/themes/synthesis). */
+      journalPrivacy: () => "cloud" | "local" | "none";
+      /** Persisted promoted-today tally (survives restarts). */
+      promotedStore: {
+        get(): { date: string; count: number } | undefined;
+        set(v: { date: string; count: number }): void;
+      };
       log: Logger;
     },
   ) {}
@@ -852,6 +859,18 @@ export class ActionsController {
    */
   async weeklySynthesis(): Promise<void> {
     const { app } = this.deps;
+    const privacy = this.deps.journalPrivacy();
+    if (privacy === "none") {
+      new Notice(
+        "Journal model calls are set to None — allow the local box or cloud in " +
+          "Settings → Journaling to synthesize the week.",
+      );
+      return;
+    }
+    if (privacy === "local" && !this.deps.router.localAvailable()) {
+      new Notice("Journal privacy is local-only and the local model is unreachable.");
+      return;
+    }
     if (!this.deps.router.available()) {
       new Notice("Weekly synthesis needs a reasoning model — set an API key or local model URL.");
       return;
@@ -901,6 +920,7 @@ export class ActionsController {
             schema: SYNTHESIS_SCHEMA as unknown as Record<string, unknown>,
             maxTokens: 500,
             thinking: true,
+            ...(privacy === "local" ? { privacy: "local" as const } : {}),
           }),
         );
       } catch (err) {
@@ -1294,13 +1314,21 @@ export class ActionsController {
       const clusters = (await this.gatherThemeClusters()) ?? [];
       for (const theme of clusters.slice(0, 5)) {
         // Name it — cheap labeling, so the local box takes it when awake.
+        // Theme evidence is journal excerpts — the privacy setting governs.
+        const privacy = this.deps.journalPrivacy();
         let named: { title: string; gist?: string } | null = null;
-        if (themesModelOk && this.deps.router.available()) {
+        if (
+          themesModelOk &&
+          privacy !== "none" &&
+          this.deps.router.available() &&
+          (privacy !== "local" || this.deps.router.localAvailable())
+        ) {
           try {
             named = parseTheme(
               await this.deps.router.run("theme", themePrompt(theme.evidence), {
                 schema: THEME_SCHEMA as unknown as Record<string, unknown>,
                 maxTokens: 150,
+                ...(privacy === "local" ? { privacy: "local" as const } : {}),
               }),
             );
           } catch (err) {
@@ -1452,17 +1480,14 @@ export class ActionsController {
 
   /** Reset per run; false after the cost cap stops mid-batch model calls. */
   private triageModelOk = true;
-  /** Promotions made today (session-scoped) — the Today zone's tally. */
-  private promotedOn = { date: "", count: 0 };
-
   promotedToday(): number {
-    return this.promotedOn.date === localISODate() ? this.promotedOn.count : 0;
+    const stored = this.deps.promotedStore.get();
+    return stored?.date === localISODate() ? stored.count : 0;
   }
 
   private notePromotion(): void {
     const today = localISODate();
-    if (this.promotedOn.date !== today) this.promotedOn = { date: today, count: 0 };
-    this.promotedOn.count += 1;
+    this.deps.promotedStore.set({ date: today, count: this.promotedToday() + 1 });
   }
 
   async triageInbox(): Promise<void> {

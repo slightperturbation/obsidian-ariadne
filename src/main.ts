@@ -38,6 +38,14 @@ import {
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
+import {
+  continuityLabel,
+  lastReflectiveGist,
+  pickForDay,
+  previousDated,
+  synthesisQuestions,
+  type ThreadItem,
+} from "./margin/threads";
 import { classifyEntry, entryTag, isLegacyDatedTag, normalizeTag } from "./margin/tags";
 import type { PublishLedger } from "./publish/screen";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
@@ -226,6 +234,14 @@ export default class AriadnePlugin extends Plugin {
       inboxFolder: () => this.settings.inboxFolder,
       archiveFolder: () => this.settings.archiveFolder,
       isJournal: (path) => this.isJournalPath(path),
+      journalPrivacy: () => this.settings.journalModelCalls,
+      promotedStore: {
+        get: () => this.settings.promotedLog,
+        set: (v) => {
+          this.settings.promotedLog = v;
+          void this.saveSettings();
+        },
+      },
       privateFolders: () => [
         ...parseFolderList(this.settings.privateFolders),
         ...this.journalFolders(),
@@ -377,6 +393,7 @@ export default class AriadnePlugin extends Plugin {
       router: this.router,
       mode: () => this.settings.tensionMode,
       isJournal: (path) => this.isJournalPath(path),
+      journalPrivacy: () => this.settings.journalModelCalls,
       excerptOf: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);
         if (!(file instanceof TFile)) return null;
@@ -471,6 +488,22 @@ export default class AriadnePlugin extends Plugin {
           onThemes: () => void this.actions.findJournalThemes(),
           promotedToday: () => this.actions.promotedToday(),
           onCapture: (seed) => void this.actions.captureThought(seed),
+          threads: (ctx) => this.threadsFor(ctx.path),
+          onInsertThread: (text) => {
+            const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (view?.editor) view.editor.replaceSelection(text);
+          },
+          previousEntry: (path) => {
+            const date = dateOf(path);
+            if (!date) return null;
+            return previousDated(this.app.vault.getMarkdownFiles().map((f) => f.path), date);
+          },
+          lastWrote: () => {
+            const today = localISODate();
+            const prev = previousDated(this.app.vault.getMarkdownFiles().map((f) => f.path), today);
+            const prevDate = prev ? dateOf(prev) : null;
+            return prevDate ? continuityLabel(prevDate, today) : null;
+          },
           publishChanged: () => {
             if (!this.settings.enablePublishReview || !this.publishAvailable()) return 0;
             if (!this.publishCount || Date.now() - this.publishCount.at > 30_000) {
@@ -500,6 +533,11 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.registerAriadneBasesView();
+
+    // The OS owns real reminding (Obsidian has no background presence); this
+    // is the door its reminders can open: obsidian://ariadne-today jumps
+    // straight into today's entry from a Reminder, Shortcut, or calendar.
+    this.registerObsidianProtocolHandler("ariadne-today", () => void this.beginTodaysEntry());
 
     // The Margin section + ghost text listen to the writing via one shared watcher.
     this.ghost = new GhostEngine({
@@ -561,6 +599,7 @@ export default class AriadnePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       void this.startIndexing();
       this.warnFolderSettings();
+      this.maybeInviteToday();
       // The Line is an always-present surface (PRD §3.1). A plugin reload
       // detaches its leaves and Obsidian doesn't reliably restore them, so a
       // hot-reload during development — or any update — silently removed the
@@ -1128,6 +1167,49 @@ export default class AriadnePlugin extends Plugin {
     };
     report("Journal folders", parseFolderList(this.settings.journalFolders));
     report("Private folders", parseFolderList(this.settings.privateFolders));
+  }
+
+  /**
+   * Continuation threads for a blank journal page: where yesterday's
+   * thinking stopped, and the week's unanswered question — the writer's own
+   * words as the way in. Cached per day; two cachedReads at most.
+   */
+  private async threadsFor(path: string): Promise<ThreadItem[]> {
+    const today = localISODate();
+    const anchor = dateOf(path) ?? today;
+    const items: ThreadItem[] = [];
+    const paths = this.app.vault.getMarkdownFiles().map((f) => f.path);
+
+    const prev = previousDated(paths, anchor);
+    if (prev) {
+      const file = this.app.vault.getAbstractFileByPath(prev);
+      if (file instanceof TFile) {
+        const gist = lastReflectiveGist(await this.app.vault.cachedRead(file));
+        const prevDate = dateOf(prev);
+        if (gist && prevDate) {
+          items.push({ label: continuityLabel(prevDate, anchor), quote: gist, sourcePath: prev });
+        }
+      }
+    }
+
+    const synth = this.app.vault
+      .getMarkdownFiles()
+      .filter((f) => f.basename.startsWith("Weekly synthesis"))
+      .sort((a, b) => b.basename.localeCompare(a.basename))[0];
+    if (synth) {
+      const question = pickForDay(synthesisQuestions(await this.app.vault.cachedRead(synth)), today);
+      if (question) items.push({ label: "weekly synthesis", quote: question, sourcePath: synth.path });
+    }
+    return items;
+  }
+
+  /** One quiet, clickable invitation on the day's first launch — opt-in. */
+  private maybeInviteToday(): void {
+    if (!this.settings.remindOnLaunch) return;
+    const today = localISODate();
+    if (this.app.vault.getMarkdownFiles().some((f) => dateOf(f.path) === today)) return;
+    const notice = new Notice("No journal entry yet today — click to begin.", 10_000);
+    notice.noticeEl.addEventListener("click", () => void this.beginTodaysEntry());
   }
 
   private getWatcher(): DraftWatcher {

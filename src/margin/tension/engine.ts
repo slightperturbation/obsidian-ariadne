@@ -29,6 +29,13 @@ export interface TensionEngineDeps {
   excerptOf?: (path: string) => Promise<string | null>;
   /** Journal/dated-note detection — log content there has no stance to check. */
   isJournal?: (path: string) => boolean;
+  /**
+   * Where journal content may be sent for classification. "cloud" (default)
+   * uses the normal routing; "local" walls journal paragraphs to the home
+   * box (skipping classification when it's asleep — echoes still work, being
+   * pure cosine); "none" makes no model calls on journal content at all.
+   */
+  journalPrivacy?: () => "cloud" | "local" | "none";
   log: Logger;
 }
 
@@ -123,6 +130,12 @@ export class TensionEngine {
     // notes, structured writing IS the thinking and stays eligible.
     if (this.deps.isJournal?.(ctx.path) && !isReflectiveProse(paragraph)) return [];
 
+    // Journal paragraphs are the most personal text in the vault; the
+    // writer decides which brain may read them. Echoes are unaffected —
+    // they never leave the device.
+    const privacy = this.deps.isJournal?.(ctx.path)
+      ? (this.deps.journalPrivacy?.() ?? "cloud")
+      : "cloud";
     const profile = TENSION_PROFILES[mode];
     const results = await manager.related(paragraph, {
       excludePath: ctx.path,
@@ -187,7 +200,7 @@ export class TensionEngine {
         continue; // "neither" stays silent — the Margin already shows it as related
       }
 
-      this.scheduleClassify(pairKey, candidate.path, ctx, candidate.title, candidate.snippet);
+      this.scheduleClassify(pairKey, candidate.path, ctx, candidate.title, candidate.snippet, privacy);
     }
 
     // Tensions before echoes — a contradiction is the rarer, sharper signal —
@@ -205,7 +218,10 @@ export class TensionEngine {
     ctx: DraftContext,
     noteTitle: string,
     noteExcerpt: string,
+    privacy: "cloud" | "local" | "none" = "cloud",
   ): void {
+    if (privacy === "none") return;
+    if (privacy === "local" && !this.deps.router.localAvailable()) return;
     if (this.inFlight.has(pairKey)) return;
     if (this.budgetExhausted || this.failures >= FAILURE_MAX) return;
     if (this.classifyCount >= SESSION_CLASSIFY_MAX) return;
@@ -228,7 +244,11 @@ export class TensionEngine {
       return this.deps.router.run(
         "relation",
         relationPrompt({ paragraph, noteTitle, noteExcerpt: excerpt }),
-        { schema: RELATION_SCHEMA as unknown as Record<string, unknown>, maxTokens: 200 },
+        {
+          schema: RELATION_SCHEMA as unknown as Record<string, unknown>,
+          maxTokens: 200,
+          ...(privacy === "local" ? { privacy: "local" as const } : {}),
+        },
       );
     })()
       .then((text) => {

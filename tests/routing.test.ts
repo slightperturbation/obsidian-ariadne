@@ -174,3 +174,32 @@ describe("GemmaProvider", () => {
     await expect(g.complete("p")).rejects.toThrow(/empty output/);
   });
 });
+
+describe("journal privacy routing", () => {
+  it("privacy 'local' routes local and NEVER retries on the cloud", async () => {
+    const local = provider({ name: "local" });
+    local.complete.mockRejectedValueOnce(new Error("box went to sleep"));
+    const { router, cloud } = makeRouter({ local: local.p });
+    await expect(router.run("relation", "p", { privacy: "local" })).rejects.toThrow(
+      "box went to sleep",
+    );
+    expect(cloud.complete).not.toHaveBeenCalled();
+  });
+
+  it("privacy 'local' with the box unreachable fails instead of leaking", async () => {
+    const asleep = provider({ name: "local", available: () => false });
+    const { router, cloud } = makeRouter({ local: asleep.p });
+    await expect(router.run("relation", "p", { privacy: "local" })).rejects.toThrow(
+      /local-only/,
+    );
+    expect(cloud.complete).not.toHaveBeenCalled();
+    expect(asleep.complete).not.toHaveBeenCalled();
+  });
+
+  it("privacy 'local' succeeds on the box even for cloud-preferred tasks", async () => {
+    const local = provider({ name: "local" });
+    const { router, cloud } = makeRouter({ local: local.p });
+    expect(await router.run("scaffold", "p", { privacy: "local" })).toBe("answer from local");
+    expect(cloud.complete).not.toHaveBeenCalled();
+  });
+});

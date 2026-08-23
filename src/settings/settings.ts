@@ -1,6 +1,6 @@
 import type { DeviceRoleSetting } from "../core/device";
 import type { TensionMode } from "../margin/tension/detect";
-import type { RoutingMode } from "../model/router";
+import type { JournalPrivacy, RoutingMode } from "../model/router";
 
 export interface AriadneSettings {
   // Indexing
@@ -64,6 +64,16 @@ export interface AriadneSettings {
   enableTagSuggestions: boolean;
   /** Local hour (0–23) after which the panel offers "close the day". */
   closeDayHour: number;
+  /**
+   * Which brain may read journal content (tension checks, theme naming,
+   * weekly synthesis). "cloud" is most capable; "local" walls journal text
+   * to the home box; "none" makes no model calls on journal content.
+   */
+  journalModelCalls: JournalPrivacy;
+  /** One quiet Notice on the day's first launch when no entry exists. */
+  remindOnLaunch: boolean;
+  /** Internal: persisted promoted-today tally. */
+  promotedLog?: { date: string; count: number };
 
   // Publishing
   /** The departure lounge: screen notes before Obsidian Publish uploads. */
@@ -132,6 +142,8 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   journalTag: "journal",
   enableTagSuggestions: true,
   closeDayHour: 18,
+  journalModelCalls: "cloud",
+  remindOnLaunch: false,
 
   enablePublishReview: true,
   privateFolders: "Journal, Inbox, Archive",

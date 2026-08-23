@@ -13,6 +13,9 @@ export interface ReasoningProvider {
 /** User override for where reasoning runs. */
 export type RoutingMode = "auto" | "cloud" | "local";
 
+/** Where journal content may be sent. "none" is enforced by callers. */
+export type JournalPrivacy = "cloud" | "local" | "none";
+
 /**
  * Which tasks may route to the local box under "auto". The line is quality:
  * connective phrasing and relation classification are one-shot fragments a
@@ -65,7 +68,16 @@ export class ModelRouter {
    * task but still requires the box to be awake; nothing ever *waits* for
    * the box. Cloud-only and unavailable-local both land on Claude.
    */
-  private route(task: TaskKind): { provider: ReasoningProvider; brain: "cloud" | "local" } {
+  private route(
+    task: TaskKind,
+    privacy?: "cloud" | "local",
+  ): { provider: ReasoningProvider; brain: "cloud" | "local" } {
+    // Privacy "local" is a wall, not a preference: journal content must not
+    // reach the cloud even when the box is asleep — the call fails instead.
+    if (privacy === "local") {
+      if (this.deps.local?.available()) return { provider: this.deps.local, brain: "local" };
+      throw new Error("journal privacy is local-only and the local model is unreachable");
+    }
     const mode = this.deps.mode?.() ?? "auto";
     const local = this.deps.local;
     const localOk =
@@ -74,13 +86,23 @@ export class ModelRouter {
     return { provider: this.deps.provider, brain: "cloud" };
   }
 
+  /** Is the local route usable right now? (For privacy-gated callers.) */
+  localAvailable(): boolean {
+    return this.deps.local?.available() ?? false;
+  }
+
   get sessionCost(): number {
     return this.sessionCostUsd;
   }
 
-  async run(task: TaskKind, prompt: string, opts: CompleteOptions = {}): Promise<string> {
+  async run(
+    task: TaskKind,
+    prompt: string,
+    opts: CompleteOptions & { privacy?: "cloud" | "local" } = {},
+  ): Promise<string> {
     if (!this.available()) throw new Error("no reasoning model configured");
-    const chosen = this.route(task);
+    const { privacy, ...completeOpts } = opts;
+    const chosen = this.route(task, privacy);
     // The budget gates cloud spend; a local call is free and may proceed
     // even past the cap — that's the point of having the box.
     if (chosen.brain === "cloud") {
@@ -99,17 +121,19 @@ export class ModelRouter {
       let text: string;
       let usage: ModelUsage;
       try {
-        ({ text, usage } = await provider.complete(prompt, opts));
+        ({ text, usage } = await provider.complete(prompt, completeOpts));
       } catch (err) {
         // Opportunistic means the box's failures are the router's problem,
         // not the feature's: fall through to the cloud transparently. Cloud
-        // failures still propagate — there is nothing behind them.
-        if (brain !== "local" || !this.deps.provider.available()) throw err;
+        // failures still propagate — there is nothing behind them. And a
+        // privacy-walled call NEVER retries on the cloud: for journal
+        // content, failing is the correct fallback.
+        if (brain !== "local" || privacy === "local" || !this.deps.provider.available()) throw err;
         this.deps.log.warn(`local model failed (${String(err)}); retrying on cloud`);
         const limit = this.deps.costLimitUsd();
         if (limit > 0 && this.sessionCostUsd >= limit) throw new BudgetExceededError(limit);
         brain = "cloud";
-        ({ text, usage } = await this.deps.provider.complete(prompt, opts));
+        ({ text, usage } = await this.deps.provider.complete(prompt, completeOpts));
       }
       this.sessionCostUsd += usage.costUsd;
       const limit = this.deps.costLimitUsd();

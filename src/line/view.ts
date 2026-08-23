@@ -6,6 +6,7 @@ import type { DraftWatcher, DraftContext } from "../margin/draft-watcher";
 import type { TensionFinding } from "../margin/tension/detect";
 import type { WantedTopic } from "../margin/wanted";
 import { isReflectiveProse } from "../margin/journal";
+import { isBlankPage, threadQuote, type ThreadItem } from "../margin/threads";
 import { normalizeTag, suggestTags } from "../margin/tags";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
@@ -76,6 +77,14 @@ export interface AriadneViewDeps {
   promotedToday?: () => number;
   /** Zero-ceremony capture of the query text (⇧↵ on the create row). */
   onCapture?: (seed: string) => void;
+  /** Continuation threads for a blank journal page (the writer's own words). */
+  threads?: (ctx: DraftContext) => Promise<ThreadItem[]>;
+  /** Insert a thread's quote at the cursor of the active editor. */
+  onInsertThread?: (text: string) => void;
+  /** The previous dated entry — the journal chain's ← link. */
+  previousEntry?: (path: string) => string | null;
+  /** "yesterday" / "Tuesday" / "12 days ago" — continuity, never a streak. */
+  lastWrote?: () => string | null;
   /** Changed publish candidates since the last review (0 = quiet). */
   publishChanged?: () => number;
   onPublishReview?: () => void;
@@ -538,12 +547,16 @@ export class AriadneView extends ItemView {
     // terms of the note keeps the Margin semantic instead of lexical-only.
     let results: ScoredResult[];
     let findings: TensionFinding[];
+    let threads: ThreadItem[] = [];
     try {
-      [results, findings] = await Promise.all([
+      [results, findings, threads] = await Promise.all([
       manager.canEmbedText() || !manager.hasStoredVectors()
         ? manager.related(contextText, opts)
         : manager.relatedToPath(ctx.path, opts),
         this.deps.tensions?.analyze(ctx) ?? Promise.resolve([]),
+        this.deps.isPeriodic?.(ctx.path) && isBlankPage(ctx.noteText)
+          ? (this.deps.threads?.(ctx) ?? Promise.resolve([]))
+          : Promise.resolve([]),
       ]);
     } catch (err) {
       // A worker hiccup mid-retrieval leaves the previous render standing;
@@ -566,6 +579,7 @@ export class AriadneView extends ItemView {
       findings,
       ctx,
       results,
+      threads,
     );
   }
 
@@ -576,6 +590,7 @@ export class AriadneView extends ItemView {
     /** Pre-filter results: the taxonomy vote must see the CLOSEST neighbors,
      * which are exactly the ones the card list filters out (flagged, linked). */
     tagEvidence: ScoredResult[] = results,
+    threads: ThreadItem[] = [],
   ): void {
     const doc = this.marginEl.ownerDocument;
     this.marginEl.replaceChildren();
@@ -599,7 +614,9 @@ export class AriadneView extends ItemView {
     // wants return.
     let journalSections = false;
     if (ctx && this.deps.isPeriodic?.(ctx.path)) {
+      this.renderThreads(doc, threads);
       this.renderPromoteHint(doc, ctx);
+      this.renderChain(ctx.path);
       this.renderOnThisDay(this.marginEl, ctx.path);
       journalSections = this.marginEl.childElementCount > findings.length;
     } else if (ctx) {
@@ -918,6 +935,66 @@ export class AriadneView extends ItemView {
   }
 
   /**
+   * Continuation threads on a blank page: the writer's own last thought,
+   * an unanswered synthesis question — retrieval at the moment of sitting
+   * down, in their own words. Click opens the source; ⌥-click (or the ↳
+   * button) inserts the line as a quote.
+   */
+  private renderThreads(doc: Document, threads: ThreadItem[]): void {
+    if (threads.length === 0) return;
+    const label = doc.createElement("div");
+    label.classList.add("ariadne-section-label");
+    label.textContent = "Threads";
+    this.marginEl.appendChild(label);
+    for (const item of threads) {
+      const row = doc.createElement("div");
+      row.classList.add("ariadne-row", "ariadne-confidence-quiet", "ariadne-thread");
+      const head = doc.createElement("div");
+      head.classList.add("ariadne-row-head");
+      const title = doc.createElement("span");
+      title.classList.add("ariadne-row-title");
+      title.textContent = item.label;
+      head.appendChild(title);
+      if (this.deps.onInsertThread) {
+        const insert = doc.createElement("button");
+        insert.type = "button";
+        insert.classList.add("ariadne-row-action");
+        insert.textContent = "↳ quote";
+        insert.setAttribute("aria-label", `Insert this line from ${item.label}`);
+        insert.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          this.deps.onInsertThread!(threadQuote(item));
+        });
+        head.appendChild(insert);
+      }
+      row.appendChild(head);
+      const quote = doc.createElement("div");
+      quote.classList.add("ariadne-row-snippet", "ariadne-reading");
+      quote.textContent = `“${item.quote}”`;
+      row.appendChild(quote);
+      row.setAttribute("aria-label", `Thread from ${item.label}`);
+      this.actionable(row, () => {
+        void this.app.workspace.openLinkText(item.sourcePath, "", false);
+      });
+      row.addEventListener("click", (ev) => {
+        if (ev.altKey && this.deps.onInsertThread) {
+          ev.stopPropagation();
+          this.deps.onInsertThread(threadQuote(item));
+        }
+      });
+      this.marginEl.appendChild(row);
+    }
+  }
+
+  /** The journal is a chain: one quiet ← link to the previous entry. */
+  private renderChain(path: string): void {
+    const prev = this.deps.previousEntry?.(path);
+    if (!prev) return;
+    const name = prev.split("/").pop()!.replace(/\.md$/, "");
+    this.marginEl.appendChild(this.footRowEl(`← ${name}`, prev, `Open previous entry ${name}`));
+  }
+
+  /**
    * The moment-of-writing bridge out of the journal: when the paragraph
    * under the cursor is reflective prose (not log lines — a task list has
    * nothing to promote), one quiet row offers to keep the thought. The same
@@ -972,9 +1049,10 @@ export class AriadneView extends ItemView {
     const doc = this.todayEl.ownerDocument;
 
     if (this.deps.todayMissing?.() && this.deps.onBeginToday) {
+      const last = this.deps.lastWrote?.();
       this.verbRow(
         this.todayEl,
-        "begin today's entry",
+        `begin today's entry${last ? ` · last wrote ${last}` : ""}`,
         "Create and open today's journal entry",
         () => this.deps.onBeginToday!(),
       );

@@ -163,6 +163,43 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Journal model calls")
+      .setDesc(
+        "Which brain may read journal content — tension checks, theme naming, weekly synthesis. " +
+          "Cloud is the most capable (default). Local only walls journal text to your home box and " +
+          "never falls back to cloud (checks simply skip when the box is asleep). None makes no " +
+          "model calls on journal content at all; echoes and relatedness still work — they never " +
+          "leave the device.",
+      )
+      .addDropdown((d) =>
+        d
+          .addOptions({
+            cloud: "Cloud (most capable)",
+            local: "Local box only",
+            none: "None",
+          })
+          .setValue(this.plugin.settings.journalModelCalls)
+          .onChange(async (v) => {
+            this.plugin.settings.journalModelCalls = v as AriadneSettings["journalModelCalls"];
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Invite on launch")
+      .setDesc(
+        "On the day's first launch with no entry, show one quiet clickable notice. For stronger " +
+          "reminding, point an OS reminder or Shortcut at obsidian://ariadne-today — it opens " +
+          "today's entry directly.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.remindOnLaunch).onChange(async (v) => {
+          this.plugin.settings.remindOnLaunch = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Close-the-day hour")
       .setDesc("Local hour after which the panel offers the evening review (0–23).")
       .addSlider((sl) =>
