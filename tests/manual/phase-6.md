@@ -468,3 +468,22 @@ Needs the Obsidian Publish core plugin enabled.
       Files & links → Excluded files is excluded from Ariadne too.
 - [ ] **Reversible.** Clearing the setting re-indexes the folder on the next
       launch.
+
+## 27. Ambient quiet (0.7.2)
+
+- [ ] **Related is yours again.** Writing a permanent note or journal entry,
+      correspondence-moment notes no longer appear in Related, ghost link
+      offers, or tension cards.
+- [ ] **Search unaffected.** Typing a person's name in the Line still finds
+      their correspondence notes.
+- [ ] **Context rule.** Open a correspondence-moment note — its own Margin
+      still shows sibling correspondence (the archive keeps its
+      neighborhood).
+- [ ] **AI-generated quiet.** People pages (authorship: ai-generated) never
+      surface ambiently; toggling "AI-generated notes stay quiet" off
+      restores them.
+- [ ] **Resurfacing clean.** "Still true?" and "On this day" never pick a
+      correspondence note; theme and thread scans ignore them (dated
+      correspondence names no longer masquerade as journal entries).
+- [ ] **Live setting.** Editing Quiet types takes effect on the next pause —
+      no re-index, no reload.

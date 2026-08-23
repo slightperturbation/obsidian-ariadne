@@ -127,3 +127,19 @@ describe("retrieval scoping and gating", () => {
     expect(near.some((r, i) => r.confidence > plain[i].confidence)).toBe(true);
   });
 });
+
+describe("ambient quiet", () => {
+  it("a quiet predicate removes notes from related() and relatedToPath()", async () => {
+    const manager = await build();
+    const quiet = (p: string) => p === "cats.md";
+    const ambient = await manager.related("My pet mammals sleep all day", { quiet });
+    expect(ambient.map((r) => r.path)).not.toContain("cats.md");
+    expect(ambient.map((r) => r.path)).toContain("dogs.md");
+    const fromDog = await manager.relatedToPath("dogs.md", { quiet });
+    expect(fromDog.map((r) => r.path)).not.toContain("cats.md");
+    // No predicate (the caller's context rule: current note itself quiet) →
+    // the archive keeps its own neighborhood.
+    const inArchive = await manager.related("My pet mammals sleep all day", {});
+    expect(inArchive.map((r) => r.path)).toContain("cats.md");
+  });
+});

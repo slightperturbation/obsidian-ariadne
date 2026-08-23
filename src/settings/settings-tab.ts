@@ -300,6 +300,35 @@ export class AriadneSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Margin").setHeading();
 
     new Setting(containerEl)
+      .setName("Quiet types")
+      .setDesc(
+        "Frontmatter types kept out of ambient surfaces — Related cards, ghost links, " +
+          "tension, resurfacing, theme and thread detection. Search always still finds " +
+          "them, and while you're inside a quiet note its own Margin behaves normally. " +
+          "For source material that isn't your thinking (e.g. correspondence-moment).",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.quietTypes).onChange(async (v) => {
+          this.plugin.settings.quietTypes = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("AI-generated notes stay quiet")
+      .setDesc(
+        "Notes marked authorship: ai-generated never appear in ambient surfaces. " +
+          "Ariadne suggests your thoughts; machine-generated material shouldn't " +
+          "masquerade as them.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.quietAiGenerated).onChange(async (v) => {
+          this.plugin.settings.quietAiGenerated = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Related notes while writing")
       .setDesc("Show the Margin: notes related to what you're writing, in the right sidebar.")
       .addToggle((t) =>

@@ -36,6 +36,14 @@ export interface RelatedOptions {
    */
   semantic?: boolean;
   /**
+   * Ambient-surface filter: true = this note never appears here. Injected as
+   * a predicate so the manager stays Obsidian-free and the answer stays live
+   * (frontmatter read at query time — no re-index needed when types change).
+   * Callers apply the context rule: when the CURRENT note is itself quiet,
+   * they pass no predicate, so the archive keeps its own neighborhood.
+   */
+  quiet?: (path: string) => boolean;
+  /**
    * Sink (never drop) matching notes to the bottom of the ranking — e.g.
    * dated journal entries, which would otherwise crowd out the permanent
    * notes a topic surface exists to show. A stable partition, so relative
@@ -383,6 +391,7 @@ export class IndexManager {
     const ranked = this.collapseToNotes(lists, (path) => {
       if (path === opts.excludePath) return false;
       if (opts.excludeTitles?.has(this.meta.get(path)?.title ?? "")) return false;
+      if (opts.quiet?.(path)) return false;
       return true;
     }).filter(
       (entry) =>
@@ -434,6 +443,7 @@ export class IndexManager {
     const ranked = this.collapseToNotes(lists, (candidate) => {
       if (candidate === path || candidate === opts.excludePath) return false;
       if (opts.excludeTitles?.has(this.meta.get(candidate)?.title ?? "")) return false;
+      if (opts.quiet?.(candidate)) return false;
       return true;
     }).filter(
       (entry) =>

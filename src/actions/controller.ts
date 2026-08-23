@@ -162,6 +162,8 @@ export class ActionsController {
       indexingBusy: () => boolean;
       /** Derive new-note placement from the graph; off = everything → inbox. */
       inferPlacement: () => boolean;
+      /** Ambient quiet: source/machine-generated notes stay out of suggestions. */
+      quietNote: (path: string) => boolean;
       /** unresolvedLinks with excluded sources already filtered out. */
       unresolvedLinks: () => Record<string, Record<string, number>>;
       /** Thread-page suggestions on/off. */
@@ -277,7 +279,11 @@ export class ActionsController {
       // During a backfill burst the semantic path queues behind the
       // worker's embedding jobs; a clicked create must not wait for that.
       related = manager
-        ? await manager.related(seed, { limit: 6, semantic: !this.deps.indexingBusy() })
+        ? await manager.related(seed, {
+            limit: 6,
+            semantic: !this.deps.indexingBusy(),
+            quiet: this.deps.quietNote,
+          })
         : [];
 
       if (!this.deps.router.available()) return;
@@ -836,7 +842,10 @@ export class ActionsController {
       });
     }
 
-    for (const past of onThisDay(`${today}.md`, allPaths).slice(0, 2)) {
+    for (const past of onThisDay(
+      `${today}.md`,
+      allPaths.filter((p) => !this.deps.quietNote(p)),
+    ).slice(0, 2)) {
       const name = past.split("/").pop()!.replace(/\.md$/, "");
       items.push({
         title: name,
@@ -885,7 +894,12 @@ export class ActionsController {
     }
 
     if (manager) {
-      const pick = resurfacePick(manager.noteMetas(), today, Date.now(), this.deps.isJournal);
+      const pick = resurfacePick(
+        manager.noteMetas().filter((m) => !this.deps.quietNote(m.path)),
+        today,
+        Date.now(),
+        this.deps.isJournal,
+      );
       if (pick) {
         items.push({
           title: pick.title,
@@ -1335,7 +1349,7 @@ export class ActionsController {
     // confident false positive. Themes live where thinking happens.
     const candidates = app.vault
       .getMarkdownFiles()
-      .filter((f) => this.deps.isJournal(f.path))
+      .filter((f) => this.deps.isJournal(f.path) && !this.deps.quietNote(f.path))
       .sort((a, b) => b.stat.mtime - a.stat.mtime)
       .slice(0, ActionsController.THEME_ENTRIES);
     const dated: typeof candidates = [];
@@ -1347,7 +1361,10 @@ export class ActionsController {
 
     const neighborhoods: EntryNeighbors[] = [];
     for (const file of dated) {
-      const hits = await manager.relatedToPath(file.path, { limit: 8 });
+      const hits = await manager.relatedToPath(file.path, {
+        limit: 8,
+        quiet: this.deps.quietNote,
+      });
       if (hits.length === 0) continue; // no vectors yet (edited on a reader)
       neighborhoods.push({
         path: file.path,
@@ -1888,7 +1905,12 @@ export class ActionsController {
 
       const journalFiles = app.vault
         .getMarkdownFiles()
-        .filter((f) => this.deps.isJournal(f.path) && !this.isThreadPage(f.path))
+        .filter(
+          (f) =>
+            this.deps.isJournal(f.path) &&
+            !this.isThreadPage(f.path) &&
+            !this.deps.quietNote(f.path),
+        )
         .sort((a, b) => b.stat.mtime - a.stat.mtime);
 
       // Explicit: the writer's own `threads:` property is ground truth.
@@ -1916,7 +1938,10 @@ export class ActionsController {
       }
       const neighborhoods: EntryNeighbors[] = [];
       for (const file of dated) {
-        const hits = await manager.relatedToPath(file.path, { limit: 8 });
+        const hits = await manager.relatedToPath(file.path, {
+          limit: 8,
+          quiet: this.deps.quietNote,
+        });
         if (hits.length === 0) continue;
         neighborhoods.push({
           path: file.path,

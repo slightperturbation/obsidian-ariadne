@@ -29,6 +29,7 @@ export interface TensionEngineDeps {
   excerptOf?: (path: string) => Promise<string | null>;
   /** Journal/dated-note detection — log content there has no stance to check. */
   isJournal?: (path: string) => boolean;
+  quietNote?: (path: string) => boolean;
   /**
    * Where journal content may be sent for classification. "cloud" (default)
    * uses the normal routing; "local" walls journal paragraphs to the home
@@ -137,9 +138,12 @@ export class TensionEngine {
       ? (this.deps.journalPrivacy?.() ?? "cloud")
       : "cloud";
     const profile = TENSION_PROFILES[mode];
+    const quiet =
+      this.deps.quietNote && !this.deps.quietNote(ctx.path) ? this.deps.quietNote : undefined;
     const results = await manager.related(paragraph, {
       excludePath: ctx.path,
       limit: 12,
+      quiet,
     });
     const linkedTitles = new Set(
       [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) =>

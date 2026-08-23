@@ -241,6 +241,25 @@ export default class AriadnePlugin extends Plugin {
     return out;
   }
 
+  /**
+   * Ambient quiet (settings: quietTypes + quietAiGenerated): source material
+   * and machine-generated notes never appear in ambient surfaces — Related,
+   * ghost links, tension, resurfacing, theme/thread detection. Deliberate
+   * surfaces (Line search, backlinks) are untouched. Frontmatter is read at
+   * query time, so changing the setting needs no re-index.
+   */
+  private isQuietNote = (path: string): boolean => {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return false;
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    if (!fm) return false;
+    if (this.settings.quietAiGenerated && fm.authorship === "ai-generated") return true;
+    const type = fm.type as unknown;
+    return (
+      typeof type === "string" && parseFolderList(this.settings.quietTypes).includes(type)
+    );
+  };
+
   private journalFolders(): string[] {
     const folders = parseFolderList(this.settings.journalFolders);
     const dailyNotes = (
@@ -315,6 +334,7 @@ export default class AriadnePlugin extends Plugin {
       indexingBusy: () => this.status.get().progressTotal > 0,
       inferPlacement: () => this.settings.inferPlacement,
       unresolvedLinks: () => this.unresolvedLinksFiltered(),
+      quietNote: this.isQuietNote,
       suggestJournalThreads: () => this.settings.suggestJournalThreads,
       threadsRoot: () =>
         normalizePath(`${this.journalFolders()[0] ?? "Journal"}/${this.settings.threadsFolder}`),
@@ -488,6 +508,7 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.tensions = new TensionEngine({
+      quietNote: this.isQuietNote,
       manager: () => this.manager,
       router: this.router,
       mode: () => this.settings.tensionMode,
@@ -519,6 +540,7 @@ export default class AriadnePlugin extends Plugin {
           marginMinCosine: () => Math.max(0.5, this.settings.ghostMinCosine - 0.12),
           marginNeighbors: (path) => this.linkNeighborhood(path),
           isPeriodic: this.isJournalPath,
+          quietNote: this.isQuietNote,
           wantedTopics: () =>
             this.settings.enableWanted
               ? (this.wantedCache ??= wantedTopics(this.unresolvedLinksFiltered()))
@@ -529,7 +551,13 @@ export default class AriadnePlugin extends Plugin {
             s.kind === "gather" ? void this.actions.gatherThread(s) : void this.actions.weaveThread(s),
           onThisDay: (currentPath) =>
             this.settings.enableOnThisDay
-              ? onThisDay(currentPath, this.app.vault.getMarkdownFiles().map((f) => f.path))
+              ? onThisDay(
+                  currentPath,
+                  this.app.vault
+                    .getMarkdownFiles()
+                    .map((f) => f.path)
+                    .filter((p) => !this.isQuietNote(p)),
+                )
               : [],
           resurfaced: () => {
             if (!this.manager || !this.settings.enableResurfacing) return null;
@@ -538,7 +566,12 @@ export default class AriadnePlugin extends Plugin {
             // each pause bought nothing.
             const today = localISODate();
             if (this.resurfacedCache?.date !== today) {
-              const pick = resurfacePick(this.manager.noteMetas(), today, Date.now(), this.isJournalPath);
+              const pick = resurfacePick(
+                this.manager.noteMetas().filter((m) => !this.isQuietNote(m.path)),
+                today,
+                Date.now(),
+                this.isJournalPath,
+              );
               this.resurfacedCache = { date: today, pick };
               // The daily reading: fetch the pick's opening line lazily; it
               // appears on the next repaint.
@@ -648,6 +681,7 @@ export default class AriadnePlugin extends Plugin {
       enabled: () => this.settings.enableGhostText,
       minCosine: () => this.settings.ghostMinCosine,
       isPeriodic: this.isJournalPath,
+      quietNote: this.isQuietNote,
       log: this.log,
     });
     this.getWatcher().subscribe((ctx) => void this.ghost?.onContext(ctx));

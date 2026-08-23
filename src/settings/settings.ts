@@ -84,6 +84,11 @@ export interface AriadneSettings {
   /** Folders Ariadne ignores entirely (indexing, retrieval, suggestions).
    * Comma-separated; Obsidian's "Excluded files" setting is honored too. */
   excludedFolders: string;
+  /** Frontmatter types kept out of ambient surfaces (Related, ghost,
+   * tension, resurfacing, themes/threads). Search still finds them. */
+  quietTypes: string;
+  /** Notes marked authorship: ai-generated stay out of ambient surfaces. */
+  quietAiGenerated: boolean;
   /** Suggest recurring journal threads and thread-page weaves. */
   suggestJournalThreads: boolean;
   /** Subfolder of the journal where thread pages live. */
@@ -158,6 +163,8 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   enablePublishReview: true,
   inferPlacement: true,
   excludedFolders: "",
+  quietTypes: "correspondence-moment, project-artifact",
+  quietAiGenerated: true,
   suggestJournalThreads: true,
   threadsFolder: "Threads",
   privateFolders: "Journal, Inbox, Archive",

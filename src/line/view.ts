@@ -33,6 +33,8 @@ export interface AriadneViewDeps {
   marginNeighbors?: (path: string) => ReadonlySet<string>;
   /** Dated journal entries: demoted in the Margin, never ghost-suggested. */
   isPeriodic?: (path: string) => boolean;
+  /** Ambient quiet: true = keep this note out of Margin suggestions. */
+  quietNote?: (path: string) => boolean;
   /** Dangling [[topics]] ranked by demand (see margin/wanted). */
   wantedTopics?: () => WantedTopic[];
   /** Past entries sharing today's month-day (when a dated note is open). */
@@ -551,6 +553,10 @@ export class AriadneView extends ItemView {
       // While journaling, the nearest neighbors are other dated entries;
       // the permanent note on the idea must outrank last Tuesday's mention.
       deprioritize: this.deps.isPeriodic,
+      // Context rule: inside the archive (the current note is itself quiet),
+      // the archive keeps its own neighborhood — no filter.
+      quiet:
+        this.deps.quietNote && !this.deps.quietNote(ctx.path) ? this.deps.quietNote : undefined,
     };
     // Without a local model, free text can't be embedded — but the note being
     // written was embedded by whichever device owns the index, so asking in
