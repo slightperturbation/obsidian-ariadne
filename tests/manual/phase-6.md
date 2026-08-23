@@ -454,3 +454,17 @@ Needs the Obsidian Publish core plugin enabled.
       after the debounced background pass.
 - [ ] **Toggle.** Settings → Journaling → "Suggest journal threads" off →
       rows disappear; no scans run.
+
+## 26. Excluded folders (0.7.1)
+
+- [ ] **Duplicates gone.** With `Personal/_to_delete` in Excluded folders,
+      restart Obsidian → Related no longer shows archived copies (including
+      the mojibake "ΓÇö" titles); the stale diff removes their index entries
+      on launch (glyph shows a brief indexing burst, then note count drops).
+- [ ] **Everywhere means everywhere.** Excluded notes never appear in the
+      Line, Related, Wanted (their unresolved links stop voting), themes, or
+      thread suggestions.
+- [ ] **Obsidian parity.** A folder added to Obsidian's own Settings →
+      Files & links → Excluded files is excluded from Ariadne too.
+- [ ] **Reversible.** Clearing the setting re-indexes the folder on the next
+      launch.

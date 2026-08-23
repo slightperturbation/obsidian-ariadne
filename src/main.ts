@@ -36,6 +36,7 @@ import {
   looksPeriodic,
 } from "./core/periodic";
 import { wantedTopics, type WantedTopic } from "./margin/wanted";
+import { isExcludedPath, type ExclusionFilter } from "./index/crawler";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
 import {
@@ -201,6 +202,45 @@ export default class AriadnePlugin extends Plugin {
     return typeof type === "string" && this.managedKinds().includes(type);
   };
 
+  /**
+   * Everything Ariadne must not see: the excludedFolders setting plus
+   * Obsidian's own "Excluded files" (userIgnoreFilters — prefix strings, or
+   * /regex/ entries). Read defensively: getConfig is undocumented API.
+   */
+  private exclusionFilters(): ExclusionFilter[] {
+    const filters: ExclusionFilter[] = parseFolderList(this.settings.excludedFolders);
+    const raw = (
+      this.app.vault as unknown as { getConfig?: (k: string) => unknown }
+    ).getConfig?.("userIgnoreFilters");
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        if (typeof entry !== "string" || !entry) continue;
+        if (entry.length > 2 && entry.startsWith("/") && entry.endsWith("/")) {
+          try {
+            filters.push(new RegExp(entry.slice(1, -1)));
+          } catch {
+            /* invalid user regex — skip */
+          }
+        } else {
+          filters.push(entry.replace(/\/+$/, ""));
+        }
+      }
+    }
+    return filters;
+  }
+
+  /** unresolvedLinks minus excluded sources — parked copies must not vote. */
+  private unresolvedLinksFiltered(): Record<string, Record<string, number>> {
+    const filters = this.exclusionFilters();
+    const all = this.app.metadataCache.unresolvedLinks;
+    if (filters.length === 0) return all;
+    const out: Record<string, Record<string, number>> = {};
+    for (const [source, links] of Object.entries(all)) {
+      if (!isExcludedPath(source, filters)) out[source] = links;
+    }
+    return out;
+  }
+
   private journalFolders(): string[] {
     const folders = parseFolderList(this.settings.journalFolders);
     const dailyNotes = (
@@ -274,6 +314,7 @@ export default class AriadnePlugin extends Plugin {
       journalPrivacy: () => this.settings.journalModelCalls,
       indexingBusy: () => this.status.get().progressTotal > 0,
       inferPlacement: () => this.settings.inferPlacement,
+      unresolvedLinks: () => this.unresolvedLinksFiltered(),
       suggestJournalThreads: () => this.settings.suggestJournalThreads,
       threadsRoot: () =>
         normalizePath(`${this.journalFolders()[0] ?? "Journal"}/${this.settings.threadsFolder}`),
@@ -480,7 +521,7 @@ export default class AriadnePlugin extends Plugin {
           isPeriodic: this.isJournalPath,
           wantedTopics: () =>
             this.settings.enableWanted
-              ? (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks))
+              ? (this.wantedCache ??= wantedTopics(this.unresolvedLinksFiltered()))
               : [],
           onCreateWanted: (topic) => void this.actions.createNote(topic.title, topic.referrers),
           threadSuggestions: () => this.actions.threadSuggestions(),
@@ -677,7 +718,7 @@ export default class AriadnePlugin extends Plugin {
   }
 
   private async startIndexing(): Promise<void> {
-    this.source = new VaultNoteSource(this.app);
+    this.source = new VaultNoteSource(this.app, () => this.exclusionFilters());
     this.io = this.makeFileIO();
     this.indexDir = normalizePath(`${this.manifest.dir}/index`);
 

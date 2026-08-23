@@ -162,6 +162,8 @@ export class ActionsController {
       indexingBusy: () => boolean;
       /** Derive new-note placement from the graph; off = everything → inbox. */
       inferPlacement: () => boolean;
+      /** unresolvedLinks with excluded sources already filtered out. */
+      unresolvedLinks: () => Record<string, Record<string, number>>;
       /** Thread-page suggestions on/off. */
       suggestJournalThreads: () => boolean;
       /** Folder thread pages live in (inside the journal). */
@@ -867,7 +869,7 @@ export class ActionsController {
       });
     }
 
-    const wanted = wantedTopics(app.metadataCache.unresolvedLinks, 1)[0];
+    const wanted = wantedTopics(this.deps.unresolvedLinks(), 1)[0];
     if (wanted) {
       items.push({
         title: wanted.title,

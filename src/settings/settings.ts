@@ -81,6 +81,9 @@ export interface AriadneSettings {
   /** Derive new-note placement from referrers + semantic neighbors.
    * Off = every Ariadne-created note goes to the inbox folder. */
   inferPlacement: boolean;
+  /** Folders Ariadne ignores entirely (indexing, retrieval, suggestions).
+   * Comma-separated; Obsidian's "Excluded files" setting is honored too. */
+  excludedFolders: string;
   /** Suggest recurring journal threads and thread-page weaves. */
   suggestJournalThreads: boolean;
   /** Subfolder of the journal where thread pages live. */
@@ -154,6 +157,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
 
   enablePublishReview: true,
   inferPlacement: true,
+  excludedFolders: "",
   suggestJournalThreads: true,
   threadsFolder: "Threads",
   privateFolders: "Journal, Inbox, Archive",

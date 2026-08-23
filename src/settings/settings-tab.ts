@@ -485,6 +485,21 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Excluded folders")
+      .setDesc(
+        "Ariadne ignores these folders entirely — no indexing, no Related cards, no " +
+          "suggestions. Comma-separated. Obsidian's own \"Excluded files\" setting is " +
+          "honored too. Use for archives and parked copies (e.g. a _to_delete folder), " +
+          "which otherwise surface as duplicates in Related.",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.excludedFolders).onChange(async (v) => {
+          this.plugin.settings.excludedFolders = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Inbox folder")
       .setDesc("Where capture lands; Triage Inbox proposes one disposition per note here.")
       .addText((t) =>

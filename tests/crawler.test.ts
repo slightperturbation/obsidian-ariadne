@@ -86,3 +86,21 @@ describe("VaultNoteSource", () => {
     expect(source.paths()).toEqual(["a.md", "b.md"]);
   });
 });
+
+describe("isExcludedPath", () => {
+  it("matches folder prefixes without false substring hits", async () => {
+    const { isExcludedPath } = await import("../src/index/crawler");
+    const filters = ["Personal/_to_delete", "Archive"];
+    expect(isExcludedPath("Personal/_to_delete/Old/x.md", filters)).toBe(true);
+    expect(isExcludedPath("Personal/_to_delete", filters)).toBe(true);
+    expect(isExcludedPath("Personal/_to_delete_not/x.md", filters)).toBe(false);
+    expect(isExcludedPath("Personal/Journal/x.md", filters)).toBe(false);
+    expect(isExcludedPath("x.md", [""])).toBe(false);
+  });
+
+  it("supports regex filters (Obsidian Excluded-files style)", async () => {
+    const { isExcludedPath } = await import("../src/index/crawler");
+    expect(isExcludedPath("any/conflict (1).md", [/conflict \(\d+\)/])).toBe(true);
+    expect(isExcludedPath("any/normal.md", [/conflict \(\d+\)/])).toBe(false);
+  });
+});
