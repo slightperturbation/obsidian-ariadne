@@ -81,6 +81,10 @@ export interface AriadneSettings {
   /** Derive new-note placement from referrers + semantic neighbors.
    * Off = every Ariadne-created note goes to the inbox folder. */
   inferPlacement: boolean;
+  /** Suggest recurring journal threads and thread-page weaves. */
+  suggestJournalThreads: boolean;
+  /** Subfolder of the journal where thread pages live. */
+  threadsFolder: string;
   /**
    * Folders that are categorically private (never publish candidates), on
    * top of journal detection. Comma-separated.
@@ -150,6 +154,8 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
 
   enablePublishReview: true,
   inferPlacement: true,
+  suggestJournalThreads: true,
+  threadsFolder: "Threads",
   privateFolders: "Journal, Inbox, Archive",
 
   enableMargin: true,

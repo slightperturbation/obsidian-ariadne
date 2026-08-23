@@ -186,6 +186,31 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Suggest journal threads")
+      .setDesc(
+        "Notice topics recurring across journal entries (at any distance in time) and offer a " +
+          "thread page: your reflection on top, precise transclusions of the dated entries " +
+          "below. Entries are never rewritten — only a block ID and a `threads` property are " +
+          "added, always previewed first.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.suggestJournalThreads).onChange(async (v) => {
+          this.plugin.settings.suggestJournalThreads = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Threads folder")
+      .setDesc("Subfolder of the journal where thread pages live.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.threadsFolder).onChange(async (v) => {
+          this.plugin.settings.threadsFolder = v.trim() || "Threads";
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Invite on launch")
       .setDesc(
         "On the day's first launch with no entry, show one quiet clickable notice. For stronger " +

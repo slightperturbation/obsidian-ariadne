@@ -7,6 +7,7 @@ import type { TensionFinding } from "../margin/tension/detect";
 import type { WantedTopic } from "../margin/wanted";
 import { isReflectiveProse } from "../margin/journal";
 import { isBlankPage, threadQuote, type ThreadItem } from "../margin/threads";
+import type { ThreadSuggestion } from "../margin/thread-weave";
 import { normalizeTag, suggestTags } from "../margin/tags";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
@@ -51,7 +52,12 @@ export interface AriadneViewDeps {
    * Session-scoped dismissals, owned by the plugin: "for this session" must
    * survive the sidebar being closed and reopened (which rebuilds the view).
    */
-  session?: { wanted: Set<string>; tagRows: Set<string>; resurfaced: { dismissed: boolean } };
+  session?: {
+    wanted: Set<string>;
+    tagRows: Set<string>;
+    threads: Set<string>;
+    resurfaced: { dismissed: boolean };
+  };
   /** True when no note dated today exists yet — the day hasn't been opened. */
   todayMissing?: () => boolean;
   /** Create (or open) today's entry, honoring the Daily Notes plugin. */
@@ -90,6 +96,9 @@ export interface AriadneViewDeps {
   onPublishReview?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (topic: WantedTopic) => void;
+  /** Thread-page suggestions for the Today zone (gather/weave). */
+  threadSuggestions?: () => ThreadSuggestion[];
+  onThreadSuggestion?: (s: ThreadSuggestion) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
   touch?: () => boolean;
   /** Ambient tension/echo analysis (see margin/tension). */
@@ -132,6 +141,7 @@ export class AriadneView extends ItemView {
   private localSession = {
     wanted: new Set<string>(),
     tagRows: new Set<string>(),
+    threads: new Set<string>(),
     resurfaced: { dismissed: false },
   };
   private get session(): NonNullable<AriadneViewDeps["session"]> {
@@ -1093,6 +1103,8 @@ export class AriadneView extends ItemView {
       );
     }
 
+    this.renderThreadSuggestions(doc);
+
     this.todayEl.classList.toggle("has-content", this.todayEl.childElementCount > 0);
     if (this.todayEl.childElementCount > 0) {
       const label = doc.createElement("div");
@@ -1138,6 +1150,58 @@ export class AriadneView extends ItemView {
       row.appendChild(line);
     }
     this.wantedEl.appendChild(row);
+  }
+
+  /** Re-render the foot zones (Wanted, Today) — e.g. after a background scan. */
+  refreshFoot(): void {
+    this.renderWanted();
+  }
+
+  /**
+   * Thread-page suggestions: quiet observations, one row each, at most two.
+   * The row states the fact ("appears in 4 entries"); the verb states the
+   * action. × waves the suggestion off for this session.
+   */
+  private renderThreadSuggestions(doc: Document): void {
+    const suggestions = (this.deps.threadSuggestions?.() ?? []).filter(
+      (s) => !this.session.threads.has(s.name),
+    );
+    if (suggestions.length === 0 || !this.deps.onThreadSuggestion) return;
+    for (const s of suggestions.slice(0, 2)) {
+      const row = doc.createElement("div");
+      row.classList.add("ariadne-row", "ariadne-wanted-row");
+      const head = doc.createElement("div");
+      head.classList.add("ariadne-row-head");
+      const title = doc.createElement("span");
+      title.classList.add("ariadne-row-title");
+      title.textContent =
+        s.kind === "gather" ? `⟲ gather thread “${s.name}”` : `⟲ weave into “${s.name}”`;
+      const count = doc.createElement("span");
+      count.classList.add("ariadne-wanted-count");
+      count.textContent = s.detail;
+      const dismiss = doc.createElement("button");
+      dismiss.classList.add("ariadne-wanted-dismiss");
+      dismiss.textContent = "×";
+      dismiss.setAttribute("aria-label", `Dismiss for this session`);
+      dismiss.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.session.threads.add(s.name);
+        this.renderWanted();
+      });
+      head.append(title, count, dismiss);
+      row.appendChild(head);
+      row.setAttribute(
+        "aria-label",
+        s.kind === "gather"
+          ? `Gather the thread ${s.name} into a thread page`
+          : `Weave the new entry into ${s.name}`,
+      );
+      this.actionable(row, (ev?: Event) => {
+        void ev;
+        this.deps.onThreadSuggestion!(s);
+      });
+      this.todayEl.appendChild(row);
+    }
   }
 
   /* ── Status glyph ───────────────────────────────────────────────────── */

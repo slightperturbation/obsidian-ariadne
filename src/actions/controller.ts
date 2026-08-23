@@ -4,7 +4,7 @@ import type { ModelRouter } from "../model/router";
 import { BudgetExceededError } from "../model/router";
 import type { Logger } from "../util/logger";
 import type { ScoredResult } from "../core/types";
-import { ActionExecutor, type ActionProposal } from "./framework";
+import { ActionExecutor, type ActionProposal, type FileChange } from "./framework";
 import { buildNewNoteProposal } from "./new-note";
 import { placementVote } from "./placement";
 import { buildWeaveProposal } from "./link-weave";
@@ -36,6 +36,15 @@ import {
   fallbackScaffold,
   sanitizeTitle,
   type ScaffoldResult,
+  THREAD_GATHER_SCHEMA,
+  THREAD_JUDGE_SCHEMA,
+  THREAD_MOVEMENT_SCHEMA,
+  parseThreadGather,
+  parseThreadJudge,
+  parseThreadMovement,
+  threadGatherPrompt,
+  threadJudgePrompt,
+  threadMovementPrompt,
 } from "../model/tasks";
 import {
   SPLIT_SCHEMA,
@@ -73,6 +82,20 @@ import {
 } from "../publish/screen";
 import { dateOf, isoWeekLabel, localISODate } from "../core/periodic";
 import { classifyEntry } from "../margin/tags";
+import {
+  MIN_THREAD_ENTRIES,
+  clusterKeyOf,
+  clusterThreadCandidates,
+  ensureBlockId,
+  fallbackLabel,
+  renderThreadPage,
+  appendWeave,
+  upsertThreadProperty,
+  weaveCandidates,
+  type ThreadEntryRef,
+  type ThreadSuggestion,
+  type ThreadsLedger,
+} from "../margin/thread-weave";
 import { onThisDay, resurfacePick } from "../margin/resurface";
 import { wantedTopics } from "../margin/wanted";
 import {
@@ -139,6 +162,12 @@ export class ActionsController {
       indexingBusy: () => boolean;
       /** Derive new-note placement from the graph; off = everything → inbox. */
       inferPlacement: () => boolean;
+      /** Thread-page suggestions on/off. */
+      suggestJournalThreads: () => boolean;
+      /** Folder thread pages live in (inside the journal). */
+      threadsRoot: () => string;
+      /** Woven-entry + judged-cluster ledger (plugin-dir JSON). */
+      threadsLedger: { load(): Promise<ThreadsLedger>; save(l: ThreadsLedger): Promise<void> };
       /** Persisted promoted-today tally (survives restarts). */
       promotedStore: {
         get(): { date: string; count: number } | undefined;
@@ -1787,13 +1816,431 @@ export class ActionsController {
   }
 
   /** Preview → accept gate for actions that edit existing notes (weaving). */
-  private preview(proposal: ActionProposal): void {
+  /* ── Journal thread pages ───────────────────────────────────────────── */
+
+  /** Entries examined per scan — a soft bound, logged when hit. */
+  private static readonly THREAD_SCAN_MAX = 400;
+  /** New clusters judged (model calls) per scan — background cost bound. */
+  private static readonly THREAD_JUDGE_BUDGET = 2;
+
+  private threadSuggestionsCache: ThreadSuggestion[] = [];
+  private threadScanBusy = false;
+  private weavingThread = false;
+
+  threadSuggestions(): ThreadSuggestion[] {
+    return this.threadSuggestionsCache;
+  }
+
+  /** May a model read journal content right now, under the privacy setting? */
+  private threadModelOk(): boolean {
+    const privacy = this.deps.journalPrivacy();
+    return (
+      privacy !== "none" &&
+      this.deps.router.available() &&
+      (privacy !== "local" || this.deps.router.localAvailable())
+    );
+  }
+
+  private threadPrivacyOpt(): { privacy?: "local" } {
+    return this.deps.journalPrivacy() === "local" ? { privacy: "local" } : {};
+  }
+
+  private isThreadPage(path: string): boolean {
+    const file = this.deps.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return false;
+    const type = this.deps.app.metadataCache.getFileCache(file)?.frontmatter?.type as unknown;
+    return type === "thread";
+  }
+
+  private threadPagePath(name: string): string {
+    return normalizePath(`${this.deps.threadsRoot()}/${sanitizeTitle(name)}.md`);
+  }
+
+  private static threadNameOf(threadPath: string): string {
+    return (threadPath.split("/").pop() ?? threadPath).replace(/\.md$/i, "");
+  }
+
+  /**
+   * Background thread scan: recurrence across ALL journal entries, explicit
+   * (`threads:` frontmatter) and implicit (stored-vector clusters). Runs off
+   * the typing path — every heavy step is a worker round trip or a cached
+   * model verdict — and never blocks: single-flight, skipped during
+   * indexing bursts. Model use is deliberately tiered: judging/naming is a
+   * cheap "theme"-class call (local box when awake, cached forever per
+   * cluster), so candidate threads are still found and named on the days
+   * the cloud would be too expensive to bother.
+   */
+  async scanThreads(): Promise<void> {
+    if (this.threadScanBusy) return;
+    if (!this.deps.suggestJournalThreads()) {
+      this.threadSuggestionsCache = [];
+      return;
+    }
+    const manager = this.deps.manager();
+    if (!manager?.hasStoredVectors() || this.deps.indexingBusy()) return;
+    this.threadScanBusy = true;
+    try {
+      const { app } = this.deps;
+      const ledger = await this.deps.threadsLedger.load();
+      let ledgerDirty = false;
+
+      const journalFiles = app.vault
+        .getMarkdownFiles()
+        .filter((f) => this.deps.isJournal(f.path) && !this.isThreadPage(f.path))
+        .sort((a, b) => b.stat.mtime - a.stat.mtime);
+
+      // Explicit: the writer's own `threads:` property is ground truth.
+      const explicit = new Map<string, string[]>();
+      for (const f of journalFiles) {
+        const raw = app.metadataCache.getFileCache(f)?.frontmatter?.threads as unknown;
+        const values = Array.isArray(raw) ? raw : typeof raw === "string" ? [raw] : [];
+        for (const v of values) {
+          const name = String(v)
+            .replace(/^\s*"?\[\[|\]\]"?\s*$/g, "")
+            .trim();
+          if (!name) continue;
+          explicit.set(name, [...(explicit.get(name) ?? []), f.path]);
+        }
+      }
+
+      // Narrative entries only (same rule as themes), all of them.
+      const dated: TFile[] = [];
+      for (const f of journalFiles) {
+        if (dated.length >= ActionsController.THREAD_SCAN_MAX) {
+          this.deps.log.debug(`threads: scan capped at ${ActionsController.THREAD_SCAN_MAX} entries`);
+          break;
+        }
+        if (classifyEntry(await app.vault.cachedRead(f)) === "journal") dated.push(f);
+      }
+      const neighborhoods: EntryNeighbors[] = [];
+      for (const file of dated) {
+        const hits = await manager.relatedToPath(file.path, { limit: 8 });
+        if (hits.length === 0) continue;
+        neighborhoods.push({
+          path: file.path,
+          hits: hits.map((h) => ({
+            path: h.path,
+            title: h.title,
+            snippet: h.snippet,
+            cosine: h.cosine,
+            periodic: this.deps.isJournal(h.path) && !this.isThreadPage(h.path),
+          })),
+        });
+      }
+
+      const suggestions: ThreadSuggestion[] = [];
+
+      // 1. Explicit gathers/weaves from the property.
+      for (const [name, paths] of explicit) {
+        const pagePath = this.threadPagePath(name);
+        if (app.vault.getAbstractFileByPath(pagePath)) {
+          const woven = ledger.woven[pagePath] ?? {};
+          const missing = paths.filter((p) => !(p in woven));
+          if (missing.length > 0) {
+            suggestions.push({
+              kind: "weave",
+              name,
+              threadPath: pagePath,
+              entryPaths: [missing[0]],
+              detail: "marked in the entry's threads property",
+              explicit: true,
+            });
+          }
+        } else if (paths.length >= 2) {
+          suggestions.push({
+            kind: "gather",
+            name,
+            entryPaths: paths,
+            detail: `marked in ${paths.length} entries`,
+            explicit: true,
+          });
+        }
+      }
+
+      // 2. Similarity weaves into existing thread pages (one per thread).
+      let movementBudget = 1;
+      for (const w of weaveCandidates(neighborhoods, ledger.woven)) {
+        if (suggestions.some((x) => x.threadPath === w.threadPath)) continue;
+        const name = ActionsController.threadNameOf(w.threadPath);
+        const key = `${w.threadPath}::${w.entryPath}`;
+        let clause = ledger.movement[key];
+        if (clause === undefined && movementBudget > 0 && this.threadModelOk()) {
+          movementBudget--;
+          clause = await this.threadMovementClause(name, w.threadPath, w.entryPath, ledger);
+          ledger.movement[key] = clause;
+          ledgerDirty = true;
+        }
+        suggestions.push({
+          kind: "weave",
+          name,
+          threadPath: w.threadPath,
+          entryPaths: [w.entryPath],
+          detail: clause || "continues in a recent entry",
+          explicit: false,
+        });
+      }
+
+      // 3. Implicit clusters, judged once each (verdicts cached forever).
+      const wovenPaths = new Set(
+        Object.values(ledger.woven).flatMap((entries) => Object.keys(entries)),
+      );
+      let judgeBudget = ActionsController.THREAD_JUDGE_BUDGET;
+      for (const cluster of clusterThreadCandidates(neighborhoods)) {
+        const unwoven = cluster.entries.filter((p) => !wovenPaths.has(p));
+        if (unwoven.length < MIN_THREAD_ENTRIES) continue;
+        const key = clusterKeyOf(cluster.entries);
+        let verdict = ledger.judged[key];
+        if (!verdict && judgeBudget > 0 && this.threadModelOk()) {
+          judgeBudget--;
+          try {
+            verdict = parseThreadJudge(
+              await this.deps.router.run("theme", threadJudgePrompt(cluster.evidence), {
+                schema: THREAD_JUDGE_SCHEMA as unknown as Record<string, unknown>,
+                maxTokens: 150,
+                ...this.threadPrivacyOpt(),
+              }),
+            );
+            ledger.judged[key] = verdict;
+            ledgerDirty = true;
+          } catch (err) {
+            this.deps.log.warn(`thread judge failed: ${String(err)}`);
+          }
+        }
+        if (verdict && !verdict.isThread) continue;
+        const name = verdict?.name || fallbackLabel(cluster);
+        if (suggestions.some((x) => x.name === name)) continue;
+        suggestions.push({
+          kind: "gather",
+          name,
+          entryPaths: cluster.entries,
+          detail: `appears in ${cluster.entries.length} entries`,
+          explicit: false,
+        });
+      }
+
+      if (ledgerDirty) await this.deps.threadsLedger.save(ledger);
+      const rank = (x: ThreadSuggestion) => (x.explicit ? 0 : x.kind === "weave" ? 1 : 2);
+      this.threadSuggestionsCache = suggestions.sort((a, b) => rank(a) - rank(b)).slice(0, 2);
+      this.deps.log.debug(
+        `threads: ${this.threadSuggestionsCache.length} suggestion(s) from ${neighborhoods.length} entries`,
+      );
+    } finally {
+      this.threadScanBusy = false;
+    }
+  }
+
+  /** Fact-oriented one-clause movement note; "" when the model can't help. */
+  private async threadMovementClause(
+    name: string,
+    threadPath: string,
+    entryPath: string,
+    ledger: ThreadsLedger,
+  ): Promise<string> {
+    try {
+      const { app } = this.deps;
+      const entryFile = app.vault.getAbstractFileByPath(entryPath);
+      if (!(entryFile instanceof TFile)) return "";
+      const latest = (await app.vault.cachedRead(entryFile)).slice(0, 1500);
+      const earlier: string[] = [];
+      for (const p of Object.keys(ledger.woven[threadPath] ?? {}).slice(-3)) {
+        const f = app.vault.getAbstractFileByPath(p);
+        if (f instanceof TFile) earlier.push((await app.vault.cachedRead(f)).slice(0, 600));
+      }
+      if (earlier.length === 0) return "";
+      return parseThreadMovement(
+        await this.deps.router.run("theme", threadMovementPrompt(name, earlier, latest), {
+          schema: THREAD_MOVEMENT_SCHEMA as unknown as Record<string, unknown>,
+          maxTokens: 100,
+          ...this.threadPrivacyOpt(),
+        }),
+      );
+    } catch (err) {
+      this.deps.log.warn(`thread movement failed: ${String(err)}`);
+      return "";
+    }
+  }
+
+  /** Model span selection for a set of entries; empty result = whole-entry embeds. */
+  private async threadSpans(
+    name: string,
+    entries: Array<{ path: string; label: string; text: string }>,
+  ): Promise<ReturnType<typeof parseThreadGather>> {
+    if (!this.threadModelOk()) return { spans: [], questions: [] };
+    try {
+      return parseThreadGather(
+        await this.deps.router.run(
+          "scaffold",
+          threadGatherPrompt(
+            name,
+            entries.map((e) => ({ path: e.path, date: e.label, text: e.text })),
+          ),
+          {
+            schema: THREAD_GATHER_SCHEMA as unknown as Record<string, unknown>,
+            maxTokens: 2000,
+            thinking: true,
+            ...this.threadPrivacyOpt(),
+          },
+        ),
+      );
+    } catch (err) {
+      this.deps.log.warn(`thread gather model failed, using whole-entry embeds: ${String(err)}`);
+      return { spans: [], questions: [] };
+    }
+  }
+
+  /**
+   * One entry's edits for weaving: block ID at the selected span (whole-entry
+   * embed when the model quote doesn't match verbatim) + the `threads:` link
+   * property. Prose is never touched — the two invariants live here.
+   */
+  private weaveEntryChange(
+    entry: { path: string; label: string; text: string },
+    threadName: string,
+    quote: string | undefined,
+  ): { change?: FileChange; ref: ThreadEntryRef; blockId: string } {
+    let text = entry.text;
+    let id = "";
+    if (quote) {
+      const anchored = ensureBlockId(text, quote, entry.path);
+      if (anchored) {
+        text = anchored.text;
+        id = anchored.id;
+      }
+    }
+    text = upsertThreadProperty(text, threadName);
+    const base = entry.path.replace(/\.md$/i, "");
+    return {
+      change:
+        text === entry.text
+          ? undefined
+          : { type: "modify", path: entry.path, before: entry.text, after: text },
+      ref: { label: entry.label, embed: id ? `${base}#^${id}` : base },
+      blockId: id,
+    };
+  }
+
+  private async readEntries(
+    paths: string[],
+  ): Promise<Array<{ path: string; label: string; text: string }>> {
+    const out: Array<{ path: string; label: string; text: string }> = [];
+    for (const p of paths) {
+      const f = this.deps.app.vault.getAbstractFileByPath(p);
+      if (f instanceof TFile) {
+        out.push({ path: p, label: f.basename, text: await this.deps.app.vault.read(f) });
+      }
+    }
+    return out.sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  /** Create a thread page from a suggestion — one previewed, undoable proposal. */
+  async gatherThread(s: ThreadSuggestion): Promise<void> {
+    if (this.weavingThread) {
+      new Notice("Already gathering a thread…");
+      return;
+    }
+    this.weavingThread = true;
+    try {
+      const entries = await this.readEntries(s.entryPaths);
+      if (entries.length === 0) return;
+      let gather: ReturnType<typeof parseThreadGather> = { spans: [], questions: [] };
+      await this.withWorkingNotice("Ariadne is gathering the thread…", async () => {
+        gather = await this.threadSpans(s.name, entries);
+      });
+
+      const changes: FileChange[] = [];
+      const refs: ThreadEntryRef[] = [];
+      const wovenIds: Record<string, string> = {};
+      for (const entry of entries) {
+        const quote = gather.spans.find((sp) => sp.path === entry.path)?.quote;
+        const woven = this.weaveEntryChange(entry, s.name, quote);
+        if (woven.change) changes.push(woven.change);
+        refs.push(woven.ref);
+        wovenIds[entry.path] = woven.blockId;
+      }
+      const pagePath = this.threadPagePath(s.name);
+      const started = /^\d{4}-\d{2}-\d{2}/.exec(refs[0]?.label ?? "")
+        ? refs[0].label.slice(0, 10)
+        : new Date().toISOString().slice(0, 10);
+      changes.push({
+        type: "create",
+        path: pagePath,
+        after: renderThreadPage({ name: s.name, started, questions: gather.questions, entries: refs }),
+      });
+
+      this.preview(
+        {
+          title: `Gather thread “${s.name}”`,
+          description: `${entries.length} entries → ${pagePath}`,
+          changes,
+        },
+        async () => {
+          const ledger = await this.deps.threadsLedger.load();
+          ledger.woven[pagePath] = { ...(ledger.woven[pagePath] ?? {}), ...wovenIds };
+          await this.deps.threadsLedger.save(ledger);
+          this.threadSuggestionsCache = this.threadSuggestionsCache.filter((x) => x !== s);
+          await this.deps.app.workspace.openLinkText(pagePath, "", false);
+        },
+      );
+    } finally {
+      this.weavingThread = false;
+    }
+  }
+
+  /** Append a continuing entry to an existing thread page. */
+  async weaveThread(s: ThreadSuggestion): Promise<void> {
+    if (this.weavingThread || !s.threadPath) return;
+    this.weavingThread = true;
+    try {
+      const { app } = this.deps;
+      const pageFile = app.vault.getAbstractFileByPath(s.threadPath);
+      if (!(pageFile instanceof TFile)) return;
+      const entries = await this.readEntries(s.entryPaths.slice(0, 1));
+      if (entries.length === 0) return;
+      const entry = entries[0];
+      let gather: ReturnType<typeof parseThreadGather> = { spans: [], questions: [] };
+      await this.withWorkingNotice("Ariadne is weaving the entry…", async () => {
+        gather = await this.threadSpans(s.name, entries);
+      });
+      const quote = gather.spans.find((sp) => sp.path === entry.path)?.quote;
+      const woven = this.weaveEntryChange(entry, s.name, quote);
+      const pageText = await app.vault.read(pageFile);
+      const changes: FileChange[] = [];
+      if (woven.change) changes.push(woven.change);
+      const appended = appendWeave(pageText, woven.ref);
+      if (appended !== pageText) {
+        changes.push({ type: "modify", path: s.threadPath, before: pageText, after: appended });
+      }
+      if (changes.length === 0) return;
+
+      this.preview(
+        {
+          title: `Weave into “${s.name}”`,
+          description: `${entry.label} → ${s.threadPath}`,
+          changes,
+        },
+        async () => {
+          const ledger = await this.deps.threadsLedger.load();
+          ledger.woven[s.threadPath!] = {
+            ...(ledger.woven[s.threadPath!] ?? {}),
+            [entry.path]: woven.blockId,
+          };
+          await this.deps.threadsLedger.save(ledger);
+          this.threadSuggestionsCache = this.threadSuggestionsCache.filter((x) => x !== s);
+        },
+      );
+    } finally {
+      this.weavingThread = false;
+    }
+  }
+
+  private preview(proposal: ActionProposal, onApplied?: () => Promise<void> | void): void {
     new PreviewModal(this.deps.app, proposal, () => {
       void (async () => {
         try {
           await this.flushEditorsFor(proposal);
           await this.deps.executor.apply(proposal);
           new Notice(`✓ ${proposal.title} — undoable via "Undo last action".`);
+          await onApplied?.();
         } catch (err) {
           new Notice(
             `Not applied: ${err instanceof Error ? err.message : String(err)}`,

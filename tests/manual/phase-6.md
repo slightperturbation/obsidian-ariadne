@@ -427,3 +427,30 @@ Needs the Obsidian Publish core plugin enabled.
 - [ ] **Margin quality holds.** Related/tension cards for a paragraph still
       surface obviously-related notes (exact-term overlap + semantic), and
       Line search still tolerates typos (fuzzy stays on for typed queries).
+
+## 25. Journal thread pages (0.6.6)
+
+- [ ] **Implicit detection.** With 3+ journal entries circling one topic (any
+      distance apart in time), the Today zone shows "⟲ gather thread …" with
+      a fact-only detail ("appears in N entries"). × dismisses for the session.
+- [ ] **Explicit detection.** Add `threads: ["[[Some Name]]"]` to two entries'
+      frontmatter by hand → a gather suggestion for that name appears (no
+      model needed, ranked first).
+- [ ] **Gather.** Clicking opens the preview modal: per entry, ONLY a
+      trailing `^tXXXXXX` block ID and the `threads:` property are added —
+      prose untouched; plus the new page in Journal/Threads with reflection
+      note, ⟲ questions, and dated transclusions. Apply → page opens; one
+      "Undo last action" reverts everything.
+- [ ] **Weave.** Write a new entry continuing an existing thread → "⟲ weave
+      into …" appears (movement clause is subject-matter only — no emotion
+      words the entries didn't use). Apply → new line under ## Entries; the
+      human reflection section above is byte-identical.
+- [ ] **Voice.** Thread names, questions, and movement clauses never
+      introduce emotion words the writer didn't use.
+- [ ] **Privacy.** With journal model calls = "local" and the box asleep, no
+      cloud call fires: implicit clusters appear with snippet labels;
+      gather falls back to whole-entry embeds. "none" → same, zero calls.
+- [ ] **No jank.** The scan never blocks typing; suggestions appear only
+      after the debounced background pass.
+- [ ] **Toggle.** Settings → Journaling → "Suggest journal threads" off →
+      rows disappear; no scans run.

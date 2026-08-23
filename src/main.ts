@@ -48,6 +48,7 @@ import {
 } from "./margin/threads";
 import { classifyEntry, entryTag, isLegacyDatedTag, normalizeTag } from "./margin/tags";
 import type { PublishLedger } from "./publish/screen";
+import { emptyThreadsLedger, type ThreadsLedger } from "./margin/thread-weave";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -128,9 +129,38 @@ export default class AriadnePlugin extends Plugin {
   };
   private publishLedgerCache?: PublishLedger;
   private publishCount?: { at: number; n: number };
+  private threadsLedgerCache?: ThreadsLedger;
+  private threadScanTimer: ReturnType<typeof setTimeout> | null = null;
 
   private publishLedgerPath(): string {
     return normalizePath(`${this.manifest.dir}/ariadne-publish.json`);
+  }
+
+  private threadsLedgerPath(): string {
+    return normalizePath(`${this.manifest.dir}/ariadne-threads.json`);
+  }
+
+  /**
+   * Background thread scan, debounced: the work is worker round trips plus
+   * (rarely) a cached local-model verdict, so re-scanning after journal
+   * edits is cheap — but never immediate, and never two at once.
+   */
+  private scheduleThreadScan(delayMs: number): void {
+    if (!this.settings.suggestJournalThreads) return;
+    if (this.threadScanTimer) clearTimeout(this.threadScanTimer);
+    this.threadScanTimer = setTimeout(() => {
+      this.threadScanTimer = null;
+      void this.actions
+        .scanThreads()
+        .then(() => this.refreshFootPanels())
+        .catch((err) => this.log.warn(`thread scan failed: ${String(err)}`));
+    }, delayMs);
+  }
+
+  private refreshFootPanels(): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(ARIADNE_VIEW_TYPE)) {
+      if (leaf.view instanceof AriadneView) leaf.view.refreshFoot();
+    }
   }
 
   /** Is the Obsidian Publish core plugin present and enabled? */
@@ -150,6 +180,7 @@ export default class AriadnePlugin extends Plugin {
   private panelSession = {
     wanted: new Set<string>(),
     tagRows: new Set<string>(),
+    threads: new Set<string>(),
     resurfaced: { dismissed: false },
   };
 
@@ -243,6 +274,25 @@ export default class AriadnePlugin extends Plugin {
       journalPrivacy: () => this.settings.journalModelCalls,
       indexingBusy: () => this.status.get().progressTotal > 0,
       inferPlacement: () => this.settings.inferPlacement,
+      suggestJournalThreads: () => this.settings.suggestJournalThreads,
+      threadsRoot: () =>
+        normalizePath(`${this.journalFolders()[0] ?? "Journal"}/${this.settings.threadsFolder}`),
+      threadsLedger: {
+        load: async () => {
+          if (this.threadsLedgerCache) return this.threadsLedgerCache;
+          try {
+            const raw = await this.app.vault.adapter.read(this.threadsLedgerPath());
+            this.threadsLedgerCache = { ...emptyThreadsLedger(), ...(JSON.parse(raw) as ThreadsLedger) };
+          } catch {
+            this.threadsLedgerCache = emptyThreadsLedger();
+          }
+          return this.threadsLedgerCache;
+        },
+        save: async (ledger) => {
+          this.threadsLedgerCache = ledger;
+          await this.app.vault.adapter.write(this.threadsLedgerPath(), JSON.stringify(ledger));
+        },
+      },
       promotedStore: {
         get: () => this.settings.promotedLog,
         set: (v) => {
@@ -433,6 +483,9 @@ export default class AriadnePlugin extends Plugin {
               ? (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks))
               : [],
           onCreateWanted: (topic) => void this.actions.createNote(topic.title, topic.referrers),
+          threadSuggestions: () => this.actions.threadSuggestions(),
+          onThreadSuggestion: (s) =>
+            s.kind === "gather" ? void this.actions.gatherThread(s) : void this.actions.weaveThread(s),
           onThisDay: (currentPath) =>
             this.settings.enableOnThisDay
               ? onThisDay(currentPath, this.app.vault.getMarkdownFiles().map((f) => f.path))
@@ -640,6 +693,7 @@ export default class AriadnePlugin extends Plugin {
         onIdle: () => {
           this.scheduleSave();
           this.maybeScanThemes();
+          this.scheduleThreadScan(30_000);
           // Live, not boot-time: a reader edits notes all session, and the
           // owner's fresh shards arrive over Sync mid-session.
           if (!this.policy.loadsModel && this.manager) {
@@ -697,6 +751,7 @@ export default class AriadnePlugin extends Plugin {
         this.wantedCache = undefined;
         markIfNote(file.path);
         this.maybeAutoTag(file.path);
+        if (this.isJournalPath(file.path)) this.scheduleThreadScan(180_000);
       }),
     );
     this.registerEvent(
@@ -1329,6 +1384,7 @@ export default class AriadnePlugin extends Plugin {
 
   onunload(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    if (this.threadScanTimer) clearTimeout(this.threadScanTimer);
     for (const timer of this.tagTimers.values()) clearTimeout(timer);
     this.tensions?.dispose();
     this.watcher?.dispose();

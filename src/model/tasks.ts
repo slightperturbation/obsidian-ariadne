@@ -480,3 +480,160 @@ export function parsePublishScreen(text: string): { verdict: "hold" | "clear"; r
   // Failing open on a privacy gate is not a degradation, it's a breach.
   return { verdict: "hold", reason: "screening answer was unreadable" };
 }
+
+/* ── Journal thread pages ─────────────────────────────────────────────── */
+/*
+ * Voice contract for ALL thread-related generation (a user decision, not a
+ * style whim): neutral and fact-oriented. Text about the journal describes
+ * what the writing DISCUSSES, never what the writer feels. The one hard
+ * rule every prompt below repeats: Ariadne may echo emotion words the
+ * writer used, but must never introduce emotion words of its own.
+ */
+
+export const THREAD_JUDGE_SCHEMA = {
+  type: "object",
+  properties: {
+    isThread: {
+      type: "boolean",
+      description: "true only if the excerpts clearly trace ONE topic the writer keeps returning to",
+    },
+    name: {
+      type: "string",
+      description: "2-6 word thread name in the writer's own vocabulary; empty when isThread is false",
+    },
+  },
+  required: ["isThread", "name"],
+  additionalProperties: false,
+} as const;
+
+export function threadJudgePrompt(evidence: string[]): string {
+  return [
+    `Excerpts from SEPARATE dated journal entries that sit close in meaning. Judge whether they trace ONE topic the writer keeps returning to over time (a thread), or are merely similar-sounding moments. Be skeptical — a falsely suggested thread costs trust. When uncertain, answer false.`,
+    ``,
+    `If true, name the thread in 2-6 words drawn from the writer's own vocabulary in the excerpts. The name states the topic, never a diagnosis. Never introduce emotion words that do not appear in the excerpts.`,
+    ``,
+    ...evidence.map((s, i) => `Excerpt ${i + 1}: ${s}`),
+  ].join("\n");
+}
+
+export function parseThreadJudge(text: string): { isThread: boolean; name: string } {
+  try {
+    const parsed = JSON.parse(text) as { isThread?: unknown; name?: unknown };
+    if (parsed.isThread === true && typeof parsed.name === "string" && parsed.name.trim()) {
+      return { isThread: true, name: sanitizeTitle(parsed.name.trim().replace(/\.$/, "")) };
+    }
+  } catch {
+    /* fall through */
+  }
+  // Malformed → not a thread: this feature's fail-bias is silence.
+  return { isThread: false, name: "" };
+}
+
+export const THREAD_GATHER_SCHEMA = {
+  type: "object",
+  properties: {
+    spans: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "the entry's path, copied from the input" },
+          quote: {
+            type: "string",
+            description:
+              "EXACT contiguous verbatim quote copied character-for-character from that entry — the 1-3 sentences that carry the thread; never paraphrase, trim words, or fix anything",
+          },
+        },
+        required: ["path", "quote"],
+        additionalProperties: false,
+      },
+    },
+    questions: {
+      type: "array",
+      items: { type: "string" },
+      description: "2-3 reflection questions for the thread page (see voice rules in the prompt)",
+    },
+  },
+  required: ["spans", "questions"],
+  additionalProperties: false,
+} as const;
+
+export function threadGatherPrompt(
+  name: string,
+  entries: Array<{ path: string; date: string; text: string }>,
+): string {
+  return [
+    `A writer's journal returns to one thread: "${name}". For each dated entry below, select the passage that carries this thread — an EXACT, contiguous, verbatim quote copied character-for-character from that entry (start and end at sentence boundaries; typically 1-3 sentences). Skip an entry rather than paraphrasing.`,
+    ``,
+    `Then write 2-3 reflection questions for the thread page. Question voice — all rules are hard rules:`,
+    `- Reference concrete specifics the entries actually mention.`,
+    `- Ask about change, comparison, or absence between the earliest and latest entries ("The first entry frames X as a deadline — is it still one?").`,
+    `- Describe what the writing discusses, never what the writer feels.`,
+    `- Never introduce emotion words the writer did not use; echoing the writer's own words is fine.`,
+    `- Never presume a feeling, diagnose, or evaluate.`,
+    ``,
+    ...entries.flatMap((e) => [`=== Entry ${e.date} (path: ${e.path}) ===`, e.text, ``]),
+  ].join("\n");
+}
+
+export interface ThreadGatherResult {
+  spans: Array<{ path: string; quote: string }>;
+  questions: string[];
+}
+
+export function parseThreadGather(text: string): ThreadGatherResult {
+  try {
+    const parsed = JSON.parse(text) as Partial<ThreadGatherResult>;
+    const spans = Array.isArray(parsed.spans)
+      ? parsed.spans.filter(
+          (s): s is { path: string; quote: string } =>
+            !!s &&
+            typeof (s as { path?: unknown }).path === "string" &&
+            typeof (s as { quote?: unknown }).quote === "string" &&
+            !!(s as { quote: string }).quote.trim(),
+        )
+      : [];
+    const questions = Array.isArray(parsed.questions)
+      ? parsed.questions.filter((q): q is string => typeof q === "string" && !!q.trim()).slice(0, 3)
+      : [];
+    return { spans, questions };
+  } catch {
+    return { spans: [], questions: [] };
+  }
+}
+
+export const THREAD_MOVEMENT_SCHEMA = {
+  type: "object",
+  properties: {
+    clause: {
+      type: "string",
+      description: "one clause, at most 90 characters, or empty when nothing factual can be said",
+    },
+  },
+  required: ["clause"],
+  additionalProperties: false,
+} as const;
+
+export function threadMovementPrompt(name: string, earlier: string[], latest: string): string {
+  return [
+    `A journal thread ("${name}") continues in a new entry. In ONE clause (max 90 characters), state how the new entry's treatment of the topic differs from the earlier ones — as observable fact about what the writing discusses (subjects, framing, specifics), in plain neutral wording.`,
+    `Hard rules: no emotion words beyond ones the writer used; no evaluation, praise, or diagnosis; no advice. If nothing factual distinguishes them, return an empty clause.`,
+    ``,
+    ...earlier.map((s, i) => `Earlier ${i + 1}: ${s}`),
+    ``,
+    `New entry excerpt: ${latest}`,
+  ].join("\n");
+}
+
+export function parseThreadMovement(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { clause?: unknown };
+    if (typeof parsed.clause === "string") {
+      const clause = parsed.clause.trim().replace(/\.$/, "");
+      return clause.length <= 90 ? clause : "";
+    }
+  } catch {
+    /* fall through */
+  }
+  return "";
+}
