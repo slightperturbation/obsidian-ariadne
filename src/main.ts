@@ -235,6 +235,7 @@ export default class AriadnePlugin extends Plugin {
       archiveFolder: () => this.settings.archiveFolder,
       isJournal: (path) => this.isJournalPath(path),
       journalPrivacy: () => this.settings.journalModelCalls,
+      indexingBusy: () => this.status.get().progressTotal > 0,
       promotedStore: {
         get: () => this.settings.promotedLog,
         set: (v) => {

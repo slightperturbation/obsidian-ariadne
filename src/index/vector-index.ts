@@ -22,6 +22,8 @@ export interface VectorIndex {
   readonly dim: number;
 
   upsert(id: string, path: string, vec: ArrayLike<number>): void;
+  /** Bulk load of precomputed vectors (warm start) — one message per path. */
+  upsertMany?(path: string, entries: Array<{ id: string; vec: Float32Array }>): void;
   removePath(path: string): void;
 
   search(query: ArrayLike<number>, limit: number, floor: number): Promise<VectorHit[]>;

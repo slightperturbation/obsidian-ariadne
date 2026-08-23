@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { IndexManager } from "../src/index/manager";
+import { VectorStore } from "../src/index/vectorstore";
 import { HashEmbedder } from "../src/index/embeddings/hash-embedder";
 import type { EmbeddingProvider } from "../src/index/embeddings/provider";
 import type { SourceNote } from "../src/core/types";
@@ -96,5 +97,65 @@ describe("IndexManager snapshot/restore", () => {
     expect(manager.revision).toBeGreaterThan(r1);
     manager.removeNote("never-existed.md");
     expect(manager.revision).toBe(r1 + 1);
+  });
+});
+
+describe("warm start does not re-embed the vault", () => {
+  it("same embedder + worker store arriving → vectors migrate, backfill is empty", async () => {
+    const embedder = new HashEmbedder(64);
+    const owner = new IndexManager(embedder);
+    await owner.indexNote({
+      path: "a.md", title: "a", folder: "", mtime: 1,
+      content: "Cats are small carnivorous mammals often kept as pets.",
+    });
+    await owner.indexNote({
+      path: "b.md", title: "b", folder: "", mtime: 1,
+      content: "Dogs are loyal domesticated mammals kept as pets.",
+    });
+    const snap = await owner.snapshot();
+
+    // Next session: restore, then the "worker" store arrives for the SAME
+    // embedder. The old behavior invalidated everything here — a full
+    // re-embed of the vault on every single startup.
+    const next = new IndexManager();
+    next.restore(snap);
+    const target = new VectorStore(64); // stands in for the worker store
+    const backfill = next.setEmbedder(new HashEmbedder(64), target);
+
+    expect(backfill).toEqual([]); // nothing to re-embed
+    // And the migrated vectors actually answer queries.
+    const hits = await next.related("small carnivorous cats kept as pets", {});
+    expect(hits.map((h) => h.path)).toContain("a.md");
+    expect(hits.find((h) => h.path === "a.md")?.cosine).toBeTypeOf("number");
+  });
+
+  it("a DIFFERENT embedder still invalidates everything", async () => {
+    const owner = new IndexManager(new HashEmbedder(64));
+    await owner.indexNote({
+      path: "a.md", title: "a", folder: "", mtime: 1,
+      content: "Cats are small carnivorous mammals often kept as pets.",
+    });
+    const next = new IndexManager();
+    next.restore(await owner.snapshot());
+    const other = new HashEmbedder(32); // different id + dim
+    const backfill = next.setEmbedder(other, new VectorStore(32));
+    expect(backfill).toEqual(["a.md"]);
+  });
+
+  it("notes edited on a reader (no vectors) stay in the backfill set", async () => {
+    const owner = new IndexManager(new HashEmbedder(64));
+    await owner.indexNote({
+      path: "a.md", title: "a", folder: "", mtime: 1,
+      content: "Cats are small carnivorous mammals often kept as pets.",
+    });
+    const next = new IndexManager();
+    next.restore(await owner.snapshot());
+    // A lexical-only re-index (reader edit) strips a.md's vectors.
+    await next.indexNote({
+      path: "a.md", title: "a", folder: "", mtime: 2,
+      content: "Cats, revised on a phone with no model.",
+    });
+    const backfill = next.setEmbedder(new HashEmbedder(64), new VectorStore(64));
+    expect(backfill).toEqual(["a.md"]); // only the genuinely-missing note
   });
 });

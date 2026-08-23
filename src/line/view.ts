@@ -851,15 +851,26 @@ export class AriadneView extends ItemView {
   private actionable(el: HTMLElement, run: () => void): void {
     el.setAttribute("role", "button");
     el.tabIndex = 0;
+    // Debounced: a slow first activation must not let an impatient second
+    // click fire the action again (side-effectful rows create notes). The
+    // heavyweight actions also carry their own single-flight guards; this
+    // is the cheap first line for every row.
+    let lastRun = 0;
+    const guarded = () => {
+      const now = Date.now();
+      if (now - lastRun < 800) return;
+      lastRun = now;
+      run();
+    };
     el.addEventListener("click", (ev) => {
       // Buttons inside the row (dismiss ×) act on their own.
       if (ev.target instanceof Element && ev.target.closest("button")) return;
-      run();
+      guarded();
     });
     el.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" || ev.key === " ") {
         ev.preventDefault();
-        run();
+        guarded();
       }
     });
   }

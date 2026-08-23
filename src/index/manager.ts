@@ -30,6 +30,12 @@ export interface RelatedOptions {
   /** Paths in the draft's link neighbourhood; raises their confidence. */
   neighbors?: ReadonlySet<string>;
   /**
+   * false = lexical-only, even with an embedder present. For interactive
+   * paths (a clicked create) that must not queue behind the worker's
+   * embedding jobs during a backfill burst.
+   */
+  semantic?: boolean;
+  /**
    * Sink (never drop) matching notes to the bottom of the ranking — e.g.
    * dated journal entries, which would otherwise crowd out the permanent
    * notes a topic surface exists to show. A stable partition, so relative
@@ -148,6 +154,31 @@ export class IndexManager {
     this.embedder = embedder;
     const changed =
       this.embedderId !== embedder.id || !this.vectors || this.vectors.dim !== embedder.dim;
+
+    // Same embedder, new host (the worker store arriving after a warm
+    // start): MIGRATE the restored vectors instead of discarding them. The
+    // old behavior treated "a store was provided" as "invalidate
+    // everything" — which re-embedded the entire vault on every startup,
+    // saturating the worker for minutes and making every semantic query
+    // (and the click that issued it) queue behind the churn. restore()
+    // already computed the true backfill set (chunks without vectors);
+    // honor it.
+    if (!changed && vectors && this.vectors instanceof VectorStore) {
+      const byId = new Map(this.vectors.entriesSync());
+      for (const [path, ids] of this.pathChunks) {
+        const entries: Array<{ id: string; vec: Float32Array }> = [];
+        for (const id of ids) {
+          const vec = byId.get(id);
+          if (vec) entries.push({ id, vec });
+        }
+        if (entries.length === 0) continue;
+        if (vectors.upsertMany) vectors.upsertMany(path, entries);
+        else for (const e of entries) vectors.upsert(e.id, path, e.vec);
+      }
+      this.vectors = vectors;
+      return [...this.unembedded];
+    }
+
     if (changed || vectors) {
       this.vectors = vectors ?? new VectorStore(embedder.dim);
       this.embedderId = embedder.id;
@@ -332,7 +363,7 @@ export class IndexManager {
 
     const lists: string[][] = [this.lexical.rankedIds(clean, CANDIDATES, "or")];
     const cosineById = new Map<string, number>();
-    const semanticActive = !!(this.embedder && this.vectors);
+    const semanticActive = !!(this.embedder && this.vectors) && opts.semantic !== false;
     if (semanticActive) {
       const vhits = await this.semanticHits(clean, false);
       lists.push(vhits.map((h) => h.id));

@@ -134,6 +134,8 @@ export class ActionsController {
       publishLedger: { load(): Promise<PublishLedger>; save(l: PublishLedger): Promise<void> };
       /** Which brain may read journal content (tension/themes/synthesis). */
       journalPrivacy: () => "cloud" | "local" | "none";
+      /** An indexing burst is active — interactive paths go lexical-only. */
+      indexingBusy: () => boolean;
       /** Persisted promoted-today tally (survives restarts). */
       promotedStore: {
         get(): { date: string; count: number } | undefined;
@@ -209,24 +211,52 @@ export class ActionsController {
 
   /* ── New-note scaffolding ───────────────────────────────────────────── */
 
+  /** Single-flight: an impatient double-click must not create twice. */
+  private creatingNote = false;
+
   async createNote(seed: string): Promise<void> {
+    // Guarded HERE, not at the click sites, so every entry point (Wanted
+    // row, the Do row, themes, close-the-day, the command) shares one gate.
+    // The incident this prevents: a slow first click looked dead, the user
+    // clicked again, and each click grew another note.
+    if (this.creatingNote) {
+      new Notice("Already creating a note…");
+      return;
+    }
+    this.creatingNote = true;
+    try {
+      await this.createNoteInner(seed);
+    } finally {
+      this.creatingNote = false;
+    }
+  }
+
+  private async createNoteInner(seed: string): Promise<void> {
     const manager = this.deps.manager();
     const folders = this.vaultFolders();
-    const related = manager ? await manager.related(seed, { limit: 6 }) : [];
 
-    let scaffold: ScaffoldResult;
-    if (this.deps.router.available()) {
+    let related: ScoredResult[] = [];
+    let scaffold: ScaffoldResult = fallbackScaffold(seed);
+    // ONE notice covers the whole thinking phase — the neighbor lookup used
+    // to run before any feedback, and during an indexing burst that await
+    // was the multi-second silence that read as "nothing happened".
+    await this.withWorkingNotice("Ariadne is drafting the note…", async () => {
+      // During a backfill burst the semantic path queues behind the
+      // worker's embedding jobs; a clicked create must not wait for that.
+      related = manager
+        ? await manager.related(seed, { limit: 6, semantic: !this.deps.indexingBusy() })
+        : [];
+
+      if (!this.deps.router.available()) return;
       try {
-        const text = await this.withWorkingNotice("Ariadne is scaffolding the note…", () =>
-          this.deps.router.run(
-            "scaffold",
-            scaffoldPrompt({
-              seed,
-              folders,
-              relatedTitles: related.map((r) => r.title),
-            }),
-            { schema: { ...SCAFFOLD_SCHEMA }, maxTokens: 1500, thinking: true },
-          ),
+        const text = await this.deps.router.run(
+          "scaffold",
+          scaffoldPrompt({
+            seed,
+            folders,
+            relatedTitles: related.map((r) => r.title),
+          }),
+          { schema: { ...SCAFFOLD_SCHEMA }, maxTokens: 1500, thinking: true },
         );
         scaffold = parseScaffold(text);
       } catch (err) {
@@ -240,9 +270,7 @@ export class ActionsController {
         );
         scaffold = fallbackScaffold(seed);
       }
-    } else {
-      scaffold = fallbackScaffold(seed);
-    }
+    });
     if (scaffold.links.length === 0) {
       scaffold.links = related.slice(0, 3).map((r) => r.title);
     }

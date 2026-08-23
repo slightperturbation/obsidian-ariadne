@@ -373,3 +373,17 @@ Needs the Obsidian Publish core plugin enabled.
       day with no entry → one clickable Notice; click begins the entry.
 - [ ] **Tally persists.** Promote a thought, restart Obsidian → the
       Today row still shows "· 1 promoted".
+
+## 22. Startup responsiveness (0.6.3)
+
+- [ ] **No re-embed on warm start.** Restart Obsidian with an intact
+      index → the glyph shows a backfill of ~0 (only notes edited since
+      last session), not the whole vault. The worker is quiet within
+      seconds. Console: "backfilling N notes" where N is small.
+- [ ] **Clicks respond instantly.** Immediately after launch, click a
+      Wanted row → the "Ariadne is drafting the note…" notice appears at
+      once (before any model/semantic work).
+- [ ] **No duplicate creates.** Rapid-click a Wanted row or the Do row →
+      exactly one note; further clicks say "Already creating a note…".
+- [ ] **Busy fallback.** During a genuine cold-start backfill, a clicked
+      create still completes promptly (lexical-only neighbors).
