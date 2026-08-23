@@ -59,26 +59,24 @@ describe("sanitizeTitle", () => {
 });
 
 describe("buildNewNoteProposal", () => {
-  it("places the note in the model's home when it's a real folder", () => {
+  it("places the note in the ladder-decided home", () => {
     const proposal = buildNewNoteProposal({
       scaffold: fallbackScaffold("Test note"),
-      allowedFolders: ["1 Zettelkasten", ""],
-      defaultFolder: "",
+      home: "EOW Wiki",
       isoDate: "2026-07-22",
     });
-    // fallbackScaffold has empty home → default folder (root).
-    expect(proposal.changes[0].path).toBe("Test note.md");
+    expect(proposal.changes[0].path).toBe("EOW Wiki/Test note.md");
     expect(proposal.changes[0].type).toBe("create");
+    expect(proposal.description).toBe("in EOW Wiki");
   });
 
-  it("falls back to the default folder for a hallucinated home", () => {
-    const scaffold = { ...fallbackScaffold("X"), home: "Nonexistent/Folder", title: "X" };
+  it("an empty home lands in the vault root", () => {
     const proposal = buildNewNoteProposal({
-      scaffold,
-      allowedFolders: ["Real", ""],
-      defaultFolder: "Real",
+      scaffold: fallbackScaffold("Test note"),
+      home: "",
       isoDate: "2026-07-22",
     });
-    expect(proposal.changes[0].path).toBe("Real/X.md");
+    expect(proposal.changes[0].path).toBe("Test note.md");
+    expect(proposal.description).toBe("in the vault root");
   });
 });

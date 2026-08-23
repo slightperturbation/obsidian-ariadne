@@ -470,6 +470,21 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Infer placement for new notes")
+      .setDesc(
+        "Choose a folder for Ariadne-created notes from the notes that link to " +
+          "the topic, then from its closest neighbors. Off: everything lands in " +
+          "the inbox folder. Either way the note's home is shown when it's " +
+          "created, and moving it is always safe.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.inferPlacement).onChange(async (v) => {
+          this.plugin.settings.inferPlacement = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Archive folder")
       .setDesc("Where triage moves inert notes. Moves are undoable.")
       .addText((t) =>

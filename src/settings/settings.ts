@@ -78,6 +78,9 @@ export interface AriadneSettings {
   // Publishing
   /** The departure lounge: screen notes before Obsidian Publish uploads. */
   enablePublishReview: boolean;
+  /** Derive new-note placement from referrers + semantic neighbors.
+   * Off = every Ariadne-created note goes to the inbox folder. */
+  inferPlacement: boolean;
   /**
    * Folders that are categorically private (never publish candidates), on
    * top of journal detection. Comma-separated.
@@ -146,6 +149,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   remindOnLaunch: false,
 
   enablePublishReview: true,
+  inferPlacement: true,
   privateFolders: "Journal, Inbox, Archive",
 
   enableMargin: true,

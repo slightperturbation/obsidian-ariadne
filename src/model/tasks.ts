@@ -58,7 +58,9 @@ export interface ScaffoldResult {
   title: string;
   /** Frontmatter type, e.g. "note", "reference", "project", "daily". */
   noteType: string;
-  /** Folder the note belongs in, chosen from the vault's real folders. */
+  /** Folder the note lands in — decided by the deterministic placement
+   * ladder (referrer vote → neighbor vote → inbox), never by the model.
+   * Always "" straight out of parse/fallback; the controller fills it in. */
   home: string;
   /** H2 section headings, in order. Structure only. */
   sections: string[];
@@ -73,7 +75,6 @@ export const SCAFFOLD_SCHEMA = {
   properties: {
     title: { type: "string", description: "Note title — specific, atomic, no trailing punctuation" },
     noteType: { type: "string", description: "One of the vault's note types, e.g. note, reference, project" },
-    home: { type: "string", description: "EXACT folder path chosen from the provided folder list" },
     sections: { type: "array", items: { type: "string" }, description: "2-4 H2 section headings" },
     keyIdeas: {
       type: "array",
@@ -82,13 +83,12 @@ export const SCAFFOLD_SCHEMA = {
     },
     links: { type: "array", items: { type: "string" }, description: "Existing note titles worth linking, from the provided list only" },
   },
-  required: ["title", "noteType", "home", "sections", "keyIdeas", "links"],
+  required: ["title", "noteType", "sections", "keyIdeas", "links"],
   additionalProperties: false,
 } as const;
 
 export function scaffoldPrompt(input: {
   seed: string;
-  folders: string[];
   relatedTitles: string[];
 }): string {
   return [
@@ -96,9 +96,6 @@ export function scaffoldPrompt(input: {
     ``,
     `Seed (what the writer wants to capture):`,
     input.seed,
-    ``,
-    `Vault folders (choose "home" EXACTLY from this list):`,
-    ...input.folders.map((f) => `- ${f || "(vault root)"}`),
     ``,
     `Existing notes that may be related (choose "links" only from this list):`,
     ...(input.relatedTitles.length ? input.relatedTitles.map((t) => `- ${t}`) : ["- (none found)"]),
@@ -116,7 +113,7 @@ export function parseScaffold(text: string): ScaffoldResult {
   return {
     title: str(parsed.title, "Untitled"),
     noteType: str(parsed.noteType, "note"),
-    home: typeof parsed.home === "string" ? parsed.home.trim() : "",
+    home: "", // placement comes from the graph vote, not the model
     sections: arr(parsed.sections),
     keyIdeas: arr(parsed.keyIdeas),
     links: arr(parsed.links),

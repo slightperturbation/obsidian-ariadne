@@ -236,6 +236,7 @@ export default class AriadnePlugin extends Plugin {
       isJournal: (path) => this.isJournalPath(path),
       journalPrivacy: () => this.settings.journalModelCalls,
       indexingBusy: () => this.status.get().progressTotal > 0,
+      inferPlacement: () => this.settings.inferPlacement,
       promotedStore: {
         get: () => this.settings.promotedLog,
         set: (v) => {
@@ -425,7 +426,7 @@ export default class AriadnePlugin extends Plugin {
             this.settings.enableWanted
               ? (this.wantedCache ??= wantedTopics(this.app.metadataCache.unresolvedLinks))
               : [],
-          onCreateWanted: (title) => void this.actions.createNote(title),
+          onCreateWanted: (topic) => void this.actions.createNote(topic.title, topic.referrers),
           onThisDay: (currentPath) =>
             this.settings.enableOnThisDay
               ? onThisDay(currentPath, this.app.vault.getMarkdownFiles().map((f) => f.path))

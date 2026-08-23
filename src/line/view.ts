@@ -89,7 +89,7 @@ export interface AriadneViewDeps {
   publishChanged?: () => number;
   onPublishReview?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
-  onCreateWanted?: (title: string) => void;
+  onCreateWanted?: (topic: WantedTopic) => void;
   /** Touch device: show tap targets instead of a modifier-key legend. */
   touch?: () => boolean;
   /** Ambient tension/echo analysis (see margin/tension). */
@@ -838,7 +838,7 @@ export class AriadneView extends ItemView {
       this.actionable(row, (ev?: Event) => {
         // The dismiss × inside the head must not create the note.
         void ev;
-        this.deps.onCreateWanted!(topic.title);
+        this.deps.onCreateWanted!(topic);
       });
       this.wantedEl.appendChild(row);
     }

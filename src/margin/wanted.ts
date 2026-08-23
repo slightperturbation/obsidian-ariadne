@@ -23,6 +23,9 @@ export interface WantedTopic {
   sources: number;
   /** Total reference count across the vault. */
   refs: number;
+  /** Paths of the referring notes (capped) — they vote on where the
+   * created note belongs: the notes that demanded it know its home. */
+  referrers: string[];
 }
 
 /** Obsidian's metadataCache.unresolvedLinks shape. */
@@ -31,8 +34,8 @@ export type UnresolvedLinks = Record<string, Record<string, number>>;
 const MIN_SOURCES = 2;
 
 export function wantedTopics(unresolved: UnresolvedLinks, limit = 3): WantedTopic[] {
-  const byTopic = new Map<string, { sources: number; refs: number }>();
-  for (const links of Object.values(unresolved)) {
+  const byTopic = new Map<string, { sources: number; refs: number; referrers: string[] }>();
+  for (const [source, links] of Object.entries(unresolved)) {
     // [[X]] and [[X#section]] in one note are two link KEYS but one source —
     // counting keys would let a single note fake the corroboration bar.
     const titlesInSource = new Map<string, number>();
@@ -42,15 +45,16 @@ export function wantedTopics(unresolved: UnresolvedLinks, limit = 3): WantedTopi
       titlesInSource.set(title, (titlesInSource.get(title) ?? 0) + count);
     }
     for (const [title, count] of titlesInSource) {
-      const entry = byTopic.get(title) ?? { sources: 0, refs: 0 };
+      const entry = byTopic.get(title) ?? { sources: 0, refs: 0, referrers: [] };
       entry.sources += 1;
       entry.refs += count;
+      if (entry.referrers.length < 12) entry.referrers.push(source);
       byTopic.set(title, entry);
     }
   }
   return [...byTopic.entries()]
     .filter(([, v]) => v.sources >= MIN_SOURCES)
-    .map(([title, v]) => ({ title, sources: v.sources, refs: v.refs }))
+    .map(([title, v]) => ({ title, sources: v.sources, refs: v.refs, referrers: v.referrers }))
     .sort((a, b) => b.sources - a.sources || b.refs - a.refs || a.title.localeCompare(b.title))
     .slice(0, limit);
 }

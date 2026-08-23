@@ -387,3 +387,24 @@ Needs the Obsidian Publish core plugin enabled.
       exactly one note; further clicks say "Already creating a note…".
 - [ ] **Busy fallback.** During a genuine cold-start backfill, a clicked
       create still completes promptly (lexical-only neighbors).
+
+## 23. Graph-derived placement (0.6.4)
+
+- [ ] **Referrer vote.** In a vault where several notes in one folder link to
+      a missing topic, click its Wanted row → the note is created in that
+      folder (not where the model felt like), and the ✓ Notice names the
+      destination ("Created … in <folder>").
+- [ ] **Generalization.** Referrers split across sibling subfolders of one
+      parent → the note lands in the shared parent, not the vault root.
+- [ ] **Neighbor fallback.** Create from the Do row (a seed with no
+      referrers) → placement follows the semantic neighbors' folders.
+- [ ] **Inbox fallback.** A seed alien to the vault (no agreeing neighbors)
+      → the note lands in the Inbox, not the root.
+- [ ] **Journals never vote.** A topic mentioned only across journal
+      entries does not land in the journal folder.
+- [ ] **Lifecycle folders never win.** Inbox/Archive/attachments folders
+      are never chosen by the vote itself (Inbox appears only as fallback).
+- [ ] **Toggle off.** Settings → Filing → "Infer placement for new notes"
+      off → every created note goes to the Inbox folder.
+- [ ] **Undo intact.** "Undo last action" after a placed create removes the
+      note from wherever it landed.

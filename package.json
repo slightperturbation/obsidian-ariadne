@@ -1,6 +1,6 @@
 {
   "name": "ariadne",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "One line to search and connect your notes; a margin that suggests links and structure as you write. Local-first, approval-first.",
   "main": "main.js",
   "scripts": {

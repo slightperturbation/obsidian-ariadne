@@ -6,6 +6,7 @@ import type { Logger } from "../util/logger";
 import type { ScoredResult } from "../core/types";
 import { ActionExecutor, type ActionProposal } from "./framework";
 import { buildNewNoteProposal } from "./new-note";
+import { placementVote } from "./placement";
 import { buildWeaveProposal } from "./link-weave";
 import {
   segmentNote,
@@ -136,6 +137,8 @@ export class ActionsController {
       journalPrivacy: () => "cloud" | "local" | "none";
       /** An indexing burst is active — interactive paths go lexical-only. */
       indexingBusy: () => boolean;
+      /** Derive new-note placement from the graph; off = everything → inbox. */
+      inferPlacement: () => boolean;
       /** Persisted promoted-today tally (survives restarts). */
       promotedStore: {
         get(): { date: string; count: number } | undefined;
@@ -214,7 +217,7 @@ export class ActionsController {
   /** Single-flight: an impatient double-click must not create twice. */
   private creatingNote = false;
 
-  async createNote(seed: string): Promise<void> {
+  async createNote(seed: string, referrers?: string[]): Promise<void> {
     // Guarded HERE, not at the click sites, so every entry point (Wanted
     // row, the Do row, themes, close-the-day, the command) shares one gate.
     // The incident this prevents: a slow first click looked dead, the user
@@ -225,15 +228,14 @@ export class ActionsController {
     }
     this.creatingNote = true;
     try {
-      await this.createNoteInner(seed);
+      await this.createNoteInner(seed, referrers);
     } finally {
       this.creatingNote = false;
     }
   }
 
-  private async createNoteInner(seed: string): Promise<void> {
+  private async createNoteInner(seed: string, referrers?: string[]): Promise<void> {
     const manager = this.deps.manager();
-    const folders = this.vaultFolders();
 
     let related: ScoredResult[] = [];
     let scaffold: ScaffoldResult = fallbackScaffold(seed);
@@ -253,7 +255,6 @@ export class ActionsController {
           "scaffold",
           scaffoldPrompt({
             seed,
-            folders,
             relatedTitles: related.map((r) => r.title),
           }),
           { schema: { ...SCAFFOLD_SCHEMA }, maxTokens: 1500, thinking: true },
@@ -275,10 +276,11 @@ export class ActionsController {
       scaffold.links = related.slice(0, 3).map((r) => r.title);
     }
 
+    const home = this.decidePlacement(referrers, related);
+    scaffold.home = home;
     const proposal = buildNewNoteProposal({
       scaffold,
-      allowedFolders: folders,
-      defaultFolder: "",
+      home,
       isoDate: new Date().toISOString().slice(0, 10),
     });
     // Creating a note is non-destructive and trivially reversible, so it skips
@@ -289,7 +291,9 @@ export class ActionsController {
     change.path = this.uniquePath(change.path);
     try {
       await this.deps.executor.apply(proposal);
-      new Notice(`✓ Created “${scaffold.title}” · reversible with "Undo last action".`);
+      new Notice(
+        `✓ Created “${scaffold.title}” in ${home || "the vault root"} · reversible with "Undo last action".`,
+      );
       await this.deps.app.workspace.openLinkText(change.path, "", false);
     } catch (err) {
       new Notice(`Not created: ${err instanceof Error ? err.message : String(err)}`);
@@ -843,7 +847,7 @@ export class ActionsController {
           {
             label: "Create",
             closesModal: true,
-            run: () => this.createNote(wanted.title).then(() => true),
+            run: () => this.createNote(wanted.title, wanted.referrers).then(() => true),
           },
         ],
       });
@@ -1799,19 +1803,47 @@ export class ActionsController {
     }).open();
   }
 
-  /** Folder candidates for the scaffold's home, most-populated first. */
-  private vaultFolders(): string[] {
-    const manager = this.deps.manager();
-    const counts = new Map<string, number>();
-    for (const path of manager?.indexedPaths() ?? []) {
-      const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-      counts.set(dir, (counts.get(dir) ?? 0) + 1);
-    }
-    const folders = [...counts.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 30)
-      .map(([dir]) => dir);
-    if (!folders.includes("")) folders.push("");
-    return folders;
+  /**
+   * Where does a new note belong? The three-rung ladder, in order:
+   * referrer folders (the notes that linked to a wanted topic vote with
+   * their homes), semantic-neighbor folders (cosine-weighted), and the
+   * inbox when the vault doesn't say. Deterministic and explainable —
+   * the model no longer picks folders. Journal notes never vote (a topic
+   * mentioned across journal entries isn't a journal entry), and
+   * lifecycle folders (inbox/archive/attachments) can't win.
+   */
+  private decidePlacement(referrers: string[] | undefined, related: ScoredResult[]): string {
+    const inbox = normalizePath(this.deps.inboxFolder());
+    if (!this.deps.inferPlacement()) return inbox;
+    const excluded = [
+      this.deps.inboxFolder(),
+      this.deps.archiveFolder(),
+      this.deps.attachmentsFolder(),
+    ]
+      .map((f) => normalizePath(f))
+      .filter(Boolean);
+    const folderOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
+
+    const fromReferrers = placementVote(
+      (referrers ?? [])
+        .filter((p) => !this.deps.isJournal(p))
+        .map((p) => ({ folder: folderOf(p) })),
+      excluded,
+    );
+    if (fromReferrers) return fromReferrers;
+
+    const fromNeighbors = placementVote(
+      related
+        .filter((r) => !this.deps.isJournal(r.path))
+        .map((r) => ({
+          folder: folderOf(r.path),
+          // Cosine when a vector matched; a floor keeps lexical-only
+          // neighbors (indexing bursts, tiny vaults) from losing the vote
+          // to a single embedded one.
+          weight: Math.max(r.cosine ?? 0, r.score * 0.5, 0.05),
+        })),
+      excluded,
+    );
+    return fromNeighbors ?? inbox;
   }
 }
