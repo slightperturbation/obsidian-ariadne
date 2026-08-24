@@ -500,3 +500,13 @@ On an iPhone (tested target: 15 Pro Max):
       Clearing the query restores the zones.
 - [ ] **Desktop unchanged.** Same builds on desktop: results still cap at
       2/3, zones still size naturally.
+
+## 29. iOS tap-to-open (0.7.4)
+
+- [ ] **Row tap opens.** On iPhone, search for a note and tap the result row
+      itself (not its buttons) → the note opens.
+- [ ] **Buttons unchanged.** Link inserts a [[link]] at the cursor; Weave
+      creates the bidirectional link; neither also opens the note.
+- [ ] **Margin cards too.** Tapping a Related card on iOS opens that note.
+- [ ] **Desktop unchanged.** Mouse click opens on pointerdown (selection
+      preserved in the editor); no double activation.

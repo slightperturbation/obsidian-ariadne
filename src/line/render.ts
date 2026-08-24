@@ -102,15 +102,26 @@ export function rowEl(
   // card first NAVIGATED to the very note the user was waving away.
   const onOwnRow = (ev: Event) =>
     !(ev.target instanceof Element) || !ev.target.closest("button");
+  // De-dup between pointerdown and the click that follows it with an explicit
+  // flag, NOT by reading click's pointerType: WebKit reports pointerType
+  // "mouse" on tap-synthesized clicks (Chromium says "touch"), so inferring
+  // from the click meant an iPhone tap activated the mouse guard and the row
+  // went dead — while its inner Link/Weave buttons (plain click) kept working.
+  let mouseHandled = false;
   row.addEventListener("pointerdown", (ev) => {
     if (ev.pointerType === "mouse" && onOwnRow(ev)) {
       ev.preventDefault();
+      mouseHandled = true;
       handlers.onActivate(result, modifiersOf(ev));
     }
   });
   row.addEventListener("click", (ev) => {
-    // Touch and keyboard-activated clicks land here; a mouse already fired.
-    if ((ev as PointerEvent).pointerType === "mouse") return;
+    // Touch and keyboard/AT-synthesized clicks land here; a real mouse
+    // already acted on pointerdown and set the flag.
+    if (mouseHandled) {
+      mouseHandled = false;
+      return;
+    }
     if (!onOwnRow(ev)) return;
     handlers.onActivate(result, modifiersOf(ev));
   });

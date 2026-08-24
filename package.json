@@ -1,6 +1,6 @@
 {
   "name": "ariadne",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "One line to search and connect your notes; a margin that suggests links and structure as you write. Local-first, approval-first.",
   "main": "main.js",
   "scripts": {
@@ -27,6 +27,7 @@
     "esbuild": "0.25.5",
     "eslint": "^9.9.0",
     "eslint-plugin-obsidianmd": "^0.4.1",
+    "happy-dom": "^20.11.6",
     "obsidian": "^1.7.2",
     "tslib": "2.4.0",
     "typescript": "^5.8.3",
