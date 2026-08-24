@@ -482,3 +482,27 @@
   padding: 1px var(--size-4-2);
   font-size: var(--font-ui-smaller);
 }
+
+/* ── Phone layout ─────────────────────────────────────────────────────────
+   On a phone the panel is short and the foot zones (Today, Vault) must not
+   crowd out the thought-surfaces: each is capped and scrolls internally.
+   While a query is live, the results own the panel outright — every zone
+   steps aside and the 2/3 desktop cap is lifted. */
+
+.is-phone .ariadne-zone {
+  flex: none;
+  max-height: 22vh;
+  overflow-y: auto;
+}
+/* The Now zone (Margin) keeps its fill-the-rest behavior. */
+.is-phone .ariadne-margin-section {
+  flex: 1 1 auto;
+  max-height: none;
+}
+.is-phone .ariadne-panel.is-searching .ariadne-zone {
+  display: none;
+}
+.is-phone .ariadne-panel.is-searching .ariadne-results.is-active {
+  flex: 1 1 auto;
+  max-height: none;
+}

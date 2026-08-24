@@ -487,3 +487,16 @@ Needs the Obsidian Publish core plugin enabled.
       correspondence names no longer masquerade as journal entries).
 - [ ] **Live setting.** Editing Quiet types takes effect on the next pause —
       no re-index, no reload.
+
+## 28. Phone layout (0.7.3)
+
+On an iPhone (tested target: 15 Pro Max):
+
+- [ ] **Zones bounded.** With a busy vault, the Today and Vault sections each
+      cap at ~22% of the panel height and scroll internally — the Margin
+      (Now zone) keeps the majority of the space.
+- [ ] **Search dominates.** Typing in the search box hides every zone; the
+      results list takes the full panel below the input (no 2/3 cap).
+      Clearing the query restores the zones.
+- [ ] **Desktop unchanged.** Same builds on desktop: results still cap at
+      2/3, zones still size naturally.

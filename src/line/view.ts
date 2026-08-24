@@ -372,6 +372,9 @@ export class AriadneView extends ItemView {
     // the Margin gets the full panel.
     const active = this.hasQuery;
     this.resultsEl.classList.toggle("is-active", active);
+    // Phone CSS keys off this to hand the whole panel to the results while a
+    // query is live — on a small screen a search must dominate, not share.
+    this.contentEl.classList.toggle("is-searching", active);
     if (!active) {
       this.resultsEl.replaceChildren();
       return;
