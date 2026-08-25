@@ -510,3 +510,16 @@ On an iPhone (tested target: 15 Pro Max):
 - [ ] **Margin cards too.** Tapping a Related card on iOS opens that note.
 - [ ] **Desktop unchanged.** Mouse click opens on pointerdown (selection
       preserved in the editor); no double activation.
+
+## 30. Home-box reachability (0.7.5)
+
+- [ ] **Glyph honesty.** With a local model URL configured, the glyph shows
+      "· box awake" at home and "· box asleep" away; with no URL, nothing.
+- [ ] **Fail fast away.** Off VPN, trigger a model action (create a note
+      with routing mode "local") → falls back to cloud/template within ~2s,
+      never a long hang. Journal checks under privacy "local" simply skip.
+- [ ] **Wake up fast home.** Connect VPN (or arrive home), refocus the
+      Obsidian window → within a few seconds the glyph flips to awake and
+      cheap tasks route local again (brain shows local).
+- [ ] **No probe storms.** Console (debug) shows at most one probe per
+      trigger; background probes never block typing or search.

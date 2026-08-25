@@ -203,3 +203,89 @@ describe("journal privacy routing", () => {
     expect(cloud.complete).not.toHaveBeenCalled();
   });
 });
+
+describe("GemmaProvider away-from-home behavior", () => {
+  const okJson = (body: unknown) =>
+    Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+
+  it("a stale 'awake' cache re-probes before completing and fails in probe-time, not completion-time", async () => {
+    let reachable = true;
+    const calls: string[] = [];
+    const fetchFn = vi.fn((url: string) => {
+      calls.push(String(url));
+      if (!reachable) return Promise.reject(new Error("EHOSTUNREACH"));
+      return String(url).endsWith("/models")
+        ? okJson({ data: [] })
+        : okJson({ choices: [{ message: { content: "ok" } }] });
+    });
+    const g = new GemmaProvider({
+      baseUrl: () => "http://box:11434/v1",
+      model: () => "m",
+      fetch: fetchFn as unknown as typeof fetch,
+    });
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await g.probe();
+    expect(g.available()).toBe(true);
+
+    // Left home: 30s later (past call-freshness), the box is unroutable.
+    reachable = false;
+    now.mockReturnValue(1_030_000);
+    await expect(g.complete("p")).rejects.toThrow(/unreachable/);
+    // The failure came from the probe — /chat/completions was never attempted.
+    expect(calls.filter((u) => u.endsWith("/chat/completions"))).toHaveLength(0);
+    expect(g.available()).toBe(false);
+    now.mockRestore();
+  });
+
+  it("'asleep' is re-checked on a short TTL; 'awake' is trusted longer", async () => {
+    let reachable = false;
+    const fetchFn = vi.fn(() =>
+      reachable ? okJson({ data: [] }) : Promise.reject(new Error("down")),
+    );
+    const g = new GemmaProvider({
+      baseUrl: () => "http://box:11434/v1",
+      model: () => "m",
+      fetch: fetchFn as unknown as typeof fetch,
+    });
+    const now = vi.spyOn(Date, "now").mockReturnValue(2_000_000);
+    await g.probe();
+    expect(g.available()).toBe(false);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+
+    // Arrived home. 30s later the unreachable-side TTL has lapsed:
+    // available() answers false NOW but kicks a background re-probe…
+    reachable = true;
+    now.mockReturnValue(2_030_000);
+    expect(g.available()).toBe(false);
+    await Promise.resolve(); // let the background probe settle
+    await vi.waitFor(() => expect(g.available()).toBe(true));
+
+    // …whereas a fresh "awake" does NOT re-probe 30s later.
+    const probes = fetchFn.mock.calls.length;
+    now.mockReturnValue(2_060_000);
+    expect(g.available()).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(probes);
+    now.mockRestore();
+  });
+
+  it("notifyNetworkChange drops the cache and re-probes immediately", async () => {
+    let reachable = false;
+    const fetchFn = vi.fn(() =>
+      reachable ? okJson({ data: [] }) : Promise.reject(new Error("down")),
+    );
+    const g = new GemmaProvider({
+      baseUrl: () => "http://box:11434/v1",
+      model: () => "m",
+      fetch: fetchFn as unknown as typeof fetch,
+    });
+    await g.probe();
+    expect(g.state()).toBe("asleep");
+    reachable = true; // VPN came up
+    g.notifyNetworkChange();
+    await vi.waitFor(() => expect(g.state()).toBe("awake"));
+    // Unconfigured provider: state "off", notify is a no-op.
+    const off = new GemmaProvider({ baseUrl: () => "", model: () => "m", fetch: fetchFn as unknown as typeof fetch });
+    off.notifyNetworkChange();
+    expect(off.state()).toBe("off");
+  });
+});

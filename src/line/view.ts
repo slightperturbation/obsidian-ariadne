@@ -110,6 +110,8 @@ export interface AriadneViewDeps {
     subscribe(listener: () => void): () => void;
     dismiss(notePath: string, targetPath: string): void;
   };
+  /** Home-box reachability for the glyph ("off" = not configured). */
+  localBox?: () => "off" | "awake" | "asleep";
   /** Per-surface prominence bias (serendipity tuning), added to confidence. */
   lineBias?: () => number;
   marginBias?: () => number;
@@ -1239,6 +1241,11 @@ export class AriadneView extends ItemView {
         : s.brain === "local"
           ? ` · brain local${s.sessionCostUsd >= 0.005 ? ` ($${s.sessionCostUsd.toFixed(2)} cloud)` : ""}${capped}`
           : "";
+    // The home box: knowing it's asleep explains why journal checks are
+    // quiet (privacy "local") or why the brain shows cloud — without the
+    // user having to guess at their own network.
+    const boxState = this.deps.localBox?.() ?? "off";
+    const box = boxState === "off" ? "" : ` · box ${boxState}`;
     // A reader device can't embed notes edited since the owner last indexed,
     // so say how many are in that state rather than quietly ranking them worse.
     const stale =
@@ -1250,7 +1257,7 @@ export class AriadneView extends ItemView {
     this.glyphEl.textContent =
       s.index === "error"
         ? `index error — ${s.lastError ?? "unknown"}`
-        : `${s.indexedNotes} notes · ${state}${semantic}${readerGap}${stale}${brain}`;
+        : `${s.indexedNotes} notes · ${state}${semantic}${readerGap}${stale}${brain}${box}`;
     this.glyphEl.classList.toggle("is-error", s.index === "error");
   }
 }

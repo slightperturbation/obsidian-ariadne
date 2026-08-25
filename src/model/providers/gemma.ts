@@ -13,12 +13,25 @@ import type { CompleteOptions, ModelUsage } from "./claude";
  * not as an error the user sees.
  */
 
-/** Probe result is trusted for this long before re-checking. */
-const PROBE_TTL_MS = 5 * 60_000;
+/**
+ * Asymmetric trust: "awake" holds for minutes (a reachable box rarely
+ * vanishes mid-session), but "asleep" is re-checked quickly — the box owner
+ * arriving home or joining the VPN should not wait long to be noticed.
+ * Both re-checks are background probes; nothing interactive ever waits.
+ */
+const REACHABLE_TTL_MS = 5 * 60_000;
+const UNREACHABLE_TTL_MS = 25_000;
 /** A LAN box answers in tens of ms; a second means asleep or absent. */
 const PROBE_TIMEOUT_MS = 1_500;
 /** Local generation is slow but must not be unbounded. */
 const COMPLETE_TIMEOUT_MS = 60_000;
+/**
+ * A completion whose probe is older than this re-probes FIRST (≤1.5s,
+ * ~free on the LAN). The failure this prevents: leave home with the cache
+ * saying "awake", and every local call would otherwise burn the full
+ * completion timeout against an unroutable address before falling back.
+ */
+const CALL_FRESHNESS_MS = 25_000;
 
 export class GemmaProvider {
   private lastProbe = 0;
@@ -53,8 +66,26 @@ export class GemmaProvider {
    */
   available(): boolean {
     if (!this.configured()) return false;
-    if (Date.now() - this.lastProbe > PROBE_TTL_MS) void this.probe();
+    const ttl = this.reachable ? REACHABLE_TTL_MS : UNREACHABLE_TTL_MS;
+    if (Date.now() - this.lastProbe > ttl) void this.probe();
     return this.reachable;
+  }
+
+  /** Cached state for surfaces that must not trigger probes as a side effect. */
+  state(): "off" | "awake" | "asleep" {
+    if (!this.configured()) return "off";
+    return this.reachable ? "awake" : "asleep";
+  }
+
+  /**
+   * The network likely changed (wake, refocus, online event, VPN toggle
+   * noticed indirectly): drop the cache and re-probe in the background, so
+   * the next route decision is right without any call paying for it.
+   */
+  notifyNetworkChange(): void {
+    if (!this.configured()) return;
+    this.lastProbe = 0;
+    void this.probe();
   }
 
   /** Ask the box if it's awake; cache the answer. Single-flight. */
@@ -89,6 +120,10 @@ export class GemmaProvider {
     opts: CompleteOptions = {},
   ): Promise<{ text: string; usage: ModelUsage }> {
     if (!this.configured()) throw new Error("no local model URL configured");
+    // Fail in ≤1.5s on a stale cache instead of in 60s against a dead route.
+    if (Date.now() - this.lastProbe > CALL_FRESHNESS_MS && !(await this.probe())) {
+      throw new Error("local box unreachable");
+    }
 
     // Structured output: OpenAI-compatible servers vary — json_schema support
     // is rare, json_object is common. Ask for json_object and put the schema

@@ -111,6 +111,7 @@ export default class AriadnePlugin extends Plugin {
   private ghost?: GhostEngine;
   private tensions?: TensionEngine;
   private router!: ModelRouter;
+  private gemma?: GemmaProvider;
   private executor!: ActionExecutor;
   private actions!: ActionsController;
   private lastMarkdown: MarkdownView | null = null;
@@ -311,6 +312,17 @@ export default class AriadnePlugin extends Plugin {
       model: () => this.settings.gemmaModel,
       fetch: obsidianFetch,
     });
+    this.gemma = gemma;
+    // A plugin gets no network-change API, but the moments the route DOES
+    // change correlate tightly with events it can see: the laptop waking or
+    // regaining focus (arrived home / opened the lid), and the browser's
+    // online event. Each costs one background probe (≤1.5s, single-flight);
+    // the unreachable-side TTL (25s) covers VPN toggles none of these catch.
+    this.registerDomEvent(window, "online", () => gemma.notifyNetworkChange());
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible") gemma.notifyNetworkChange();
+    });
+    this.registerDomEvent(window, "focus", () => gemma.notifyNetworkChange());
     this.router = new ModelRouter({
       provider,
       local: gemma,
@@ -541,6 +553,7 @@ export default class AriadnePlugin extends Plugin {
           marginNeighbors: (path) => this.linkNeighborhood(path),
           isPeriodic: this.isJournalPath,
           quietNote: this.isQuietNote,
+          localBox: () => this.gemma?.state() ?? "off",
           wantedTopics: () =>
             this.settings.enableWanted
               ? (this.wantedCache ??= wantedTopics(this.unresolvedLinksFiltered()))
