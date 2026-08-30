@@ -637,3 +637,29 @@ export function parseThreadMovement(text: string): string {
   }
   return "";
 }
+
+/**
+ * Title for an extracted selection. Differs from titlePrompt in that the
+ * caller has real context — the source note and the prose around the
+ * selection — which is exactly what distinguishes "what this passage is
+ * about" from "what these words say". Routed as a quality task: a title is
+ * the note's permanent name.
+ */
+export function extractTitlePrompt(input: {
+  selection: string;
+  sourceTitle: string;
+  /** Prose immediately before/after the selection in the source (may be ""). */
+  before: string;
+  after: string;
+}): string {
+  return [
+    `A writer is extracting the SELECTED passage below out of a note into its own Zettelkasten note. Propose the new note's title: the passage's one idea, named specifically, in the writer's own words where possible ("Spaced repetition trades transfer for retention", not "Notes on learning"). The surrounding context tells you what the passage is about when the passage alone is ambiguous — but title the passage, not the source note.`,
+    ``,
+    `Source note: "${input.sourceTitle}"`,
+    ...(input.before.trim() ? [``, `Context before:`, input.before] : []),
+    ``,
+    `SELECTED passage:`,
+    input.selection,
+    ...(input.after.trim() ? [``, `Context after:`, input.after] : []),
+  ].join("\n");
+}

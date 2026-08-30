@@ -80,3 +80,27 @@ describe("buildNewNoteProposal", () => {
     expect(proposal.description).toBe("in the vault root");
   });
 });
+
+describe("extractTitlePrompt", () => {
+  it("carries source, selection, and surrounding context; omits empty context", async () => {
+    const { extractTitlePrompt } = await import("../src/model/tasks");
+    const full = extractTitlePrompt({
+      selection: "The map is not the territory.",
+      sourceTitle: "2026-08-20",
+      before: "Thinking about models again.",
+      after: "This applies to my vault too.",
+    });
+    expect(full).toContain('Source note: "2026-08-20"');
+    expect(full).toContain("SELECTED passage:");
+    expect(full).toContain("Context before:");
+    expect(full).toContain("Context after:");
+    const bare = extractTitlePrompt({
+      selection: "x",
+      sourceTitle: "S",
+      before: "  ",
+      after: "",
+    });
+    expect(bare).not.toContain("Context before:");
+    expect(bare).not.toContain("Context after:");
+  });
+});

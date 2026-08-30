@@ -538,3 +538,24 @@ On an iPhone (tested target: 15 Pro Max):
       shows no fill-out rows and Wanted behaves exactly as before.
 - [ ] **Dismiss & refresh.** × hides a row for the session; completing a
       stub removes it on the next background pass (~30s after edits).
+
+## 32. Extract selection (0.7.7)
+
+- [ ] **Basic flow.** Select a passage (20+ chars), run "Extract selection
+      into a new note" → new note created with the passage verbatim, a
+      "— extracted from [[source]]" line, and the selection replaced by a
+      [[link]]. Notice names the title and destination.
+- [ ] **Smart title.** The title names the passage's specific idea (context
+      from surrounding prose used when the passage alone is ambiguous),
+      routed to the best available model.
+- [ ] **Smart placement.** Extract from a note in a topical folder →
+      the new note lands with its semantic neighbors (often the source's
+      folder), not blindly in the Inbox; ladder falls back to Inbox when
+      the vault disagrees.
+- [ ] **Journal privacy.** From a journal entry with model calls "local"
+      and the box asleep → no cloud call; title falls back to the
+      passage's first line.
+- [ ] **Two undos.** "Undo last action" removes the created note; ⌘Z in the
+      editor restores the original selection text.
+- [ ] **Race safety.** Navigate away mid-extract → the note is still
+      created; the source is left untouched with a notice.

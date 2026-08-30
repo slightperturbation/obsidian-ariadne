@@ -582,6 +582,12 @@ export default class AriadnePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "extract-selection",
+      name: "Extract selection into a new note",
+      editorCallback: () => void this.actions.extractSelection(),
+    });
+
+    this.addCommand({
       id: "retire-incumbents",
       name: "Retire replaced plugins (Smart Connections, Omnisearch)",
       callback: () => {

@@ -111,6 +111,7 @@ import {
   parseTheme,
   parseSynthesis,
   titlePrompt,
+  extractTitlePrompt,
   triagePrompt,
   themePrompt,
   synthesisPrompt,
@@ -729,6 +730,127 @@ export class ActionsController {
    * where elaboration happens, and the link ties them. Instant and local; a
    * model is consulted only if the text yields no usable title.
    */
+  /**
+   * Extract the current selection into its own note. The complement of
+   * promote: promote COPIES a thought out of a journal into the inbox for
+   * triage; extract MOVES a passage out of any note, leaves a [[link]] in
+   * its place, and files the new note by the placement ladder (the source
+   * note is its first referrer; the selection's semantic neighbors are the
+   * second rung). The title comes from the quality-routed model with the
+   * surrounding prose as context — a title is the note's permanent name.
+   */
+  private extracting = false;
+
+  async extractSelection(): Promise<void> {
+    if (this.extracting) {
+      new Notice("Already extracting…");
+      return;
+    }
+    const view = this.deps.lastMarkdown();
+    const file = view?.file;
+    if (!view || !file) {
+      new Notice("Open a note to extract from.");
+      return;
+    }
+    const editor = view.editor;
+    const text = editor.getSelection();
+    if (text.trim().length < 20) {
+      new Notice("Select the passage to extract first.");
+      return;
+    }
+    this.extracting = true;
+    try {
+      // Anchors and content captured BEFORE any await — the model call can
+      // take seconds and the editor may move under it.
+      const from = editor.getCursor("from");
+      const to = editor.getCursor("to");
+      const lines = editor.getValue().split("\n");
+      const beforeCtx = lines.slice(Math.max(0, from.line - 4), from.line).join("\n");
+      const afterCtx = lines.slice(to.line + 1, to.line + 5).join("\n");
+
+      const journal = this.deps.isJournal(file.path);
+      const privacy = journal ? this.deps.journalPrivacy() : "cloud";
+      const modelOk =
+        privacy !== "none" &&
+        this.deps.router.available() &&
+        (privacy !== "local" || this.deps.router.localAvailable());
+
+      let title: string | null = null;
+      let related: ScoredResult[] = [];
+      await this.withWorkingNotice("Ariadne is extracting the note…", async () => {
+        const manager = this.deps.manager();
+        related = manager
+          ? await manager.related(text, {
+              limit: 6,
+              semantic: !this.deps.indexingBusy(),
+              quiet: this.deps.quietNote,
+            })
+          : [];
+        if (modelOk) {
+          try {
+            title = parseTitle(
+              await this.deps.router.run(
+                "scaffold",
+                extractTitlePrompt({
+                  selection: text.slice(0, 4 * EXCERPT_CHARS),
+                  sourceTitle: file.basename,
+                  before: beforeCtx,
+                  after: afterCtx,
+                }),
+                {
+                  schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
+                  maxTokens: 100,
+                  ...(privacy === "local" ? { privacy: "local" as const } : {}),
+                },
+              ),
+            );
+          } catch (err) {
+            this.deps.log.warn(`extract title failed: ${String(err)}`);
+          }
+        }
+      });
+      title ??= titleFromContent(text.trim());
+      if (!title) {
+        new Notice("Couldn't derive a title from that selection.");
+        return;
+      }
+
+      const home = this.decidePlacement([file.path], related);
+      const path = this.uniquePath(
+        home ? `${home}/${sanitizeTitle(title)}.md` : `${sanitizeTitle(title)}.md`,
+      );
+      const iso = new Date().toISOString().slice(0, 10);
+      const body = `---\ntype: note\ncreated: ${iso}\n---\n${text.trim()}\n\n— extracted from [[${file.basename}]]\n`;
+      try {
+        await this.deps.executor.apply({
+          title: `Extract "${title}"`,
+          changes: [{ type: "create", path, after: body }],
+        });
+      } catch (err) {
+        new Notice(`Extract failed: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+
+      // Replace the selection with the link via the editor — an ordinary
+      // buffer edit, reversible with ⌘Z — but only if the selection is
+      // still exactly where it was (ghost-engine revalidation).
+      const noteName = path.split("/").pop()!.replace(/\.md$/, "");
+      const nowView = this.deps.lastMarkdown();
+      const same =
+        nowView?.file?.path === file.path && nowView.editor.getRange(from, to) === text;
+      if (same) {
+        nowView.editor.replaceRange(`[[${noteName}]]`, from, to);
+      } else {
+        new Notice("Source changed while extracting — the selection was left in place.");
+      }
+      new Notice(
+        `✓ Extracted "${title}" into ${home || "the vault root"} · note undoable via "Undo last action"; the link with ⌘Z.`,
+      );
+    } finally {
+      this.extracting = false;
+    }
+  }
+
   async promoteToNote(): Promise<void> {
     const view = this.deps.lastMarkdown();
     const file = view?.file;
