@@ -162,6 +162,8 @@ export class ActionsController {
       indexingBusy: () => boolean;
       /** Derive new-note placement from the graph; off = everything → inbox. */
       inferPlacement: () => boolean;
+      /** publish: true frontmatter — public demand outranks raw counts. */
+      isPublished: (path: string) => boolean;
       /** Ambient quiet: source/machine-generated notes stay out of suggestions. */
       quietNote: (path: string) => boolean;
       /** unresolvedLinks with excluded sources already filtered out. */
@@ -878,7 +880,7 @@ export class ActionsController {
       });
     }
 
-    const wanted = wantedTopics(this.deps.unresolvedLinks(), 1)[0];
+    const wanted = wantedTopics(this.deps.unresolvedLinks(), 1, this.deps.isPublished)[0];
     if (wanted) {
       items.push({
         title: wanted.title,

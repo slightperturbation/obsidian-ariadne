@@ -8,6 +8,7 @@ import type { WantedTopic } from "../margin/wanted";
 import { isReflectiveProse } from "../margin/journal";
 import { isBlankPage, threadQuote, type ThreadItem } from "../margin/threads";
 import type { ThreadSuggestion } from "../margin/thread-weave";
+import type { FillOutRow } from "../margin/fill-out";
 import { normalizeTag, suggestTags } from "../margin/tags";
 import { renderResults, rowEl, modifiersOf, type ActivateModifiers } from "./render";
 
@@ -58,6 +59,7 @@ export interface AriadneViewDeps {
     wanted: Set<string>;
     tagRows: Set<string>;
     threads: Set<string>;
+    fillOut: Set<string>;
     resurfaced: { dismissed: boolean };
   };
   /** True when no note dated today exists yet — the day hasn't been opened. */
@@ -98,6 +100,8 @@ export interface AriadneViewDeps {
   onPublishReview?: () => void;
   /** Create a note for a wanted topic (scaffolded, undoable). */
   onCreateWanted?: (topic: WantedTopic) => void;
+  /** Publish-anchored "finish this" rows for the Vault zone. */
+  fillOutRows?: () => FillOutRow[];
   /** Thread-page suggestions for the Today zone (gather/weave). */
   threadSuggestions?: () => ThreadSuggestion[];
   onThreadSuggestion?: (s: ThreadSuggestion) => void;
@@ -146,6 +150,7 @@ export class AriadneView extends ItemView {
     wanted: new Set<string>(),
     tagRows: new Set<string>(),
     threads: new Set<string>(),
+    fillOut: new Set<string>(),
     resurfaced: { dismissed: false },
   };
   private get session(): NonNullable<AriadneViewDeps["session"]> {
@@ -785,6 +790,7 @@ export class AriadneView extends ItemView {
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
       (t) => !this.session.wanted.has(t.title),
     );
+    this.renderFillOutRows(doc);
     this.renderWantedRows(doc, topics);
     this.renderResurfaced();
     this.renderInboxRow(doc);
@@ -805,6 +811,43 @@ export class AriadneView extends ItemView {
         "Screen changed notes before publishing",
         () => this.deps.onPublishReview!(),
       );
+    }
+  }
+
+  /**
+   * Publish-anchored fill-out rows: stubs the public site can see (or reach).
+   * Click opens the note for writing; × waves it off for the session.
+   */
+  private renderFillOutRows(doc: Document): void {
+    const rows = (this.deps.fillOutRows?.() ?? []).filter(
+      (r) => !this.session.fillOut.has(r.path),
+    );
+    for (const r of rows) {
+      const row = doc.createElement("div");
+      row.classList.add("ariadne-row", "ariadne-confidence-quiet");
+      const head = doc.createElement("div");
+      head.classList.add("ariadne-row-head");
+      const title = doc.createElement("span");
+      title.classList.add("ariadne-row-title");
+      title.textContent = `fill out “${r.title}”`;
+      const count = doc.createElement("span");
+      count.classList.add("ariadne-wanted-count");
+      count.textContent = r.reason;
+      const dismiss = doc.createElement("button");
+      dismiss.type = "button";
+      dismiss.classList.add("ariadne-dismiss");
+      dismiss.textContent = "×";
+      dismiss.setAttribute("aria-label", `Dismiss ${r.title} for this session`);
+      dismiss.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.session.fillOut.add(r.path);
+        this.renderWanted();
+      });
+      head.append(title, count, dismiss);
+      row.appendChild(head);
+      row.setAttribute("aria-label", `Open ${r.title} to fill it out (${r.reason})`);
+      this.actionable(row, () => void this.app.workspace.openLinkText(r.path, "", false));
+      this.wantedEl.appendChild(row);
     }
   }
 
@@ -842,7 +885,7 @@ export class AriadneView extends ItemView {
       title.textContent = topic.title;
       const count = doc.createElement("span");
       count.classList.add("ariadne-wanted-count");
-      count.textContent = `wanted by ${topic.sources}`;
+      count.textContent = `wanted by ${topic.sources}${topic.publicDemand > 0 ? " · public" : ""}`;
       const dismiss = doc.createElement("button");
       dismiss.type = "button";
       dismiss.classList.add("ariadne-dismiss");

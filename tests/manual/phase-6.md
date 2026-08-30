@@ -523,3 +523,18 @@ On an iPhone (tested target: 15 Pro Max):
       cheap tasks route local again (brain shows local).
 - [ ] **No probe storms.** Console (debug) shows at most one probe per
       trigger; background probes never block typing or search.
+
+## 31. Publish-anchored Vault priorities (0.7.6)
+
+- [ ] **Public gaps first.** Mark a note `publish: true` containing a
+      dangling [[link]] → that topic tops the Wanted list with "· public",
+      even with only one referrer.
+- [ ] **Fill-out rows.** A published stub (under 40 words, or with TODOs /
+      unresolved links / empty sections) appears as "fill out …" at the top
+      of the Vault zone with a fact-only reason; clicking opens it.
+- [ ] **Doorway stubs.** An unpublished stub linked FROM a published note
+      appears with reason "via “<published note>”".
+- [ ] **No publish, no rows.** A vault with no publish: true frontmatter
+      shows no fill-out rows and Wanted behaves exactly as before.
+- [ ] **Dismiss & refresh.** × hides a row for the session; completing a
+      stub removes it on the next background pass (~30s after edits).

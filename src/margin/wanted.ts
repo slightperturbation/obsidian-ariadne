@@ -26,6 +26,10 @@ export interface WantedTopic {
   /** Paths of the referring notes (capped) — they vote on where the
    * created note belongs: the notes that demanded it know its home. */
   referrers: string[];
+  /** How many referrers are PUBLISHED notes. A dangling link on a published
+   * page renders as dead text on the public site — the most visible gap the
+   * vault has, so public demand outranks raw counts. */
+  publicDemand: number;
 }
 
 /** Obsidian's metadataCache.unresolvedLinks shape. */
@@ -33,7 +37,11 @@ export type UnresolvedLinks = Record<string, Record<string, number>>;
 
 const MIN_SOURCES = 2;
 
-export function wantedTopics(unresolved: UnresolvedLinks, limit = 3): WantedTopic[] {
+export function wantedTopics(
+  unresolved: UnresolvedLinks,
+  limit = 3,
+  isPublished: (path: string) => boolean = () => false,
+): WantedTopic[] {
   const byTopic = new Map<string, { sources: number; refs: number; referrers: string[] }>();
   for (const [source, links] of Object.entries(unresolved)) {
     // [[X]] and [[X#section]] in one note are two link KEYS but one source —
@@ -52,9 +60,26 @@ export function wantedTopics(unresolved: UnresolvedLinks, limit = 3): WantedTopi
       byTopic.set(title, entry);
     }
   }
-  return [...byTopic.entries()]
-    .filter(([, v]) => v.sources >= MIN_SOURCES)
-    .map(([title, v]) => ({ title, sources: v.sources, refs: v.refs, referrers: v.referrers }))
-    .sort((a, b) => b.sources - a.sources || b.refs - a.refs || a.title.localeCompare(b.title))
-    .slice(0, limit);
+  return (
+    [...byTopic.entries()]
+      .map(([title, v]) => ({
+        title,
+        sources: v.sources,
+        refs: v.refs,
+        referrers: v.referrers,
+        publicDemand: v.referrers.filter(isPublished).length,
+      }))
+      // The corroboration bar (≥2 sources) exists to filter typos and
+      // passing thoughts — but ONE dangling link on a published page is
+      // already a live gap the world can see, so public demand waives it.
+      .filter((t) => t.sources >= MIN_SOURCES || t.publicDemand > 0)
+      .sort(
+        (a, b) =>
+          b.publicDemand - a.publicDemand ||
+          b.sources - a.sources ||
+          b.refs - a.refs ||
+          a.title.localeCompare(b.title),
+      )
+      .slice(0, limit)
+  );
 }

@@ -50,6 +50,7 @@ import {
 import { classifyEntry, entryTag, isLegacyDatedTag, normalizeTag } from "./margin/tags";
 import type { PublishLedger } from "./publish/screen";
 import { emptyThreadsLedger, type ThreadsLedger } from "./margin/thread-weave";
+import { rankFillOut, type FillOutCandidate, type FillOutRow } from "./margin/fill-out";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
 /**
@@ -132,6 +133,8 @@ export default class AriadnePlugin extends Plugin {
   private publishLedgerCache?: PublishLedger;
   private publishCount?: { at: number; n: number };
   private threadsLedgerCache?: ThreadsLedger;
+  private fillOutCache: FillOutRow[] = [];
+  private fillOutTimer: ReturnType<typeof setTimeout> | null = null;
   private threadScanTimer: ReturnType<typeof setTimeout> | null = null;
 
   private publishLedgerPath(): string {
@@ -150,6 +153,7 @@ export default class AriadnePlugin extends Plugin {
   private scheduleThreadScan(delayMs: number): void {
     if (!this.settings.suggestJournalThreads) return;
     if (this.threadScanTimer) clearTimeout(this.threadScanTimer);
+    if (this.fillOutTimer) clearTimeout(this.fillOutTimer);
     this.threadScanTimer = setTimeout(() => {
       this.threadScanTimer = null;
       void this.actions
@@ -183,6 +187,7 @@ export default class AriadnePlugin extends Plugin {
     wanted: new Set<string>(),
     tagRows: new Set<string>(),
     threads: new Set<string>(),
+    fillOut: new Set<string>(),
     resurfaced: { dismissed: false },
   };
 
@@ -228,6 +233,78 @@ export default class AriadnePlugin extends Plugin {
       }
     }
     return filters;
+  }
+
+  /** publish: true frontmatter — the note is (or is marked for) the public site. */
+  private isPublishedNote = (path: string): boolean => {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return false;
+    return this.app.metadataCache.getFileCache(file)?.frontmatter?.publish === true;
+  };
+
+  /**
+   * Fill-out rows for the Vault zone, publish-anchored (see margin/fill-out).
+   * Recomputed in the background, debounced — reads only published notes and
+   * a bounded set of notes they link to.
+   */
+  private scheduleFillOut(delayMs = 30_000): void {
+    if (this.fillOutTimer) clearTimeout(this.fillOutTimer);
+    this.fillOutTimer = setTimeout(() => {
+      this.fillOutTimer = null;
+      void this.computeFillOut().catch((err) =>
+        this.log.warn(`fill-out scan failed: ${String(err)}`),
+      );
+    }, delayMs);
+  }
+
+  private async computeFillOut(): Promise<void> {
+    const published = this.app.vault
+      .getMarkdownFiles()
+      .filter((f) => this.isPublishedNote(f.path) && !this.isJournalPath(f.path));
+    if (published.length === 0) {
+      this.fillOutCache = [];
+      return;
+    }
+    const pubPaths = new Set(published.map((f) => f.path));
+    const unresolved = this.app.metadataCache.unresolvedLinks;
+    const candidates: FillOutCandidate[] = [];
+    for (const f of published) {
+      candidates.push({
+        path: f.path,
+        title: f.basename,
+        published: true,
+        content: await this.app.vault.cachedRead(f),
+        unresolvedCount: Object.keys(unresolved[f.path] ?? {}).length,
+      });
+    }
+    // Unpublished notes reachable from published ones: a doorway on the
+    // public site that opens onto a stub. Bounded, and quiet/journal notes
+    // stay out (linking to source material is not a demand to write it).
+    const resolved = this.app.metadataCache.resolvedLinks;
+    const via = new Map<string, string>();
+    for (const f of published) {
+      for (const target of Object.keys(resolved[f.path] ?? {})) {
+        if (pubPaths.has(target) || !target.endsWith(".md") || via.has(target)) continue;
+        if (this.isJournalPath(target) || this.isQuietNote(target)) continue;
+        via.set(target, f.basename);
+        if (via.size >= 40) break;
+      }
+      if (via.size >= 40) break;
+    }
+    for (const [target, viaTitle] of via) {
+      const file = this.app.vault.getAbstractFileByPath(target);
+      if (!(file instanceof TFile)) continue;
+      candidates.push({
+        path: target,
+        title: file.basename,
+        published: false,
+        viaPublished: viaTitle,
+        content: await this.app.vault.cachedRead(file),
+        unresolvedCount: Object.keys(unresolved[target] ?? {}).length,
+      });
+    }
+    this.fillOutCache = rankFillOut(candidates, 2);
+    this.refreshFootPanels();
   }
 
   /** unresolvedLinks minus excluded sources — parked copies must not vote. */
@@ -346,6 +423,7 @@ export default class AriadnePlugin extends Plugin {
       indexingBusy: () => this.status.get().progressTotal > 0,
       inferPlacement: () => this.settings.inferPlacement,
       unresolvedLinks: () => this.unresolvedLinksFiltered(),
+      isPublished: this.isPublishedNote,
       quietNote: this.isQuietNote,
       suggestJournalThreads: () => this.settings.suggestJournalThreads,
       threadsRoot: () =>
@@ -556,9 +634,14 @@ export default class AriadnePlugin extends Plugin {
           localBox: () => this.gemma?.state() ?? "off",
           wantedTopics: () =>
             this.settings.enableWanted
-              ? (this.wantedCache ??= wantedTopics(this.unresolvedLinksFiltered()))
+              ? (this.wantedCache ??= wantedTopics(
+                  this.unresolvedLinksFiltered(),
+                  3,
+                  this.isPublishedNote,
+                ))
               : [],
           onCreateWanted: (topic) => void this.actions.createNote(topic.title, topic.referrers),
+          fillOutRows: () => this.fillOutCache,
           threadSuggestions: () => this.actions.threadSuggestions(),
           onThreadSuggestion: (s) =>
             s.kind === "gather" ? void this.actions.gatherThread(s) : void this.actions.weaveThread(s),
@@ -782,6 +865,7 @@ export default class AriadnePlugin extends Plugin {
           this.scheduleSave();
           this.maybeScanThemes();
           this.scheduleThreadScan(30_000);
+          this.scheduleFillOut(20_000);
           // Live, not boot-time: a reader edits notes all session, and the
           // owner's fresh shards arrive over Sync mid-session.
           if (!this.policy.loadsModel && this.manager) {
@@ -846,6 +930,7 @@ export default class AriadnePlugin extends Plugin {
       this.app.metadataCache.on("resolved", () => {
         this.backlinkIndex = undefined;
         this.wantedCache = undefined;
+        this.scheduleFillOut();
       }),
     );
 
@@ -1473,6 +1558,7 @@ export default class AriadnePlugin extends Plugin {
   onunload(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.threadScanTimer) clearTimeout(this.threadScanTimer);
+    if (this.fillOutTimer) clearTimeout(this.fillOutTimer);
     for (const timer of this.tagTimers.values()) clearTimeout(timer);
     this.tensions?.dispose();
     this.watcher?.dispose();
