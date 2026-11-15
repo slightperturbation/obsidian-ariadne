@@ -144,6 +144,7 @@ export class TensionEngine {
       excludePath: ctx.path,
       limit: 12,
       quiet,
+      context: { path: ctx.path, title: ctx.title },
     });
     const linkedTitles = new Set(
       [...ctx.noteText.matchAll(/\[\[([^\]|#^]+)/g)].map((m) =>
@@ -225,7 +226,8 @@ export class TensionEngine {
     privacy: "cloud" | "local" | "none" = "cloud",
   ): void {
     if (privacy === "none") return;
-    if (privacy === "local" && !this.deps.router.localAvailable()) return;
+    // Ambient: on battery this must not count the laptop's own model.
+    if (privacy === "local" && !this.deps.router.localAvailable({ background: true })) return;
     if (this.inFlight.has(pairKey)) return;
     if (this.budgetExhausted || this.failures >= FAILURE_MAX) return;
     if (this.classifyCount >= SESSION_CLASSIFY_MAX) return;
@@ -251,6 +253,8 @@ export class TensionEngine {
         {
           schema: RELATION_SCHEMA as unknown as Record<string, unknown>,
           maxTokens: 200,
+          // Nobody is waiting on a tension check: it may queue for a charger.
+          background: true,
           ...(privacy === "local" ? { privacy: "local" as const } : {}),
         },
       );

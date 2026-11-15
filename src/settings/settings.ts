@@ -20,8 +20,18 @@ export interface AriadneSettings {
    * network, e.g. "http://gemma.local:11434/v1". Empty = no local route.
    * Opportunistic: used when awake, never waited for, never required.
    */
+  /** Legacy single-endpoint settings — migrated into the two lists below. */
   gemmaBaseUrl: string;
   gemmaModel: string;
+  /** Local model endpoints (OpenAI-compatible base URLs), one per line, in
+   * preference order — e.g. this machine's Ollama, then a home box. */
+  localEndpoints: string;
+  /** Local model preferences, comma-separated; each endpoint serves the
+   * first one it has installed. */
+  localModels: string;
+  /** On battery, prefer remote endpoints and use this machine's own model
+   * only as a last resort for user-initiated, local-only work. */
+  avoidLocalOnBattery: boolean;
   /** auto = cheap tasks local when reachable; cloud/local = user override. */
   routingMode: RoutingMode;
   claudeModel: string;
@@ -138,6 +148,9 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   claudeModel: "claude-haiku-4-5",
   gemmaBaseUrl: "",
   gemmaModel: "gemma4:26b",
+  localEndpoints: "",
+  localModels: "",
+  avoidLocalOnBattery: true,
   routingMode: "auto",
   costLimitUsd: 2,
 
@@ -181,3 +194,25 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
 
   debugLogging: false,
 };
+
+/** Endpoint list: one URL per line (commas also accepted), order preserved. */
+export function parseEndpoints(setting: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of setting.split(/[\n,]/)) {
+    const url = raw.trim().replace(/\/+$/, "");
+    if (url && !seen.has(url)) {
+      seen.add(url);
+      out.push(url);
+    }
+  }
+  return out;
+}
+
+/** Model preference list: comma- or newline-separated, order preserved. */
+export function parseModelList(setting: string): string[] {
+  return setting
+    .split(/[\n,]/)
+    .map((m) => m.trim())
+    .filter(Boolean);
+}

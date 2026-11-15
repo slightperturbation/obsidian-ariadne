@@ -444,27 +444,51 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Local model URL")
+      .setName("Local model endpoints")
       .setDesc(
-        "OpenAI-compatible server on your home network (Ollama, LM Studio, llama.cpp) — e.g. http://gemma.local:11434/v1. " +
-          "Used opportunistically for cheap tasks when reachable; everything works without it. Leave blank to disable.",
+        "OpenAI-compatible servers (Ollama, LM Studio, llama.cpp), one URL per line, in the order " +
+          "to prefer them — e.g. http://localhost:11434/v1 then a home machine. Ariadne uses the " +
+          "first one that's reachable and fails over to the next. Everything works without any; " +
+          "leave blank to disable.",
+      )
+      .addTextArea((t) => {
+        t.setPlaceholder("http://localhost:11434/v1\nhttp://homebox:11434/v1")
+          .setValue(this.plugin.settings.localEndpoints)
+          .onChange(async (v) => {
+            this.plugin.settings.localEndpoints = v;
+            await this.plugin.saveSettings();
+          });
+        t.inputEl.rows = 3;
+        t.inputEl.cols = 40;
+      });
+
+    new Setting(containerEl)
+      .setName("Local models")
+      .setDesc(
+        "Model names in order of preference, comma-separated. Each endpoint serves the first " +
+          "one it has installed — so machines that name the same model differently share one " +
+          "list. An endpoint with none of them is treated as unavailable, never substituted.",
       )
       .addText((t) =>
         t
-          .setPlaceholder("http://…:11434/v1")
-          .setValue(this.plugin.settings.gemmaBaseUrl)
+          .setPlaceholder("gemma4:26b")
+          .setValue(this.plugin.settings.localModels)
           .onChange(async (v) => {
-            this.plugin.settings.gemmaBaseUrl = v.trim();
+            this.plugin.settings.localModels = v;
             await this.plugin.saveSettings();
           }),
       );
 
     new Setting(containerEl)
-      .setName("Local model name")
-      .setDesc("As the local server knows it, e.g. gemma4:26b.")
-      .addText((t) =>
-        t.setValue(this.plugin.settings.gemmaModel).onChange(async (v) => {
-          this.plugin.settings.gemmaModel = v.trim() || "gemma4:26b";
+      .setName("Spare this machine's model on battery")
+      .setDesc(
+        "On battery power, prefer the other endpoints and use this computer's own model only " +
+          "as a last resort — when you're waiting on an answer and nothing else may serve it. " +
+          "Background checks wait for a charger or another machine.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.avoidLocalOnBattery).onChange(async (v) => {
+          this.plugin.settings.avoidLocalOnBattery = v;
           await this.plugin.saveSettings();
         }),
       );

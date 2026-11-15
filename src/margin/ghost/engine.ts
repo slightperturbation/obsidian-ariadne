@@ -87,7 +87,12 @@ export class GhostEngine {
     const quiet =
       this.deps.quietNote && !this.deps.quietNote(ctx.path) ? this.deps.quietNote : undefined;
     const results = (
-      await manager.related(ctx.text, { excludePath: ctx.path, limit: 8, quiet })
+      await manager.related(ctx.text, {
+        excludePath: ctx.path,
+        limit: 8,
+        quiet,
+        context: { path: ctx.path, title: ctx.title },
+      })
     ).filter((r) => !this.deps.isPeriodic?.(r.path));
     if (token !== this.token) return; // a newer context superseded this one
 

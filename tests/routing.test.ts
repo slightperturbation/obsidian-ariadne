@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ModelRouter, type ReasoningProvider, type RoutingMode } from "../src/model/router";
-import { GemmaProvider } from "../src/model/providers/gemma";
+import { GemmaProvider, unfenceJson } from "../src/model/providers/gemma";
 import { StatusStore } from "../src/core/status";
 import { Logger } from "../src/util/logger";
 
@@ -99,6 +99,15 @@ describe("ModelRouter per-task routing", () => {
   });
 });
 
+describe("unfenceJson", () => {
+  it("strips a ```json fence and preamble, passes plain JSON through", () => {
+    expect(unfenceJson('```json\n{"a":1}\n```')).toBe('{"a":1}');
+    expect(unfenceJson('Here you go: {"a":1} hope that helps')).toBe('{"a":1}');
+    expect(unfenceJson('  {"a":1}  ')).toBe('{"a":1}');
+    expect(unfenceJson("no json here")).toBe("no json here");
+  });
+});
+
 describe("GemmaProvider", () => {
   const okJson = (body: unknown) =>
     Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
@@ -144,6 +153,30 @@ describe("GemmaProvider", () => {
     const body = JSON.parse(String(call[1]?.body));
     expect(body.response_format).toEqual({ type: "json_object" });
     expect(body.messages[0].content).toContain("matching this schema");
+    // Thinking off: local fragments must not pay for chain-of-thought.
+    expect(body.reasoning_effort).toBe("none");
+  });
+
+  it("retries without JSON mode when the server rejects structured output", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const fetchFn = vi.fn((url: string, init?: RequestInit) => {
+      if (String(url).endsWith("/models")) return okJson({ data: [] });
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      return body.response_format
+        ? Promise.resolve(new Response('{"error":{"message":"structured output is unavailable"}}', { status: 500 }))
+        : okJson({ choices: [{ message: { content: '{"relation":"supports"}' } }] });
+    });
+    const g = new GemmaProvider({
+      baseUrl: () => "http://box:11434/v1",
+      model: () => "gemma4:31b",
+      fetch: fetchFn as unknown as typeof fetch,
+    });
+    const { text } = await g.complete("p", { schema: { type: "object" } });
+    expect(text).toBe('{"relation":"supports"}');
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1].response_format).toBeUndefined();
+    expect(String((bodies[1].messages as Array<{ content: string }>)[0].content)).toContain("matching this schema");
   });
 
   it("marks itself unreachable after a failed call", async () => {

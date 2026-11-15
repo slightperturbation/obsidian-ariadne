@@ -1,4 +1,5 @@
 import { chunkNote } from "./chunker";
+import { calibrationFor, contextualize, recipeId, titleContext } from "./embed-recipe";
 import { LexicalIndex } from "./lexical";
 import { VectorStore } from "./vectorstore";
 import type { VectorIndex, VectorHit } from "./vector-index";
@@ -35,6 +36,12 @@ export interface RelatedOptions {
    * embedding jobs during a backfill burst.
    */
   semantic?: boolean;
+  /**
+   * The note the text was written in. Its title is embedded with the text,
+   * exactly as its own chunks are at index time (see embed-recipe) — a
+   * draft paragraph is compared like-for-like with stored chunks.
+   */
+  context?: { path: string; title: string };
   /**
    * Ambient-surface filter: true = this note never appears here. Injected as
    * a predicate so the manager stays Obsidian-free and the answer stays live
@@ -153,8 +160,13 @@ export class IndexManager {
   constructor(private embedder?: EmbeddingProvider) {
     if (embedder) {
       this.vectors = new VectorStore(embedder.dim);
-      this.embedderId = embedder.id;
+      this.embedderId = recipeId(embedder.id);
     }
+  }
+
+  /** Model + recipe that produced the stored vectors (what snapshots record). */
+  get embedderRecipeId(): string | undefined {
+    return this.embedderId;
   }
 
   /**
@@ -165,8 +177,10 @@ export class IndexManager {
    */
   setEmbedder(embedder: EmbeddingProvider, vectors?: VectorIndex): string[] {
     this.embedder = embedder;
-    const changed =
-      this.embedderId !== embedder.id || !this.vectors || this.vectors.dim !== embedder.dim;
+    // Identity is model + recipe: vectors embedded under another recipe
+    // (e.g. before title context) are stale even from the same model.
+    const id = recipeId(embedder.id);
+    const changed = this.embedderId !== id || !this.vectors || this.vectors.dim !== embedder.dim;
 
     // Same embedder, new host (the worker store arriving after a warm
     // start): MIGRATE the restored vectors instead of discarding them. The
@@ -194,7 +208,7 @@ export class IndexManager {
 
     if (changed || vectors) {
       this.vectors = vectors ?? new VectorStore(embedder.dim);
-      this.embedderId = embedder.id;
+      this.embedderId = id;
       this.unembedded = new Set(
         [...this.meta.values()].filter((m) => m.chunkCount > 0).map((m) => m.path),
       );
@@ -221,17 +235,22 @@ export class IndexManager {
     let vecs: Float32Array[] | undefined;
     let storedByIndex = false;
     if (chunks.length > 0 && store) {
+      // What gets embedded is the chunk in the context of its note's title
+      // (see embed-recipe). The lexical index and stored chunk text are
+      // untouched — only the vector sees the title.
+      const title = titleContext(note.path, note.title);
+      const embedText = (c: Chunk) => contextualize(c.text, title);
       if (store.indexTexts) {
         // The worker embeds and stores in one step, so the vectors never cross
         // the thread boundary — and the replace is atomic on its side.
         await store.indexTexts(
           note.path,
-          chunks.map((c) => ({ id: c.id, text: c.text })),
+          chunks.map((c) => ({ id: c.id, text: embedText(c) })),
         );
         if (superseded()) return;
         storedByIndex = true;
       } else if (this.embedder) {
-        vecs = await this.embedder.embed(chunks.map((c) => c.text));
+        vecs = await this.embedder.embed(chunks.map(embedText));
         if (superseded()) return;
       }
     }
@@ -378,7 +397,10 @@ export class IndexManager {
     const cosineById = new Map<string, number>();
     const semanticActive = !!(this.embedder && this.vectors) && opts.semantic !== false;
     if (semanticActive) {
-      const vhits = await this.semanticHits(clean, false);
+      const passage = opts.context
+        ? contextualize(clean, titleContext(opts.context.path, opts.context.title))
+        : clean;
+      const vhits = await this.semanticHits(passage, false);
       lists.push(vhits.map((h) => h.id));
       for (const h of vhits) cosineById.set(h.id, h.score);
     }
@@ -423,12 +445,15 @@ export class IndexManager {
     const queries = await store.vectorsOfPath(path);
     if (queries.length === 0) return [];
 
-    const floor = this.embedder?.floor ?? VECTOR_FLOOR;
+    // Thresholds live on the calibrated scale; the store cuts on raw cosine.
+    const cal = calibrationFor(this.embedderId);
+    const floor = cal.toRaw(this.embedder?.floor ?? VECTOR_FLOOR);
     const bestById = new Map<string, number>();
     for (const q of queries) {
       for (const hit of await store.search(q, CANDIDATES, floor)) {
+        const score = cal.toThresholdScale(hit.score);
         const prior = bestById.get(hit.id);
-        if (prior === undefined || hit.score > prior) bestById.set(hit.id, hit.score);
+        if (prior === undefined || score > prior) bestById.set(hit.id, score);
       }
     }
     const ordered = [...bestById.entries()].sort((a, b) => b[1] - a[1]);
@@ -512,7 +537,10 @@ export class IndexManager {
     }
 
     const store = this.vectors!;
-    const floor = this.embedder!.floor ?? VECTOR_FLOOR;
+    // The one place raw cosines enter retrieval: cut on the raw scale, then
+    // hand everything downstream scores on the scale thresholds are tuned in.
+    const cal = calibrationFor(this.embedderId);
+    const floor = cal.toRaw(this.embedder!.floor ?? VECTOR_FLOOR);
     let hits: VectorHit[];
     if (store.embedAndSearch) {
       hits = await store.embedAndSearch(text, { asQuery, limit: CANDIDATES, floor });
@@ -523,6 +551,7 @@ export class IndexManager {
           : (await this.embedder!.embed([text]))[0];
       hits = await store.search(vec, CANDIDATES, floor);
     }
+    hits = hits.map((h) => ({ ...h, score: cal.toThresholdScale(h.score) }));
     this.semanticCache.set(key, { at: Date.now(), revision: this.revision, hits });
     if (this.semanticCache.size > SEMANTIC_MEMO_MAX) {
       const oldest = this.semanticCache.keys().next().value;

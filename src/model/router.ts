@@ -4,10 +4,21 @@ import type { Logger } from "../util/logger";
 
 export type TaskKind = "connective" | "scaffold" | "relation" | "theme";
 
+/**
+ * `lastResort`: may the call use the battery-powered machine's own model
+ * when nothing better is available? Only the local pool gives it meaning.
+ */
+export interface LocalCallOptions {
+  lastResort?: boolean;
+}
+
 /** What the router needs from any reasoning backend. */
 export interface ReasoningProvider {
-  available(): boolean;
-  complete(prompt: string, opts?: CompleteOptions): Promise<{ text: string; usage: ModelUsage }>;
+  available(opts?: LocalCallOptions): boolean;
+  complete(
+    prompt: string,
+    opts?: CompleteOptions & LocalCallOptions,
+  ): Promise<{ text: string; usage: ModelUsage }>;
 }
 
 /** User override for where reasoning runs. */
@@ -60,35 +71,60 @@ export class ModelRouter {
   ) {}
 
   available(): boolean {
-    return this.deps.provider.available() || (this.deps.local?.available() ?? false);
+    return (
+      this.deps.provider.available() || (this.deps.local?.available({ lastResort: true }) ?? false)
+    );
+  }
+
+  /**
+   * On battery, this machine's own model is a last resort: acceptable only
+   * for a call the user is waiting on that has no cloud alternative — the
+   * content is walled to local, the user chose local-only routing, or there
+   * is no cloud brain at all. Ambient work never qualifies: it can wait for
+   * a charger or the home box.
+   */
+  private acceptsLastResort(privacy: "cloud" | "local" | undefined, background: boolean): boolean {
+    if (background) return false;
+    const mode = this.deps.mode?.() ?? "auto";
+    return privacy === "local" || mode === "local" || !this.deps.provider.available();
   }
 
   /**
    * Pick the route for a task. "local" mode widens the local set to every
-   * task but still requires the box to be awake; nothing ever *waits* for
-   * the box. Cloud-only and unavailable-local both land on Claude.
+   * task but still requires a local endpoint to be awake; nothing ever
+   * *waits* for one. Cloud-only and unavailable-local both land on Claude.
    */
   private route(
     task: TaskKind,
-    privacy?: "cloud" | "local",
+    privacy: "cloud" | "local" | undefined,
+    background: boolean,
   ): { provider: ReasoningProvider; brain: "cloud" | "local" } {
+    const lastResort = this.acceptsLastResort(privacy, background);
     // Privacy "local" is a wall, not a preference: journal content must not
     // reach the cloud even when the box is asleep — the call fails instead.
     if (privacy === "local") {
-      if (this.deps.local?.available()) return { provider: this.deps.local, brain: "local" };
+      if (this.deps.local?.available({ lastResort })) {
+        return { provider: this.deps.local, brain: "local" };
+      }
       throw new Error("journal privacy is local-only and the local model is unreachable");
     }
     const mode = this.deps.mode?.() ?? "auto";
     const local = this.deps.local;
     const localOk =
-      mode !== "cloud" && !!local?.available() && (mode === "local" || LOCAL_OK.has(task));
+      mode !== "cloud" &&
+      !!local?.available({ lastResort }) &&
+      (mode === "local" || LOCAL_OK.has(task));
     if (localOk) return { provider: local!, brain: "local" };
     return { provider: this.deps.provider, brain: "cloud" };
   }
 
-  /** Is the local route usable right now? (For privacy-gated callers.) */
-  localAvailable(): boolean {
-    return this.deps.local?.available() ?? false;
+  /**
+   * Is the local route usable right now? (For privacy-gated callers.)
+   * Ambient callers pass `background: true` so that, on battery, they don't
+   * count the laptop's own model as available.
+   */
+  localAvailable(opts: { background?: boolean } = {}): boolean {
+    return this.deps.local?.available({ lastResort: !opts.background }) ?? false;
   }
 
   get sessionCost(): number {
@@ -98,11 +134,16 @@ export class ModelRouter {
   async run(
     task: TaskKind,
     prompt: string,
-    opts: CompleteOptions & { privacy?: "cloud" | "local" } = {},
+    opts: CompleteOptions & {
+      privacy?: "cloud" | "local";
+      /** Ambient/deferrable work (nobody is waiting on it). */
+      background?: boolean;
+    } = {},
   ): Promise<string> {
     if (!this.available()) throw new Error("no reasoning model configured");
-    const { privacy, ...completeOpts } = opts;
-    const chosen = this.route(task, privacy);
+    const { privacy, background = false, ...completeOpts } = opts;
+    const chosen = this.route(task, privacy, background);
+    const lastResort = this.acceptsLastResort(privacy, background);
     // The budget gates cloud spend; a local call is free and may proceed
     // even past the cap — that's the point of having the box.
     if (chosen.brain === "cloud") {
@@ -121,19 +162,33 @@ export class ModelRouter {
       let text: string;
       let usage: ModelUsage;
       try {
-        ({ text, usage } = await provider.complete(prompt, completeOpts));
+        ({ text, usage } = await provider.complete(prompt, { ...completeOpts, lastResort }));
       } catch (err) {
-        // Opportunistic means the box's failures are the router's problem,
-        // not the feature's: fall through to the cloud transparently. Cloud
-        // failures still propagate — there is nothing behind them. And a
-        // privacy-walled call NEVER retries on the cloud: for journal
-        // content, failing is the correct fallback.
-        if (brain !== "local" || privacy === "local" || !this.deps.provider.available()) throw err;
-        this.deps.log.warn(`local model failed (${String(err)}); retrying on cloud`);
-        const limit = this.deps.costLimitUsd();
-        if (limit > 0 && this.sessionCostUsd >= limit) throw new BudgetExceededError(limit);
-        brain = "cloud";
-        ({ text, usage } = await this.deps.provider.complete(prompt, completeOpts));
+        if (brain === "local") {
+          // Opportunistic means the local side's failures are the router's
+          // problem, not the feature's: fall through to the cloud
+          // transparently. A privacy-walled call NEVER retries on the
+          // cloud: for journal content, failing is the correct fallback.
+          if (privacy === "local" || !this.deps.provider.available()) throw err;
+          this.deps.log.warn(`local model failed (${String(err)}); retrying on cloud`);
+          const limit = this.deps.costLimitUsd();
+          if (limit > 0 && this.sessionCostUsd >= limit) throw new BudgetExceededError(limit);
+          brain = "cloud";
+          ({ text, usage } = await this.deps.provider.complete(prompt, completeOpts));
+        } else {
+          // The mirror image: the cloud failed (offline, API down) and a
+          // local model is right here. Unless the user asked for cloud-only,
+          // answer locally rather than not at all — this is what makes
+          // "automatic" routing keep working on a plane. A user-initiated
+          // call may spend battery for it; ambient work may not.
+          const mode = this.deps.mode?.() ?? "auto";
+          const local = this.deps.local;
+          const fallbackOk = { lastResort: !background };
+          if (mode === "cloud" || !local?.available(fallbackOk)) throw err;
+          this.deps.log.warn(`cloud model failed (${String(err)}); answering locally`);
+          brain = "local";
+          ({ text, usage } = await local.complete(prompt, { ...completeOpts, ...fallbackOk }));
+        }
       }
       this.sessionCostUsd += usage.costUsd;
       const limit = this.deps.costLimitUsd();

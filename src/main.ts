@@ -1,5 +1,10 @@
 import { Notice, Plugin, Platform, TFile, TFolder, addIcon, normalizePath, requestUrl } from "obsidian";
-import { AriadneSettings, DEFAULT_SETTINGS } from "./settings/settings";
+import {
+  AriadneSettings,
+  DEFAULT_SETTINGS,
+  parseEndpoints,
+  parseModelList,
+} from "./settings/settings";
 import { AriadneSettingTab } from "./settings/settings-tab";
 import { StatusStore } from "./core/status";
 import { devicePolicy, type DevicePolicy } from "./core/device";
@@ -20,7 +25,8 @@ import { TensionEngine } from "./margin/tension/engine";
 import { ghostExtension } from "./margin/ghost/extension";
 import { MarkdownView } from "obsidian";
 import { ClaudeProvider } from "./model/providers/claude";
-import { GemmaProvider } from "./model/providers/gemma";
+import { LocalPool } from "./model/providers/local-pool";
+import { makeObsidianFetch } from "./util/obsidian-fetch";
 import { ModelRouter } from "./model/router";
 import { ActionExecutor } from "./actions/framework";
 import { ObsidianVaultIO } from "./actions/vault-io";
@@ -53,28 +59,7 @@ import { emptyThreadsLedger, type ThreadsLedger } from "./margin/thread-weave";
 import { rankFillOut, type FillOutCandidate, type FillOutRow } from "./margin/fill-out";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 
-/**
- * fetch over Obsidian's requestUrl: CORS-free (main-process request), which
- * direct renderer fetch to api.anthropic.com is not guaranteed to be.
- */
-const obsidianFetch: typeof fetch = async (input, init) => {
-  const url =
-    typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  const headers: Record<string, string> = {};
-  const h = init?.headers;
-  if (h instanceof Headers) h.forEach((v, k) => (headers[k] = v));
-  else if (Array.isArray(h)) for (const [k, v] of h) headers[k] = v;
-  else if (h) Object.assign(headers, h as Record<string, string>);
-
-  const resp = await requestUrl({
-    url,
-    method: init?.method ?? "GET",
-    headers,
-    body: typeof init?.body === "string" ? init.body : (init?.body as ArrayBuffer | undefined),
-    throw: false,
-  });
-  return new Response(resp.arrayBuffer, { status: resp.status, headers: resp.headers });
-};
+const obsidianFetch = makeObsidianFetch(requestUrl);
 
 /** Debounce between the index going idle and a snapshot hitting disk. */
 const SAVE_DELAY_MS = 5_000;
@@ -112,7 +97,10 @@ export default class AriadnePlugin extends Plugin {
   private ghost?: GhostEngine;
   private tensions?: TensionEngine;
   private router!: ModelRouter;
-  private gemma?: GemmaProvider;
+  private localPool?: LocalPool;
+  /** From the Battery Status API; false where it doesn't exist (desktops). */
+  private onBattery = false;
+  private debugStatusTimer: ReturnType<typeof setTimeout> | null = null;
   private executor!: ActionExecutor;
   private actions!: ActionsController;
   private lastMarkdown: MarkdownView | null = null;
@@ -154,6 +142,7 @@ export default class AriadnePlugin extends Plugin {
     if (!this.settings.suggestJournalThreads) return;
     if (this.threadScanTimer) clearTimeout(this.threadScanTimer);
     if (this.fillOutTimer) clearTimeout(this.fillOutTimer);
+    if (this.debugStatusTimer) clearTimeout(this.debugStatusTimer);
     this.threadScanTimer = setTimeout(() => {
       this.threadScanTimer = null;
       void this.actions
@@ -338,6 +327,86 @@ export default class AriadnePlugin extends Plugin {
     );
   };
 
+  /**
+   * Power state via the Battery Status API (present in Obsidian's desktop
+   * runtime; absent on some platforms, where we simply never save battery).
+   * A plug/unplug re-orders the local endpoints — see LocalPool.
+   */
+  private watchPower(pool: LocalPool): void {
+    interface BatteryLike extends EventTarget {
+      charging: boolean;
+    }
+    const nav = navigator as Navigator & { getBattery?: () => Promise<BatteryLike> };
+    if (!nav.getBattery) {
+      this.log.info("battery API unavailable — local model is never spared");
+      return;
+    }
+    void nav
+      .getBattery()
+      .then((battery) => {
+        const update = () => {
+          const onBattery = !battery.charging;
+          if (onBattery === this.onBattery) return;
+          this.onBattery = onBattery;
+          this.log.info(`power: now ${onBattery ? "on battery" : "plugged in"}`);
+          pool.notifyPowerChange();
+          this.status.set({});
+          this.scheduleDebugStatus();
+        };
+        update();
+        battery.addEventListener("chargingchange", update);
+        this.register(() => battery.removeEventListener("chargingchange", update));
+      })
+      .catch((err) => this.log.warn(`battery API failed: ${String(err)}`));
+  }
+
+  /** The glyph's account of the local brain ("" when none is configured). */
+  private localGlyph(): string {
+    const state = this.localPool?.state();
+    if (!state?.configured) return "";
+    if (!state.active) return state.savingBattery ? "local asleep · on battery" : "local asleep";
+    const where = state.active.label;
+    if (state.active.lastResort) return `local ${where} (battery — last resort)`;
+    return state.savingBattery ? `local ${where} · on battery` : `local ${where}`;
+  }
+
+  /**
+   * With debug logging on, mirror the routing/index state to a small file in
+   * the plugin folder. It exists so behavior that only happens inside
+   * Obsidian (power events, endpoint probes, which model resolved) can be
+   * checked from outside it. Debounced; never written when debug is off.
+   */
+  private scheduleDebugStatus(delayMs = 2500): void {
+    if (!this.settings.debugLogging) return;
+    if (this.debugStatusTimer) clearTimeout(this.debugStatusTimer);
+    this.debugStatusTimer = setTimeout(() => {
+      this.debugStatusTimer = null;
+      const status = this.status.get();
+      const body = {
+        at: new Date().toISOString(),
+        version: this.manifest.version,
+        power: { onBattery: this.onBattery, avoidOnBattery: this.settings.avoidLocalOnBattery },
+        routing: { mode: this.settings.routingMode, journal: this.settings.journalModelCalls },
+        local: this.localPool?.state() ?? null,
+        glyph: this.localGlyph(),
+        index: {
+          notes: this.manager?.noteCount ?? 0,
+          embedder: this.manager?.embedderRecipeId ?? null,
+          unembedded: this.manager?.unembeddedCount ?? 0,
+          state: status.index,
+          progress: [status.progressDone, status.progressTotal],
+          semantic: status.semantic,
+          lastError: status.lastError ?? null,
+        },
+      };
+      void this.app.vault.adapter
+        .write(normalizePath(`${this.manifest.dir}/ariadne-debug.json`), JSON.stringify(body, null, 2))
+        .catch(() => {
+          /* diagnostics must never surface an error */
+        });
+    }, delayMs);
+  }
+
   private journalFolders(): string[] {
     const folders = parseFolderList(this.settings.journalFolders);
     const dailyNotes = (
@@ -384,25 +453,34 @@ export default class AriadnePlugin extends Plugin {
       model: () => this.settings.claudeModel,
       fetch: obsidianFetch,
     });
-    const gemma = new GemmaProvider({
-      baseUrl: () => this.settings.gemmaBaseUrl,
-      model: () => this.settings.gemmaModel,
+    const pool = new LocalPool({
+      endpoints: () => parseEndpoints(this.settings.localEndpoints),
+      models: () => parseModelList(this.settings.localModels),
       fetch: obsidianFetch,
+      onBattery: () => this.onBattery,
+      avoidOnBattery: () => this.settings.avoidLocalOnBattery,
+      log: this.log,
     });
-    this.gemma = gemma;
+    this.localPool = pool;
     // A plugin gets no network-change API, but the moments the route DOES
     // change correlate tightly with events it can see: the laptop waking or
     // regaining focus (arrived home / opened the lid), and the browser's
-    // online event. Each costs one background probe (≤1.5s, single-flight);
-    // the unreachable-side TTL (25s) covers VPN toggles none of these catch.
-    this.registerDomEvent(window, "online", () => gemma.notifyNetworkChange());
+    // online event. Each costs one background probe per endpoint (≤1.5s,
+    // single-flight); the unreachable-side TTL (25s) covers VPN/tailnet
+    // toggles none of these catch.
+    const networkChanged = () => {
+      pool.notifyNetworkChange();
+      this.scheduleDebugStatus();
+    };
+    this.registerDomEvent(window, "online", networkChanged);
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible") gemma.notifyNetworkChange();
+      if (document.visibilityState === "visible") networkChanged();
     });
-    this.registerDomEvent(window, "focus", () => gemma.notifyNetworkChange());
+    this.registerDomEvent(window, "focus", networkChanged);
+    this.watchPower(pool);
     this.router = new ModelRouter({
       provider,
-      local: gemma,
+      local: pool,
       mode: () => this.settings.routingMode,
       status: this.status,
       costLimitUsd: () => this.settings.costLimitUsd,
@@ -476,7 +554,7 @@ export default class AriadnePlugin extends Plugin {
       log: this.log,
     });
     this.status.set({
-      brain: provider.available() ? "cloud" : this.settings.gemmaBaseUrl.trim() ? "local" : "none",
+      brain: provider.available() ? "cloud" : pool.configured() ? "local" : "none",
     });
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => {
@@ -637,7 +715,7 @@ export default class AriadnePlugin extends Plugin {
           marginNeighbors: (path) => this.linkNeighborhood(path),
           isPeriodic: this.isJournalPath,
           quietNote: this.isQuietNote,
-          localBox: () => this.gemma?.state() ?? "off",
+          localBox: () => this.localGlyph(),
           wantedTopics: () =>
             this.settings.enableWanted
               ? (this.wantedCache ??= wantedTopics(
@@ -835,6 +913,10 @@ export default class AriadnePlugin extends Plugin {
     // Indexing must wait for layout-ready: before that, the metadata cache is
     // still resolving and vault events replay the initial file scan.
     this.app.workspace.onLayoutReady(() => {
+      void this.localPool?.probeAll().then(() => {
+        this.status.set({});
+        this.scheduleDebugStatus(100);
+      });
       void this.startIndexing();
       this.warnFolderSettings();
       this.maybeInviteToday();
@@ -868,6 +950,7 @@ export default class AriadnePlugin extends Plugin {
       {
         onProgress: () => this.maybeMidDrainSave(),
         onIdle: () => {
+          this.scheduleDebugStatus();
           this.scheduleSave();
           this.maybeScanThemes();
           this.scheduleThreadScan(30_000);
@@ -1140,6 +1223,7 @@ export default class AriadnePlugin extends Plugin {
       this.log.debug(`backfill: ${s.progressDone}/${s.progressTotal} notes, ~${rate}/min`);
     }
     this.lastMidDrainDone = s.progressDone;
+    this.scheduleDebugStatus(100);
     void this.saveIndexNow();
   }
 
@@ -1608,6 +1692,17 @@ export default class AriadnePlugin extends Plugin {
     } else {
       this.settings.cosineScale = 2;
     }
+
+    // Migration: the single local endpoint + model became ordered lists.
+    // Carry the old values over once so an existing setup keeps working.
+    if (stored && stored.localEndpoints === undefined && stored.gemmaBaseUrl?.trim()) {
+      this.settings.localEndpoints = stored.gemmaBaseUrl.trim();
+      if (!this.settings.localModels.trim() && stored.gemmaModel?.trim()) {
+        this.settings.localModels = stored.gemmaModel.trim();
+      }
+      await this.saveData(this.settings);
+    }
+    if (!this.settings.localModels.trim()) this.settings.localModels = "gemma4:26b";
   }
 
   async saveSettings(): Promise<void> {
@@ -1615,5 +1710,8 @@ export default class AriadnePlugin extends Plugin {
     this.log?.setEnabled(this.settings.debugLogging);
     // The brain glyph tracks whether a key is configured.
     this.status?.set({ brain: this.settings.claudeApiKey.trim() ? "cloud" : "none" });
+    // Endpoints/models/battery policy may have changed: re-probe now.
+    this.localPool?.notifyNetworkChange();
+    this.scheduleDebugStatus();
   }
 }

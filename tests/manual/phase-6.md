@@ -559,3 +559,38 @@ On an iPhone (tested target: 15 Pro Max):
       editor restores the original selection text.
 - [ ] **Race safety.** Navigate away mid-extract → the note is still
       created; the source is left untouched with a notice.
+
+## 33. Local model pool (0.8.0)
+
+Setup: two endpoints (this machine's Ollama, then a home box over the
+tailnet), a shared model preference list, debug logging on.
+
+- [ ] **Resolution.** `ariadne-debug.json` in the plugin folder lists each
+      endpoint with the model it resolved — each machine's own spelling of
+      a preferred model; an endpoint with none of them shows the reason.
+- [ ] **Plugged in.** Glyph reads "local this Mac"; a local task runs on
+      this machine (`ollama ps` shows the preferred model loaded).
+- [ ] **On battery.** Unplug → within a few seconds the glyph reads
+      "local <box> · on battery"; the box warms once; local tasks run there.
+- [ ] **Battery, box unreachable.** Glyph: "local this Mac (battery — last
+      resort)". A user-initiated local-only action still works; ambient
+      checks (tension, thread scan) stay silent until power or the box
+      returns.
+- [ ] **Failover.** Stop this machine's server mid-session → the next call
+      goes to the box without an error.
+- [ ] **Offline, automatic routing.** With no network and routing on
+      Automatic, a cloud-routed action (create a note) is answered locally
+      instead of failing.
+- [ ] **No hangs.** Tailnet down: probes give up in ~1.5s (the abort is
+      now honored through Obsidian's request API).
+
+## 34. Title-context embeddings (0.8.0)
+
+- [ ] **One-time re-embed.** First launch re-embeds every note (glyph shows
+      indexing X/Y; checkpointed, resumable). Later launches don't.
+- [ ] **Better neighbors.** Related cards for a topical note are at least
+      as good as before; `scripts/eval-embeddings.mjs` reproduces the gain.
+- [ ] **Journal untouched.** Dated entries embed without a title; thread
+      and theme suggestions behave as before.
+- [ ] **Thresholds hold.** Margin/ghost/tension feel as selective as
+      before (cosines are calibrated back to the tuned scale).

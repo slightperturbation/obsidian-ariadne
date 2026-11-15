@@ -114,8 +114,8 @@ export interface AriadneViewDeps {
     subscribe(listener: () => void): () => void;
     dismiss(notePath: string, targetPath: string): void;
   };
-  /** Home-box reachability for the glyph ("off" = not configured). */
-  localBox?: () => "off" | "awake" | "asleep";
+  /** The local brain's state for the glyph, already worded ("" = none configured). */
+  localBox?: () => string;
   /** Per-surface prominence bias (serendipity tuning), added to confidence. */
   lineBias?: () => number;
   marginBias?: () => number;
@@ -567,6 +567,9 @@ export class AriadneView extends ItemView {
       // the archive keeps its own neighborhood — no filter.
       quiet:
         this.deps.quietNote && !this.deps.quietNote(ctx.path) ? this.deps.quietNote : undefined,
+      // The draft paragraph is embedded as its own chunks will be: with its
+      // note's title for context.
+      context: { path: ctx.path, title: ctx.title },
     };
     // Without a local model, free text can't be embedded — but the note being
     // written was embedded by whichever device owns the index, so asking in
@@ -1287,8 +1290,8 @@ export class AriadneView extends ItemView {
     // The home box: knowing it's asleep explains why journal checks are
     // quiet (privacy "local") or why the brain shows cloud — without the
     // user having to guess at their own network.
-    const boxState = this.deps.localBox?.() ?? "off";
-    const box = boxState === "off" ? "" : ` · box ${boxState}`;
+    const boxText = this.deps.localBox?.() ?? "";
+    const box = boxText ? ` · ${boxText}` : "";
     // A reader device can't embed notes edited since the owner last indexed,
     // so say how many are in that state rather than quietly ranking them worse.
     const stale =

@@ -1975,12 +1975,12 @@ export class ActionsController {
   }
 
   /** May a model read journal content right now, under the privacy setting? */
-  private threadModelOk(): boolean {
+  private threadModelOk(background = false): boolean {
     const privacy = this.deps.journalPrivacy();
     return (
       privacy !== "none" &&
       this.deps.router.available() &&
-      (privacy !== "local" || this.deps.router.localAvailable())
+      (privacy !== "local" || this.deps.router.localAvailable({ background }))
     );
   }
 
@@ -2115,7 +2115,7 @@ export class ActionsController {
         const name = ActionsController.threadNameOf(w.threadPath);
         const key = `${w.threadPath}::${w.entryPath}`;
         let clause = ledger.movement[key];
-        if (clause === undefined && movementBudget > 0 && this.threadModelOk()) {
+        if (clause === undefined && movementBudget > 0 && this.threadModelOk(true)) {
           movementBudget--;
           clause = await this.threadMovementClause(name, w.threadPath, w.entryPath, ledger);
           ledger.movement[key] = clause;
@@ -2141,13 +2141,14 @@ export class ActionsController {
         if (unwoven.length < MIN_THREAD_ENTRIES) continue;
         const key = clusterKeyOf(cluster.entries);
         let verdict = ledger.judged[key];
-        if (!verdict && judgeBudget > 0 && this.threadModelOk()) {
+        if (!verdict && judgeBudget > 0 && this.threadModelOk(true)) {
           judgeBudget--;
           try {
             verdict = parseThreadJudge(
               await this.deps.router.run("theme", threadJudgePrompt(cluster.evidence), {
                 schema: THREAD_JUDGE_SCHEMA as unknown as Record<string, unknown>,
                 maxTokens: 150,
+                background: true,
                 ...this.threadPrivacyOpt(),
               }),
             );
@@ -2202,6 +2203,7 @@ export class ActionsController {
         await this.deps.router.run("theme", threadMovementPrompt(name, earlier, latest), {
           schema: THREAD_MOVEMENT_SCHEMA as unknown as Record<string, unknown>,
           maxTokens: 100,
+          background: true,
           ...this.threadPrivacyOpt(),
         }),
       );

@@ -47,7 +47,7 @@ describe("consumer device: semantic relatedness with no embedder", () => {
     const owner = new IndexManager(new HashEmbedder(64));
     for (const n of [
       note("cats.md", "Cats are small carnivorous mammals often kept as pets."),
-      note("dogs.md", "Dogs are loyal domesticated mammals kept as pets."),
+      note("dogs.md", "Dogs are small domesticated mammals often kept as pets."),
       note("taxes.md", "Quarterly estimated tax payments are due in April."),
       note("pets.md", "Domesticated mammals kept as pets need daily care."),
     ]) {
