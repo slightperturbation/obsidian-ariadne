@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "version": "node version-bump.mjs && git add manifest.json versions.json"
+    "version": "node version-bump.mjs && git add manifest.json versions.json",
+    "build:gateway": "node scripts/build-gateway.mjs"
   },
   "keywords": [
     "obsidian",
@@ -37,6 +38,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.5",
     "@huggingface/transformers": "^4.2.0",
-    "minisearch": "^7.2.0"
+    "minisearch": "^7.2.0",
+    "yaml": "^2.9.1"
   }
 }
