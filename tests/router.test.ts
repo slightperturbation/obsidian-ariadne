@@ -32,8 +32,8 @@ describe("ModelRouter", () => {
   it("accumulates session cost and surfaces it in status", async () => {
     const provider = fakeProvider(0.02);
     const { router, status } = makeRouter(provider);
-    await router.run("connective", "a");
-    await router.run("scaffold", "b");
+    await router.run("connective", "a", { sources: [] });
+    await router.run("scaffold", "b", { sources: [] });
     expect(router.sessionCost).toBeCloseTo(0.04, 5);
     expect(status.get().sessionCostUsd).toBeCloseTo(0.04, 5);
     expect(status.get().brain).toBe("cloud");
@@ -42,9 +42,9 @@ describe("ModelRouter", () => {
   it("stops calls once the session cost limit is reached", async () => {
     const provider = fakeProvider(0.6);
     const { router } = makeRouter(provider, 1); // $1 limit
-    await router.run("scaffold", "a"); // 0.6
-    await router.run("scaffold", "b"); // 1.2 — now over
-    await expect(router.run("scaffold", "c")).rejects.toThrow(BudgetExceededError);
+    await router.run("scaffold", "a", { sources: [] }); // 0.6
+    await router.run("scaffold", "b", { sources: [] }); // 1.2 — now over
+    await expect(router.run("scaffold", "c", { sources: [] })).rejects.toThrow(BudgetExceededError);
     expect(provider.calls).toBe(2);
   });
 
@@ -62,7 +62,7 @@ describe("ModelRouter", () => {
       },
     };
     const { router } = makeRouter(provider);
-    await Promise.all([router.run("connective", "a"), router.run("connective", "b")]);
+    await Promise.all([router.run("connective", "a", { sources: [] }), router.run("connective", "b", { sources: [] })]);
     expect(maxActive).toBe(1);
   });
 
@@ -77,7 +77,7 @@ describe("ModelRouter", () => {
       },
     };
     const { router } = makeRouter(provider);
-    await expect(router.run("connective", "a")).rejects.toThrow("boom");
-    await expect(router.run("connective", "b")).resolves.toBe("ok");
+    await expect(router.run("connective", "a", { sources: [] })).rejects.toThrow("boom");
+    await expect(router.run("connective", "b", { sources: [] })).resolves.toBe("ok");
   });
 });

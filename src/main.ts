@@ -45,6 +45,7 @@ import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { isExcludedPath, type ExclusionFilter } from "./index/crawler";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
+import { cloudAllowed, levelOf, type LevelPolicy, type PrivacyLevel } from "./gateway/levels";
 import {
   continuityLabel,
   lastReflectiveGist,
@@ -407,6 +408,25 @@ export default class AriadnePlugin extends Plugin {
     }, delayMs);
   }
 
+  /** Privacy levels by folder (gateway/levels.ts). */
+  levelPolicy(): LevelPolicy {
+    return {
+      localOnlyFolders: parseFolderList(this.settings.localOnlyFolders),
+      sealedFolders: parseFolderList(this.settings.sealedFolders),
+      agentFolder: normalizePath(this.settings.agentFolder.trim() || "Agent"),
+    };
+  }
+
+  /** A note's privacy level: folder, then its `agent-access` property. */
+  levelOfPath(path: string): PrivacyLevel {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    const override =
+      file instanceof TFile
+        ? (this.app.metadataCache.getFileCache(file)?.frontmatter?.["agent-access"] as unknown)
+        : undefined;
+    return levelOf(path, this.levelPolicy(), override);
+  }
+
   private journalFolders(): string[] {
     const folders = parseFolderList(this.settings.journalFolders);
     const dailyNotes = (
@@ -485,6 +505,7 @@ export default class AriadnePlugin extends Plugin {
       status: this.status,
       costLimitUsd: () => this.settings.costLimitUsd,
       log: this.log,
+      isLocalOnly: (path) => !cloudAllowed(this.levelOfPath(path)),
     });
     this.executor = new ActionExecutor(new ObsidianVaultIO(this.app));
     this.actions = new ActionsController({
@@ -532,6 +553,10 @@ export default class AriadnePlugin extends Plugin {
       privateFolders: () => [
         ...parseFolderList(this.settings.privateFolders),
         ...this.journalFolders(),
+        // Nothing local-only or sealed is ever a publish candidate.
+        ...this.levelPolicy().localOnlyFolders,
+        ...this.levelPolicy().sealedFolders,
+        this.levelPolicy().agentFolder,
       ],
       publishLedger: {
         load: async () => {
@@ -1519,6 +1544,8 @@ export default class AriadnePlugin extends Plugin {
     };
     report("Journal folders", parseFolderList(this.settings.journalFolders));
     report("Private folders", parseFolderList(this.settings.privateFolders));
+    report("Local-only folders", parseFolderList(this.settings.localOnlyFolders));
+    report("Sealed folders", parseFolderList(this.settings.sealedFolders));
   }
 
   /**

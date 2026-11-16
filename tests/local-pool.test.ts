@@ -189,14 +189,14 @@ describe("router × pool: battery policy", () => {
   it("on battery, a cheap task prefers the cloud over this Mac's model", async () => {
     const { router, pool, macCompletions } = setup({ onBattery: true, boxUp: false });
     await pool.probeAll();
-    expect(await router.run("relation", "p")).toBe("cloud");
+    expect(await router.run("relation", "p", { sources: [] })).toBe("cloud");
     expect(macCompletions()).toBe(0);
   });
 
   it("on battery, a user-initiated local-only call uses this Mac as the last resort", async () => {
     const { router, pool, cloudComplete } = setup({ onBattery: true, boxUp: false });
     await pool.probeAll();
-    expect(await router.run("relation", "p", { privacy: "local" })).toContain("localhost:");
+    expect(await router.run("relation", "p", { sources: [], privacy: "local" })).toContain("localhost:");
     expect(cloudComplete).not.toHaveBeenCalled();
   });
 
@@ -206,7 +206,7 @@ describe("router × pool: battery policy", () => {
     expect(router.localAvailable({ background: true })).toBe(false);
     expect(router.localAvailable()).toBe(true);
     await expect(
-      router.run("relation", "p", { privacy: "local", background: true }),
+      router.run("relation", "p", { sources: [], privacy: "local", background: true }),
     ).rejects.toThrow(/local-only/);
     expect(macCompletions()).toBe(0);
     expect(cloudComplete).not.toHaveBeenCalled();
@@ -215,7 +215,7 @@ describe("router × pool: battery policy", () => {
   it("on battery with the box reachable, background work goes to the box", async () => {
     const { router, pool } = setup({ onBattery: true, boxUp: true });
     await pool.probeAll();
-    expect(await router.run("relation", "p", { privacy: "local", background: true })).toContain(
+    expect(await router.run("relation", "p", { sources: [], privacy: "local", background: true })).toContain(
       "lamettrie",
     );
   });
@@ -225,14 +225,14 @@ describe("router × pool: battery policy", () => {
     const { router, pool } = setup({ onBattery: false, boxUp: false, cloud: offline });
     await pool.probeAll();
     // "scaffold" is a cloud task under auto — the cloud is down, the Mac answers.
-    expect(await router.run("scaffold", "p")).toContain("localhost:");
+    expect(await router.run("scaffold", "p", { sources: [] })).toContain("localhost:");
   });
 
   it("cloud-only mode never falls back to a local model", async () => {
     const offline = { complete: vi.fn(() => Promise.reject(new Error("offline"))) };
     const { router, pool } = setup({ onBattery: false, boxUp: true, mode: "cloud", cloud: offline });
     await pool.probeAll();
-    await expect(router.run("scaffold", "p")).rejects.toThrow("offline");
+    await expect(router.run("scaffold", "p", { sources: [] })).rejects.toThrow("offline");
   });
 });
 

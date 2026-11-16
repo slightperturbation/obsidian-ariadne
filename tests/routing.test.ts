@@ -41,25 +41,25 @@ describe("ModelRouter per-task routing", () => {
     const local = provider({ name: "local" });
     const { router, cloud, status } = makeRouter({ local: local.p });
 
-    expect(await router.run("connective", "p")).toBe("answer from local");
+    expect(await router.run("connective", "p", { sources: [] })).toBe("answer from local");
     expect(status.get().brain).toBe("local");
-    expect(await router.run("relation", "p")).toBe("answer from local");
+    expect(await router.run("relation", "p", { sources: [] })).toBe("answer from local");
     expect(cloud.complete).not.toHaveBeenCalled();
 
-    expect(await router.run("scaffold", "p")).toBe("answer from cloud");
+    expect(await router.run("scaffold", "p", { sources: [] })).toBe("answer from cloud");
     expect(status.get().brain).toBe("cloud");
   });
 
   it("routes everything cloud when the box is unreachable or mode is cloud", async () => {
     const asleep = provider({ name: "local", available: () => false });
     const { router: r1, cloud: c1 } = makeRouter({ local: asleep.p });
-    await r1.run("connective", "p");
+    await r1.run("connective", "p", { sources: [] });
     expect(c1.complete).toHaveBeenCalledOnce();
     expect(asleep.complete).not.toHaveBeenCalled();
 
     const awake = provider({ name: "local" });
     const { router: r2, cloud: c2 } = makeRouter({ local: awake.p, mode: "cloud" });
-    await r2.run("connective", "p");
+    await r2.run("connective", "p", { sources: [] });
     expect(c2.complete).toHaveBeenCalledOnce();
     expect(awake.complete).not.toHaveBeenCalled();
   });
@@ -67,7 +67,7 @@ describe("ModelRouter per-task routing", () => {
   it("local mode widens the local set to every task", async () => {
     const local = provider({ name: "local" });
     const { router, cloud } = makeRouter({ local: local.p, mode: "local" });
-    expect(await router.run("scaffold", "p")).toBe("answer from local");
+    expect(await router.run("scaffold", "p", { sources: [] })).toBe("answer from local");
     expect(cloud.complete).not.toHaveBeenCalled();
   });
 
@@ -75,27 +75,27 @@ describe("ModelRouter per-task routing", () => {
     const flaky = provider({ name: "local" });
     flaky.complete.mockRejectedValueOnce(new Error("box went to sleep"));
     const { router, cloud } = makeRouter({ local: flaky.p });
-    expect(await router.run("connective", "p")).toBe("answer from cloud");
+    expect(await router.run("connective", "p", { sources: [] })).toBe("answer from cloud");
     expect(cloud.complete).toHaveBeenCalledOnce();
   });
 
   it("local calls are free: they proceed past the cloud cost cap", async () => {
     const local = provider({ name: "local" });
     const { router } = makeRouter({ local: local.p, limit: 0.005 });
-    await router.run("scaffold", "p"); // cloud, $0.01 — cap now exceeded
-    await expect(router.run("scaffold", "p")).rejects.toThrow(/cost limit/);
+    await router.run("scaffold", "p", { sources: [] }); // cloud, $0.01 — cap now exceeded
+    await expect(router.run("scaffold", "p", { sources: [] })).rejects.toThrow(/cost limit/);
     // The cheap task still runs — on the box, spending nothing.
-    expect(await router.run("connective", "p")).toBe("answer from local");
+    expect(await router.run("connective", "p", { sources: [] })).toBe("answer from local");
   });
 
   it("is available with only a local box (no API key)", async () => {
     const local = provider({ name: "local" });
     const { router } = makeRouter({ local: local.p, cloudAvailable: false });
     expect(router.available()).toBe(true);
-    expect(await router.run("connective", "p")).toBe("answer from local");
+    expect(await router.run("connective", "p", { sources: [] })).toBe("answer from local");
     // But a local failure with no cloud behind it propagates.
     local.complete.mockRejectedValueOnce(new Error("asleep"));
-    await expect(router.run("connective", "p")).rejects.toThrow("asleep");
+    await expect(router.run("connective", "p", { sources: [] })).rejects.toThrow("asleep");
   });
 });
 
@@ -213,7 +213,7 @@ describe("journal privacy routing", () => {
     const local = provider({ name: "local" });
     local.complete.mockRejectedValueOnce(new Error("box went to sleep"));
     const { router, cloud } = makeRouter({ local: local.p });
-    await expect(router.run("relation", "p", { privacy: "local" })).rejects.toThrow(
+    await expect(router.run("relation", "p", { sources: [], privacy: "local" })).rejects.toThrow(
       "box went to sleep",
     );
     expect(cloud.complete).not.toHaveBeenCalled();
@@ -222,7 +222,7 @@ describe("journal privacy routing", () => {
   it("privacy 'local' with the box unreachable fails instead of leaking", async () => {
     const asleep = provider({ name: "local", available: () => false });
     const { router, cloud } = makeRouter({ local: asleep.p });
-    await expect(router.run("relation", "p", { privacy: "local" })).rejects.toThrow(
+    await expect(router.run("relation", "p", { sources: [], privacy: "local" })).rejects.toThrow(
       /local-only/,
     );
     expect(cloud.complete).not.toHaveBeenCalled();
@@ -232,7 +232,7 @@ describe("journal privacy routing", () => {
   it("privacy 'local' succeeds on the box even for cloud-preferred tasks", async () => {
     const local = provider({ name: "local" });
     const { router, cloud } = makeRouter({ local: local.p });
-    expect(await router.run("scaffold", "p", { privacy: "local" })).toBe("answer from local");
+    expect(await router.run("scaffold", "p", { sources: [], privacy: "local" })).toBe("answer from local");
     expect(cloud.complete).not.toHaveBeenCalled();
   });
 });

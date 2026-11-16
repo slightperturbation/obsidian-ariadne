@@ -67,8 +67,23 @@ export class ModelRouter {
       status: StatusStore;
       costLimitUsd: () => number;
       log: Logger;
+      /**
+       * The local-only wall: true when the note at this path must never be
+       * put in a prompt for an external model. Absent = nothing is walled.
+       */
+      isLocalOnly?: (path: string) => boolean;
     },
   ) {}
+
+  /**
+   * Does any source note force this call onto a local model? A label
+   * travels with whatever is derived from it, so one walled source walls
+   * the whole prompt.
+   */
+  walled(sources: readonly string[]): boolean {
+    const test = this.deps.isLocalOnly;
+    return !!test && sources.some((p) => test(p));
+  }
 
   available(): boolean {
     return (
@@ -106,7 +121,7 @@ export class ModelRouter {
       if (this.deps.local?.available({ lastResort })) {
         return { provider: this.deps.local, brain: "local" };
       }
-      throw new Error("journal privacy is local-only and the local model is unreachable");
+      throw new Error("this content is local-only and no local model is reachable");
     }
     const mode = this.deps.mode?.() ?? "auto";
     const local = this.deps.local;
@@ -135,13 +150,20 @@ export class ModelRouter {
     task: TaskKind,
     prompt: string,
     opts: CompleteOptions & {
+      /**
+       * Vault paths of every note whose text, title or excerpt appears in
+       * the prompt. Required so that no call site can forget the wall: if
+       * any of them is local-only, the call runs on a local model or fails.
+       */
+      sources: readonly string[];
       privacy?: "cloud" | "local";
       /** Ambient/deferrable work (nobody is waiting on it). */
       background?: boolean;
-    } = {},
+    },
   ): Promise<string> {
     if (!this.available()) throw new Error("no reasoning model configured");
-    const { privacy, background = false, ...completeOpts } = opts;
+    const { privacy: asked, background = false, sources, ...completeOpts } = opts;
+    const privacy = asked === "local" || this.walled(sources) ? ("local" as const) : asked;
     const chosen = this.route(task, privacy, background);
     const lastResort = this.acceptsLastResort(privacy, background);
     // The budget gates cloud spend; a local call is free and may proceed

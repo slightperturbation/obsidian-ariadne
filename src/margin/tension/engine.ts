@@ -255,6 +255,7 @@ export class TensionEngine {
           maxTokens: 200,
           // Nobody is waiting on a tension check: it may queue for a charger.
           background: true,
+          sources: [ctx.path, targetPath],
           ...(privacy === "local" ? { privacy: "local" as const } : {}),
         },
       );

@@ -109,6 +109,14 @@ export interface AriadneSettings {
    */
   privateFolders: string;
 
+  // Privacy levels (who may read a note — see gateway/levels.ts)
+  /** Folders whose notes never reach an external model. Comma-separated. */
+  localOnlyFolders: string;
+  /** Folders no agent may read at all — the journal. Comma-separated. */
+  sealedFolders: string;
+  /** Where agent-written records live; always local-only. */
+  agentFolder: string;
+
   // Margin
   enableMargin: boolean;
   /**
@@ -181,6 +189,10 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   suggestJournalThreads: true,
   threadsFolder: "Threads",
   privateFolders: "Journal, Inbox, Archive",
+
+  localOnlyFolders: "",
+  sealedFolders: "",
+  agentFolder: "Agent",
 
   enableMargin: true,
   tensionMode: "quiet",

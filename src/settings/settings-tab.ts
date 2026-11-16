@@ -297,6 +297,49 @@ export class AriadneSettingTab extends PluginSettingTab {
         }),
       );
 
+    new Setting(containerEl).setName("Privacy levels").setHeading();
+
+    new Setting(containerEl)
+      .setName("Local-only folders")
+      .setDesc(
+        "Notes here never reach a model you don't run: a task on them uses a local " +
+          "model or doesn't run, and they are never publish candidates. Everything " +
+          "an agent writes is local-only too. A note can opt in or out with an " +
+          "agent-access property (shareable, local, sealed). Comma-separated.",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.localOnlyFolders).onChange(async (v) => {
+          this.plugin.settings.localOnlyFolders = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Sealed folders")
+      .setDesc(
+        "For you alone — typically the journal. Local-only, and additionally never " +
+          "served to any agent, local or not. Comma-separated.",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.sealedFolders).onChange(async (v) => {
+          this.plugin.settings.sealedFolders = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Agent folder")
+      .setDesc(
+        "Where records submitted by your agent live (appointments, bills, trips, " +
+          "the daily agent log). Always local-only.",
+      )
+      .addText((t) =>
+        t.setValue(this.plugin.settings.agentFolder).onChange(async (v) => {
+          this.plugin.settings.agentFolder = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName("Margin").setHeading();
 
     new Setting(containerEl)

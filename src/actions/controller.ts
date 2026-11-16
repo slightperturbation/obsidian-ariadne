@@ -223,7 +223,11 @@ export class ActionsController {
               targetTitle: targetFile.basename,
               targetExcerpt: targetContent.slice(0, EXCERPT_CHARS),
             }),
-            { schema: { ...CONNECTIVE_SCHEMA }, maxTokens: 300 },
+            {
+              schema: { ...CONNECTIVE_SCHEMA },
+              maxTokens: 300,
+              sources: [sourceFile.path, targetFile.path],
+            },
           ),
         );
         phrase = parseConnective(text) ?? undefined;
@@ -297,7 +301,12 @@ export class ActionsController {
             seed,
             relatedTitles: related.map((r) => r.title),
           }),
-          { schema: { ...SCAFFOLD_SCHEMA }, maxTokens: 1500, thinking: true },
+          {
+            schema: { ...SCAFFOLD_SCHEMA },
+            maxTokens: 1500,
+            thinking: true,
+            sources: [...related.map((r) => r.path), ...(referrers ?? [])],
+          },
         );
         scaffold = parseScaffold(text);
       } catch (err) {
@@ -412,7 +421,12 @@ export class ActionsController {
                 preview: s.text.replace(/\s+/g, " ").slice(0, SEGMENT_PREVIEW_CHARS),
               })),
             }),
-            { schema: { ...SPLIT_SCHEMA }, maxTokens: 1500, thinking: true },
+            {
+              schema: { ...SPLIT_SCHEMA },
+              maxTokens: 1500,
+              thinking: true,
+              sources: [file.path],
+            },
           ),
         );
         groups = parseSplitGroups(text);
@@ -475,7 +489,7 @@ export class ActionsController {
             title: file.basename,
             paragraphs: paragraphs.map((p) => ({ index: p.index, text: p.text })),
           }),
-          { schema: { ...ANALYZE_SCHEMA }, maxTokens: 2000, thinking: true },
+          { schema: { ...ANALYZE_SCHEMA }, maxTokens: 2000, thinking: true, sources: [file.path] },
         ),
       );
       analysis = parseAnalysis(text);
@@ -511,7 +525,12 @@ export class ActionsController {
               paragraphs: paragraphs.map((p) => ({ index: p.index, text: p.text })),
               proposal: clusters,
             }),
-            { schema: { ...CRITIQUE_SCHEMA }, maxTokens: 2000, thinking: true },
+            {
+              schema: { ...CRITIQUE_SCHEMA },
+              maxTokens: 2000,
+              thinking: true,
+              sources: [file.path],
+            },
           ),
       );
       const refined = parseCritique(critiqueText);
@@ -563,7 +582,12 @@ export class ActionsController {
               seedTitle: file.basename,
               neighborhood: neighborhood.map((r) => ({ title: r.title, excerpt: r.snippet })),
             }),
-            { schema: { ...MOC_SCHEMA }, maxTokens: 1500, thinking: true },
+            {
+              schema: { ...MOC_SCHEMA },
+              maxTokens: 1500,
+              thinking: true,
+              sources: [file.path, ...neighborhood.map((r) => r.path)],
+            },
           ),
         );
         moc = parseMoc(text, new Set(titles)) ?? moc;
@@ -800,6 +824,7 @@ export class ActionsController {
                 {
                   schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
                   maxTokens: 100,
+                  sources: [file.path],
                   ...(privacy === "local" ? { privacy: "local" as const } : {}),
                 },
               ),
@@ -879,6 +904,7 @@ export class ActionsController {
           await this.deps.router.run("theme", titlePrompt(text.slice(0, EXCERPT_CHARS)), {
             schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
             maxTokens: 100,
+            sources: [file.path],
           }),
         );
       } catch (err) {
@@ -1121,6 +1147,7 @@ export class ActionsController {
             schema: SYNTHESIS_SCHEMA as unknown as Record<string, unknown>,
             maxTokens: 500,
             thinking: true,
+            sources: excerpts.map((e) => e.path),
             ...(privacy === "local" ? { privacy: "local" as const } : {}),
           }),
         );
@@ -1271,7 +1298,11 @@ export class ActionsController {
                     localFlags: flags,
                     precedents,
                   }),
-                  { schema: PUBLISH_SCREEN_SCHEMA as unknown as Record<string, unknown>, maxTokens: 150 },
+                  {
+                    schema: PUBLISH_SCREEN_SCHEMA as unknown as Record<string, unknown>,
+                    maxTokens: 150,
+                    sources: [file.path],
+                  },
                 ),
               );
               if (verdict.verdict === "hold") {
@@ -1532,6 +1563,7 @@ export class ActionsController {
               await this.deps.router.run("theme", themePrompt(theme.evidence), {
                 schema: THEME_SCHEMA as unknown as Record<string, unknown>,
                 maxTokens: 150,
+                sources: theme.entries,
                 ...(privacy === "local" ? { privacy: "local" as const } : {}),
               }),
             );
@@ -1621,6 +1653,7 @@ export class ActionsController {
               await this.deps.router.run("scaffold", titlePrompt(content.slice(0, EXCERPT_CHARS)), {
                 schema: TITLE_SCHEMA as unknown as Record<string, unknown>,
                 maxTokens: 100,
+                sources: [file.path],
               }),
             );
           } catch (err) {
@@ -1723,7 +1756,11 @@ export class ActionsController {
               await this.deps.router.run(
                 "scaffold",
                 triagePrompt({ name: file.basename, content: content.slice(0, EXCERPT_CHARS) }),
-                { schema: TRIAGE_SCHEMA as unknown as Record<string, unknown>, maxTokens: 150 },
+                {
+                  schema: TRIAGE_SCHEMA as unknown as Record<string, unknown>,
+                  maxTokens: 150,
+                  sources: [file.path],
+                },
               ),
             );
             proposal = { disposition: verdict.disposition, reason: verdict.reason };
@@ -2149,6 +2186,7 @@ export class ActionsController {
                 schema: THREAD_JUDGE_SCHEMA as unknown as Record<string, unknown>,
                 maxTokens: 150,
                 background: true,
+                sources: cluster.entries,
                 ...this.threadPrivacyOpt(),
               }),
             );
@@ -2204,6 +2242,7 @@ export class ActionsController {
           schema: THREAD_MOVEMENT_SCHEMA as unknown as Record<string, unknown>,
           maxTokens: 100,
           background: true,
+          sources: [entryPath, threadPath, ...Object.keys(ledger.woven[threadPath] ?? {}).slice(-3)],
           ...this.threadPrivacyOpt(),
         }),
       );
@@ -2231,6 +2270,7 @@ export class ActionsController {
             schema: THREAD_GATHER_SCHEMA as unknown as Record<string, unknown>,
             maxTokens: 2000,
             thinking: true,
+            sources: entries.map((e) => e.path),
             ...this.threadPrivacyOpt(),
           },
         ),
