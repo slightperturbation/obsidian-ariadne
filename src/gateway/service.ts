@@ -3,7 +3,7 @@ import { splitNote } from "./frontmatter";
 import type { GatewayIO } from "./io";
 import { hashText } from "./io";
 import { levelOf, underFolder, type LevelPolicy, type PrivacyLevel } from "./levels";
-import { cleanDate, cleanString, dayOf, isKind, publicRecord, SPECS } from "./records";
+import { cleanDate, cleanString, dayOf, isKind, publicRecord, SPECS, type AgentRecord } from "./records";
 import { resolveAgainst, type ResolveQuery, type ResolveResult } from "./resolve";
 import { RecordStore, REVIEW_DIR } from "./store";
 import { Submissions, type Ledger, type SubmitResult } from "./submit";
@@ -258,7 +258,7 @@ export class Gateway {
   /** Typed query over records: "open bills due this month", "appointments next week". */
   async get(
     client: Client,
-    args: { kind?: unknown; state?: unknown; from?: unknown; to?: unknown; open?: unknown; id?: unknown },
+    args: { kind?: unknown; state?: unknown; from?: unknown; to?: unknown; open?: unknown; id?: unknown; where?: unknown },
   ) {
     return this.audited(client, "get", async () => {
       this.requireLocal(client, "records");
@@ -273,7 +273,19 @@ export class Gateway {
       const state = cleanString(args.state, 40).toLowerCase();
       const from = dayOf(cleanDate(args.from));
       const to = dayOf(cleanDate(args.to));
+      // Property filters: { payment: "cash" }, { conference: "BMVC 2026" }, { paid: false }.
+      const where =
+        args.where && typeof args.where === "object" && !Array.isArray(args.where)
+          ? Object.entries(args.where as Record<string, unknown>).slice(0, 8)
+          : [];
+      const holds = (r: AgentRecord, key: string, want: unknown): boolean => {
+        const have = key === "place" ? r.place : key === "title" ? r.title : r.fields[key];
+        if (typeof want === "boolean") return (have === true) === want;
+        if (typeof want === "number") return have === want;
+        return cleanString(have).toLowerCase() === cleanString(want).toLowerCase();
+      };
       const records = all.filter((r) => {
+        if (where.some(([key, want]) => !holds(r, key, want))) return false;
         if (args.kind && r.kind !== args.kind) return false;
         if (state && r.state !== state) return false;
         if (args.open === true && SPECS[r.kind].terminal.includes(r.state)) return false;

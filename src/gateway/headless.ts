@@ -8,6 +8,7 @@ import { promises as fs } from "node:fs";
 import * as nodePath from "node:path";
 import { createGatewayServer, type ClientToken } from "./http";
 import { underFolder, type LevelPolicy } from "./levels";
+import { migrateLegacyItinerary } from "./migrate";
 import { FileLedger, NodeIO } from "./node-io";
 import { Gateway } from "./service";
 
@@ -40,10 +41,18 @@ async function main(): Promise<void> {
   const sealed = config.policy.sealedFolders ?? [];
   const io = new NodeIO(config.vault, (p) => sealed.some((f) => underFolder(p, f)));
   const auditFile = nodePath.join(config.stateDir, "audit.jsonl");
+  const ledger = new FileLedger(nodePath.join(config.stateDir, "ledger.json"));
+
+  // Records of a kind this version no longer has are moved to the kinds it does.
+  const moved = await migrateLegacyItinerary(io, config.policy.agentFolder, ledger);
+  if (moved.removed + moved.converted + moved.reviewsRemoved + moved.reviewsConverted > 0) {
+    process.stdout.write(`itinerary migration: ${JSON.stringify(moved)}\n`);
+  }
+
   const gateway = new Gateway({
     io,
     policy: config.policy,
-    ledger: new FileLedger(nodePath.join(config.stateDir, "ledger.json")),
+    ledger,
     itineraryFolderNames: config.itineraryFolderNames ?? ["Travel"],
     audit: (entry) => {
       void fs.appendFile(auditFile, `${JSON.stringify(entry)}\n`).catch(() => {});

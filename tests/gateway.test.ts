@@ -154,43 +154,170 @@ describe("gateway: which record is this about?", () => {
   });
 });
 
-describe("gateway: several things on one day", () => {
-  const item = (key: string, title: string, start: string, place?: string): Observation => ({
+const note = { source: "vault-note", at: "2026-11-16T09:00:00" };
+const made = async (gateway: Gateway, o: Observation) => (await gateway.submissions.submit(o, "theseus")).status;
+
+describe("gateway: journeys", () => {
+  const leg = (key: string, over: Partial<Observation> & { fields?: Observation["fields"] }): Observation => ({
     key,
-    kind: "itinerary-item",
+    kind: "transport",
     op: "create",
-    title,
-    state: "planned",
-    start,
-    place,
-    refs: [`REF${key.toUpperCase()}`],
-    fields: { item: "other", trip: "2026 London" },
-    evidence: { source: "vault-note", at: "2026-11-16T09:00:00" },
+    title: key,
+    start: "2026-05-28T13:05",
+    evidence: note,
+    ...over,
   });
 
-  it("does not hold a flight because a hotel checkout falls on the same day", async () => {
+  it("takes two flights on one booking and one day as two journeys", async () => {
     const { gateway } = setup();
-    const checkout = await gateway.submissions.submit(item("checkout", "2026-05-28 Checkout hotel", "2026-05-28"), "theseus");
-    const flight = await gateway.submissions.submit(item("flight", "2026-05-28 Flight depart", "2026-05-28T13:05"), "theseus");
-    const dinner = await gateway.submissions.submit(item("dinner", "2026-05-28 Dinner", "2026-05-28T19:00", "Mission District"), "theseus");
-    expect([checkout.status, flight.status, dinner.status]).toEqual(["applied", "applied", "applied"]);
+    const first = leg("lhr-fra", { refs: ["K7QX2M"], fields: { mode: "flight", number: "LH 901", from: "London", to: "Frankfurt" } });
+    const second = leg("fra-nrt", { refs: ["K7QX2M"], start: "2026-05-28T18:40", fields: { mode: "flight", number: "LH 716", from: "Frankfurt", to: "Tokyo" } });
+    expect([await made(gateway, first), await made(gateway, second)]).toEqual(["applied", "applied"]);
+  });
+
+  it("takes the way back on the same booking as another journey, by number or by route", async () => {
+    const { gateway } = setup();
+    expect(await made(gateway, leg("out", { refs: ["AVANTI77"], start: "2026-11-22T07:40", fields: { mode: "train", from: "London Euston", to: "Lancaster" } }))).toBe("applied");
+    expect(await made(gateway, leg("back", { refs: ["AVANTI77"], start: "2026-11-27T16:12", fields: { mode: "train", from: "Lancaster", to: "London Euston" } }))).toBe("applied");
+    expect(await made(gateway, leg("ua-out", { refs: ["UAB123"], start: "2026-11-20T17:00", fields: { number: "UA 949" } }))).toBe("applied");
+    expect(await made(gateway, leg("ua-back", { refs: ["UAB123"], start: "2026-11-30T11:00", fields: { number: "UA 930" } }))).toBe("applied");
     expect(await gateway.submissions.pending()).toHaveLength(0);
   });
 
-  it("the day alone identifies no itinerary item, but still excludes other days", async () => {
+  it("recognizes a journey moved to another day by its booking and its number", async () => {
     const { gateway } = setup();
-    await gateway.submissions.submit(item("checkout", "2026-05-28 Checkout hotel", "2026-05-28", "Kings Cross"), "theseus");
-    expect((await gateway.resolve(theseus, { kind: "itinerary-item", date: "2026-05-28" })).class).toBe("none");
-    expect((await gateway.resolve(theseus, { kind: "itinerary-item", date: "2026-05-29", place: "Kings Cross" })).class).toBe("none");
-    // The day and the place together do identify it.
-    expect((await gateway.resolve(theseus, { kind: "itinerary-item", date: "2026-05-28", place: "Kings Cross" })).class).toBe("unique");
+    const res = await gateway.submissions.submit(leg("ua-out", { refs: ["UAB123"], start: "2026-11-20T17:00", fields: { number: "UA 949" } }), "theseus");
+    const found = await gateway.resolve(theseus, { kind: "transport", refs: ["UAB123"], date: "2026-11-21T09:00", number: "UA949" });
+    expect(found).toMatchObject({ class: "exact", id: res.id });
+    expect(found.why).toMatch(/day has changed/);
   });
 
-  it("still holds a second item on the same day at the same place", async () => {
+  it("asks when a booking reference recurs on another day and nothing says which journey it is", async () => {
     const { gateway } = setup();
-    await gateway.submissions.submit(item("checkout", "2026-05-28 Checkout hotel", "2026-05-28", "Kings Cross"), "theseus");
-    const again = await gateway.submissions.submit(item("checkout2", "2026-05-28 Leave the hotel", "2026-05-28", "Kings Cross"), "theseus");
+    await gateway.submissions.submit(leg("first", { refs: ["BOOK4242"], start: "2026-11-22T07:40" }), "theseus");
+    const second = await gateway.submissions.submit(leg("second", { refs: ["BOOK4242"], start: "2026-11-27T16:12" }), "theseus");
+    expect(second.status).toBe("review");
+    expect(second.reason).toMatch(/a change to that journey, or a separate leg/);
+  });
+
+  it("identifies a journey by day and number or day and route — never by the day or a place alone", async () => {
+    const { gateway } = setup();
+    const res = await gateway.submissions.submit(leg("fco-hnd", { start: "2026-05-28T13:05", fields: { number: "AZ 792", from: "Rome", to: "Tokyo" } }), "theseus");
+    const r = (q: object) => gateway.resolve(theseus, { kind: "transport", ...q } as never);
+    expect((await r({ date: "2026-05-28" })).class).toBe("none");
+    expect((await r({ date: "2026-05-28", place: "Tokyo" })).class).toBe("none");
+    expect(await r({ date: "2026-05-28", number: "792" })).toMatchObject({ class: "unique", id: res.id });
+    expect(await r({ date: "2026-05-28", from: "Rome Fiumicino", to: "Tokyo Haneda" })).toMatchObject({ class: "unique", id: res.id });
+    expect((await r({ date: "2026-05-28", number: "AZ 793" })).class).toBe("none");
+    expect((await r({ date: "2026-05-29", number: "AZ 792" })).class).toBe("none");
+    expect((await r({ date: "2026-05-28", from: "Tokyo", to: "Rome" })).class).toBe("none");
+  });
+});
+
+describe("gateway: overnight stays", () => {
+  const stay = (key: string, lodging: string, start: string, end: string): Observation => ({
+    key, kind: "stay", op: "create", title: lodging, start, end, place: "London", fields: { lodging }, evidence: note,
+  });
+
+  it("lets one stay end and the next begin on the same day", async () => {
+    const { gateway } = setup();
+    expect(await made(gateway, stay("a", "The Megaro Hotel", "2026-05-24", "2026-05-28"))).toBe("applied");
+    expect(await made(gateway, stay("b", "Midland Hotel", "2026-05-28", "2026-05-31"))).toBe("applied");
+    // A flight that day is a different kind of thing altogether.
+    expect(await made(gateway, { key: "f", kind: "transport", op: "create", title: "Flight UA 949", start: "2026-05-28T13:05", fields: { number: "UA 949" }, evidence: note })).toBe("applied");
+  });
+
+  it("holds a second place for a night that already has one", async () => {
+    const { gateway } = setup();
+    await gateway.submissions.submit(stay("a", "The Megaro Hotel", "2026-05-24", "2026-05-28"), "theseus");
+    const clash = await gateway.submissions.submit(stay("b", "Midland Hotel", "2026-05-27", "2026-05-30"), "theseus");
+    expect(clash.status).toBe("review");
+    expect(clash.reason).toMatch(/one overnight place per night/);
+  });
+
+  it("knows a stay by its name however it is written, and by its nights", async () => {
+    const { gateway } = setup();
+    const a = await gateway.submissions.submit(stay("a", "The Megaro Hotel", "2026-05-24", "2026-05-28"), "theseus");
+    const b = await gateway.submissions.submit(stay("b", "Midland Hotel", "2026-05-28", "2026-05-31"), "theseus");
+    const r = (q: object) => gateway.resolve(theseus, { kind: "stay", ...q } as never);
+    expect(await r({ name: "Megaro", date: "2026-05-24", end: "2026-05-28" })).toMatchObject({ class: "unique", id: a.id });
+    // The shared day belongs to whichever is named.
+    expect(await r({ name: "Megaro", date: "2026-05-28" })).toMatchObject({ class: "unique", id: a.id });
+    expect(await r({ name: "The Midland", date: "2026-05-28" })).toMatchObject({ class: "unique", id: b.id });
+    // The day alone picks neither.
+    expect((await r({ date: "2026-05-28" })).class).toBe("none");
+    // The nights alone are enough, because a night has one place.
+    expect(await r({ date: "2026-05-29", end: "2026-05-31" })).toMatchObject({ class: "unique", id: b.id });
+  });
+});
+
+describe("gateway: activities", () => {
+  const act = (key: string, title: string, start: string, over: Partial<Observation> = {}): Observation => ({
+    key, kind: "activity", op: "create", title, start, evidence: note, ...over,
+  });
+
+  it("takes several things in one day, even in the same place or with the same person", async () => {
+    const { gateway } = setup();
+    const day = [
+      act("plenary", "Plenary: Vision at scale", "2026-11-24T09:00", { place: "Great Hall", fields: { conference: "BMVC 2026", official: true } }),
+      act("posters", "Poster session 2", "2026-11-24T11:00", { place: "Great Hall", fields: { conference: "BMVC 2026" } }),
+      act("lunch", "Lunch with Sam", "2026-11-24T12:30"),
+      act("dinner", "Dinner with Sam", "2026-11-24T19:00"),
+      act("banquet", "Banquet dinner", "2026-11-25T19:00", { place: "Lancaster Castle" }),
+    ];
+    for (const o of day) expect(await made(gateway, o)).toBe("applied");
+    expect(await gateway.submissions.pending()).toHaveLength(0);
+  });
+
+  it("holds the same activity entered twice", async () => {
+    const { gateway } = setup();
+    await gateway.submissions.submit(act("a", "Dinner at Quay", "2026-11-24T19:00"), "theseus");
+    const again = await gateway.submissions.submit(act("b", "Quay reservation", "2026-11-24T19:30"), "theseus");
     expect(again.status).toBe("review");
+  });
+
+  it("knows an activity by a message from the people who run it about that day", async () => {
+    const { gateway } = setup();
+    const tour = await gateway.submissions.submit(
+      act("tour", "Castle tour", "2026-11-26T14:00", { counterparts: ["+44 7700 900123"], fields: { contact: "+44 7700 900123", "confirm-via": "whatsapp" }, state: "to-confirm" }),
+      "theseus",
+    );
+    await gateway.submissions.submit(act("walk", "Canal walk", "2026-11-26T10:00", { counterparts: ["447700900999@s.whatsapp.net"] }), "theseus");
+    const found = await gateway.resolve(theseus, { kind: "activity", date: "2026-11-26", counterparts: ["447700900123@s.whatsapp.net"] });
+    expect(found).toMatchObject({ class: "unique", id: tour.id });
+    // The sender alone, with no day, is never enough.
+    expect((await gateway.resolve(theseus, { kind: "activity", counterparts: ["447700900123@s.whatsapp.net"] })).class).toBe("several");
+  });
+
+  it("answers typed questions about what is recorded", async () => {
+    const { gateway } = setup();
+    await gateway.submissions.submit(act("tour", "Castle tour", "2026-11-26T14:00", { fields: { price: 20, currency: "GBP", payment: "cash" } }), "theseus");
+    await gateway.submissions.submit(act("show", "Theatre", "2026-11-26T19:30", { fields: { price: 45, currency: "GBP", payment: "card", paid: true } }), "theseus");
+    const cash = await gateway.get(theseus, { kind: "activity", from: "2026-11-26", to: "2026-11-26", where: { payment: "cash" } });
+    expect(cash.records.map((r) => r.title)).toEqual(["Castle tour"]);
+    const unpaid = await gateway.get(theseus, { kind: "activity", where: { paid: false } });
+    expect(unpaid.records.map((r) => r.title)).toEqual(["Castle tour"]);
+  });
+
+  it("holds a change the harness itself is unsure of", async () => {
+    const { gateway } = setup();
+    const made = await gateway.submissions.submit(act("tour", "Castle tour", "2026-11-26T14:00", { refs: ["NOTEREF1"] }), "theseus");
+    const gone: Observation = { key: "gone", kind: "activity", op: "update", match: { id: made.id!, class: "exact" }, refs: ["NOTEREF1"], state: "cancelled", what: "no longer in your itinerary note", ask: true, evidence: note };
+    const res = await gateway.submissions.submit(gone, "theseus");
+    expect(res.status).toBe("review");
+    expect(res.reason).toMatch(/asks you to confirm/);
+  });
+});
+
+describe("gateway: conferences and appointments", () => {
+  it("knows a conference by its name and days", async () => {
+    const { gateway } = setup();
+    const conf = await gateway.submissions.submit(
+      { key: "bmvc", kind: "conference", op: "create", title: "BMVC 2026", start: "2026-11-23", end: "2026-11-26", place: "Lancaster", fields: { city: "Lancaster", url: "https://bmvc.example" }, evidence: note },
+      "theseus",
+    );
+    expect(await gateway.resolve(theseus, { kind: "conference", name: "BMVC", date: "2026-11-24" })).toMatchObject({ class: "unique", id: conf.id });
+    expect((await gateway.resolve(theseus, { kind: "conference", name: "ICCV", date: "2026-11-24" })).class).toBe("none");
   });
 
   it("a date alone still identifies an appointment", async () => {
@@ -200,6 +327,41 @@ describe("gateway: several things on one day", () => {
       "theseus",
     );
     expect((await gateway.resolve(theseus, { kind: "appointment", date: "2026-12-01" })).class).toBe("unique");
+  });
+});
+
+describe("gateway: moving the old flat itinerary items to the structured kinds", () => {
+  it("removes unedited mirrors of the user's notes, converts the rest, and keeps edits flagged", async () => {
+    const { gateway, io, ledger } = setup();
+    const old = (title: string, source: string, extra: string) =>
+      `---\ntype: itinerary-item\nagent-id: itinerary-item-${title.replace(/\W/g, "")}\ntitle: ${title}\nstate: booked\nstart: 2026-05-28T13:05\nplace: Tokyo\n${extra}source: ${source}\nagent-access: local\n---\n> [!robot] Agent record\n\n## History\n- 2026-05-01 10:00 · booked\n`;
+    await io.create("Agent/Trips/Items/Checkout.md", old("Checkout Megaro", "vault-note", "item: stay\n"));
+    await io.create("Agent/Trips/Items/Flight.md", old("Flight AZ 792", "gmail", "item: flight\ncarrier: ITA\nnumber: AZ 792\nfrom: Rome\nto: Tokyo\ntrip: 2026 Japan\n"));
+    await io.create("Agent/Trips/Items/Dinner.md", old("Dinner", "vault-note", "item: event\nagent-hash: not-the-hash\n"));
+    await io.create("Agent/_review/held.md", `---\ntype: agent-review\nkey: k-note\nsummary: New itinerary-item · Train\nreason: looks close\nsubmitted: 2026-11-16T10:00:00\nclient: theseus\n---\n\`\`\`json\n${JSON.stringify({ key: "k-note", kind: "itinerary-item", op: "create", title: "Train", start: "2026-05-29", fields: { item: "train" }, evidence: note })}\n\`\`\`\n`);
+    await io.create("Agent/_review/mail.md", `---\ntype: agent-review\nkey: k-mail\nsummary: New itinerary-item · Hotel\nreason: looks close\nsubmitted: 2026-11-16T10:00:00\nclient: theseus\n---\n\`\`\`json\n${JSON.stringify({ key: "k-mail", kind: "itinerary-item", op: "create", title: "Hotel Sora", start: "2026-05-29", end: "2026-06-02", place: "Tokyo", fields: { item: "stay" }, evidence: ev() })}\n\`\`\`\n`);
+
+    const { migrateLegacyItinerary } = await import("../src/gateway/migrate");
+    const result = await migrateLegacyItinerary(io, "Agent", ledger);
+    expect(result).toEqual({ removed: 1, converted: 2, reviewsRemoved: 1, reviewsConverted: 1 });
+    expect(await io.exists("Agent/Trips/Items/Checkout.md")).toBe(false);
+
+    const flight = parseRecord("Agent/Trips/Items/Flight.md", await io.read("Agent/Trips/Items/Flight.md"))!;
+    expect(flight).toMatchObject({ kind: "transport", state: "booked", humanEdited: false });
+    expect(flight.fields).toMatchObject({ mode: "flight", number: "AZ 792", from: "Rome", to: "Tokyo", trip: "2026 Japan" });
+    expect(flight.place).toBeUndefined();
+    expect(flight.body).toContain("2026-05-01 10:00 · booked");
+
+    const dinner = parseRecord("Agent/Trips/Items/Dinner.md", await io.read("Agent/Trips/Items/Dinner.md"))!;
+    expect(dinner).toMatchObject({ kind: "activity", state: "confirmed", humanEdited: true });
+
+    const pending = await gateway.submissions.pending();
+    expect(pending.map((p) => [p.key, p.observation.kind, p.summary])).toEqual([["k-mail", "stay", "New stay · Hotel"]]);
+    expect((await ledger.get("k-note"))?.status).toBe("dismissed");
+    // A second run finds nothing left to do.
+    expect(await migrateLegacyItinerary(io, "Agent", ledger)).toEqual({ removed: 0, converted: 0, reviewsRemoved: 0, reviewsConverted: 0 });
+    // The converted held item can now be approved.
+    expect((await gateway.submissions.decide("k-mail", "approve")).status).toBe("applied");
   });
 });
 

@@ -9,13 +9,19 @@ import { joinNote, splitNote } from "./frontmatter";
 export const KINDS = [
   "appointment",
   "trip",
-  "itinerary-item",
+  "conference",
+  "transport",
+  "stay",
+  "activity",
   "bill",
   "task",
   "project",
   "person",
 ] as const;
 export type RecordKind = (typeof KINDS)[number];
+
+/** The flat kind the itinerary used before it had structure. Migrated at start. */
+export const LEGACY_ITINERARY_KIND = "itinerary-item";
 
 export type FieldType = "string" | "number" | "boolean" | "date" | "list";
 export type FieldValue = string | number | boolean | string[] | null;
@@ -30,13 +36,13 @@ export interface KindSpec {
   fields: Readonly<Record<string, FieldType>>;
   /** Tolerance, in days, when testing a date against the record's window. */
   windowDays: number;
-  /**
-   * Several records of this kind on one day are normal (a hotel checkout and a
-   * flight), so an equal date alone says nothing about which record is meant.
-   * The date still excludes records on other days.
-   */
-  severalPerDay?: boolean;
 }
+
+/** What a thing costs and how it is paid — shared by everything on an itinerary. */
+const COST = { price: "number", currency: "string", payment: "string", paid: "boolean" } as const;
+/** Where it came from in the user's own notes, which trip it belongs to, and its papers. */
+const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "string" } as const;
+const BOOKING_STATES = ["planned", "booked", "changed", "done", "cancelled"] as const;
 
 export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
   appointment: {
@@ -44,32 +50,105 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
     states: ["requested", "confirmed", "rescheduled", "attended", "cancelled"],
     initial: "requested",
     terminal: ["attended", "cancelled"],
-    fields: { category: "string", with: "string", phone: "string", url: "string" },
+    fields: {
+      category: "string",
+      with: "string",
+      phone: "string",
+      url: "string",
+      address: "string",
+      "travel-min": "number",
+      ...COST,
+    },
     windowDays: 0,
   },
   trip: {
     folder: "Trips",
-    states: ["planned", "booked", "changed", "done", "cancelled"],
+    states: BOOKING_STATES,
     initial: "planned",
     terminal: ["done", "cancelled"],
-    fields: { destination: "string", hub: "string" },
+    fields: { destination: "string", country: "string", hub: "string" },
     windowDays: 1,
   },
-  "itinerary-item": {
-    folder: "Trips/Items",
-    states: ["planned", "booked", "changed", "done", "cancelled"],
+  /** A meeting that spans days. Its talks and events are activities that name it. */
+  conference: {
+    folder: "Trips/Conferences",
+    states: ["planned", "registered", "done", "cancelled"],
+    initial: "planned",
+    terminal: ["done", "cancelled"],
+    fields: { venue: "string", city: "string", country: "string", "schedule-url": "string", ...ITINERARY, ...COST },
+    windowDays: 1,
+  },
+  /**
+   * One journey from one place to another: a flight, a train, a transfer.
+   * `start` is the departure and `end` the arrival, each in local time there.
+   * Several a day are normal, and one booking often covers several legs.
+   */
+  transport: {
+    folder: "Trips/Transport",
+    states: BOOKING_STATES,
     initial: "booked",
     terminal: ["done", "cancelled"],
     fields: {
-      item: "string",
-      trip: "string",
+      mode: "string",
       carrier: "string",
       number: "string",
       from: "string",
       to: "string",
+      seat: "string",
+      "travel-min": "number",
+      ...ITINERARY,
+      ...COST,
     },
     windowDays: 0,
-    severalPerDay: true,
+  },
+  /**
+   * Where the nights are spent: `start` is the day of arrival, `end` the day
+   * of departure, so it covers the nights from start up to (not including)
+   * end. One per night — but leaving one and arriving at the next share a day.
+   */
+  stay: {
+    folder: "Trips/Stays",
+    states: BOOKING_STATES,
+    initial: "booked",
+    terminal: ["done", "cancelled"],
+    fields: {
+      lodging: "string",
+      address: "string",
+      country: "string",
+      "check-in": "string",
+      "check-out": "string",
+      phone: "string",
+      email: "string",
+      ...ITINERARY,
+      ...COST,
+    },
+    windowDays: 0,
+  },
+  /**
+   * Something to be at: a meal, a show, an appointment, a tour, a talk.
+   * Several a day are normal. `place` is the venue's name.
+   */
+  activity: {
+    folder: "Trips/Activities",
+    states: ["planned", "to-confirm", "asked", "confirmed", "done", "cancelled"],
+    initial: "planned",
+    terminal: ["done", "cancelled"],
+    fields: {
+      category: "string",
+      address: "string",
+      provider: "string",
+      with: "string",
+      contact: "string",
+      email: "string",
+      "confirm-via": "string",
+      "confirm-by": "date",
+      "travel-min": "number",
+      conference: "string",
+      official: "boolean",
+      ...ITINERARY,
+      ...COST,
+    },
+    windowDays: 0,
   },
   bill: {
     folder: "Bills",

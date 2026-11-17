@@ -60,6 +60,11 @@ export interface Observation {
   what?: string;
   /** For op "log": the line to append to the day's agent log. */
   line?: string;
+  /**
+   * The harness is not sure this should happen (an entry has gone from the
+   * user's note — cancelled, or only reworded?): hold it for the user.
+   */
+  ask?: boolean;
   evidence: Evidence;
 }
 
@@ -157,6 +162,10 @@ function queryOf(o: Observation): ResolveQuery {
     date: o.start ?? (typeof f.due === "string" ? f.due : undefined),
     end: o.end,
     place: o.place ?? (typeof f.destination === "string" ? f.destination : undefined),
+    name: typeof f.lodging === "string" ? f.lodging : o.title,
+    number: typeof f.number === "string" ? f.number : undefined,
+    from: typeof f.from === "string" ? f.from : undefined,
+    to: typeof f.to === "string" ? f.to : undefined,
     payee: typeof f.payee === "string" ? f.payee : undefined,
     amount: typeof f.amount === "number" ? f.amount : undefined,
     period: typeof f.period === "string" ? f.period : undefined,
@@ -259,6 +268,16 @@ async function planCreate(ctx: SubmitContext, o: Observation, force: boolean): P
   return { decision: "apply", reason: force ? "approved by you" : "nothing similar exists", summary, changes, id, path };
 }
 
+/**
+ * A day named without a time does not erase the time already known for that
+ * day: a reminder that says only "on the 24th" leaves "the 24th at 19:00".
+ */
+function keepTime(had: string | undefined, next: string | undefined): string | undefined {
+  if (!next) return had;
+  if (had && next.length === 10 && had.length > 10 && had.startsWith(next)) return had;
+  return next;
+}
+
 async function planUpdate(ctx: SubmitContext, o: Observation, force: boolean): Promise<Plan> {
   const kind = o.kind as RecordKind;
   const records = await ctx.store.all();
@@ -278,8 +297,8 @@ async function planUpdate(ctx: SubmitContext, o: Observation, force: boolean): P
     refs: union(fresh.refs, cleanList(o.refs)),
     threads: union(fresh.threads, cleanList(o.thread ? [o.thread] : [], 200)),
     counterparts: union(fresh.counterparts, cleanList(o.counterparts)),
-    start: cleanDate(o.start) ?? fresh.start,
-    end: cleanDate(o.end) ?? fresh.end,
+    start: keepTime(fresh.start, cleanDate(o.start)),
+    end: keepTime(fresh.end, cleanDate(o.end)),
     place: cleanString(o.place) || fresh.place,
     updated: localStamp(ctx.now()),
     body: appendHistory(fresh.body, historyEntry(ctx, o, state && state !== fresh.state ? state : undefined)),
@@ -289,6 +308,7 @@ async function planUpdate(ctx: SubmitContext, o: Observation, force: boolean): P
   if (force) return { decision: "apply", reason: "approved by you", ...out };
 
   if (fresh.humanEdited) return { decision: "review", reason: "you have edited this record, so changes to it ask first", ...out };
+  if (o.ask === true) return { decision: "review", reason: "your agent is not sure, and asks you to confirm", ...out };
   if (o.match!.class === "adjudicated") return { decision: "review", reason: "the match was chosen among several candidates", ...out };
   const check = resolveAgainst(records, queryOf(o));
   if ((check.class !== "exact" && check.class !== "unique") || check.id !== record.id) {
