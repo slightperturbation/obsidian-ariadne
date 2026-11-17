@@ -23,7 +23,8 @@ export type RecordKind = (typeof KINDS)[number];
 /** The flat kind the itinerary used before it had structure. Migrated at start. */
 export const LEGACY_ITINERARY_KIND = "itinerary-item";
 
-export type FieldType = "string" | "number" | "boolean" | "date" | "list";
+/** "text" is a string allowed to run long: the owner's own lines about a thing, kept as written. */
+export type FieldType = "string" | "text" | "number" | "boolean" | "date" | "list";
 export type FieldValue = string | number | boolean | string[] | null;
 
 export interface KindSpec {
@@ -41,7 +42,7 @@ export interface KindSpec {
 /** What a thing costs and how it is paid — shared by everything on an itinerary. */
 const COST = { price: "number", currency: "string", payment: "string", paid: "boolean" } as const;
 /** Where it came from in the user's own notes, which trip it belongs to, and its papers. */
-const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "string" } as const;
+const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "text" } as const;
 const BOOKING_STATES = ["planned", "booked", "changed", "done", "cancelled"] as const;
 
 export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
@@ -66,7 +67,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
     states: BOOKING_STATES,
     initial: "planned",
     terminal: ["done", "cancelled"],
-    fields: { destination: "string", country: "string", hub: "string" },
+    fields: { destination: "string", country: "string", hub: "string", notes: "text" },
     windowDays: 1,
   },
   /** A meeting that spans days. Its talks and events are activities that name it. */
@@ -96,6 +97,8 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
       to: "string",
       seat: "string",
       "travel-min": "number",
+      /** When the owner means to be there (at the airport, on the platform), if they have said. */
+      "arrive-by": "date",
       ...ITINERARY,
       ...COST,
     },
@@ -143,6 +146,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
       "confirm-via": "string",
       "confirm-by": "date",
       "travel-min": "number",
+      "arrive-by": "date",
       conference: "string",
       official: "boolean",
       ...ITINERARY,
@@ -234,6 +238,7 @@ export interface AgentRecord {
 }
 
 const MAX_STRING = 300;
+const MAX_TEXT = 1200;
 const MAX_LIST = 30;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?)?$/;
 
@@ -290,8 +295,8 @@ export function cleanFields(
       continue;
     }
     if (value === null || value === undefined || value === "") continue;
-    if (type === "string") {
-      const s = cleanString(value);
+    if (type === "string" || type === "text") {
+      const s = cleanString(value, type === "text" ? MAX_TEXT : MAX_STRING);
       if (s) fields[key] = s;
     } else if (type === "number") {
       const n = typeof value === "number" ? value : Number(String(value).replace(/[,\s]/g, ""));
