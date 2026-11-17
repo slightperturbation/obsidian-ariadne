@@ -200,6 +200,17 @@ describe("gateway: journeys", () => {
     expect(second.reason).toMatch(/a change to that journey, or a separate leg/);
   });
 
+  it("knows \"the 10:05\" by its day and departure time when the note gave no number", async () => {
+    const { gateway } = setup();
+    const res = await gateway.submissions.submit(leg("fly", { title: "Flight · to Manchester", start: "2026-11-19T10:05", fields: { mode: "flight", to: "Manchester" } }), "theseus");
+    const r = (q: object) => gateway.resolve(theseus, { kind: "transport", ...q } as never);
+    // The airline's message has the number the note lacked, and the same departure.
+    expect(await r({ date: "2026-11-19T10:05", number: "BA 1392", from: "London Heathrow", to: "Manchester" })).toMatchObject({ class: "unique", id: res.id });
+    expect((await r({ date: "2026-11-19T14:40", number: "BA 1400" })).class).toBe("none");
+    expect((await r({ date: "2026-11-20T10:05", number: "BA 1392" })).class).toBe("none");
+    expect((await r({ date: "2026-11-19" })).class).toBe("none");
+  });
+
   it("identifies a journey by day and number or day and route — never by the day or a place alone", async () => {
     const { gateway } = setup();
     const res = await gateway.submissions.submit(leg("fco-hnd", { start: "2026-05-28T13:05", fields: { number: "AZ 792", from: "Rome", to: "Tokyo" } }), "theseus");

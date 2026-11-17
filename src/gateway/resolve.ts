@@ -250,6 +250,11 @@ function assessTransport(record: AgentRecord, q: ResolveQuery): Scored {
   else if (day === false) excluded = "a different day";
   if (service) positives.push("number");
   if (route) positives.push("route");
+  // "The 10:05" is a journey too: the same day and the same departure time,
+  // when neither its number nor its route says otherwise.
+  const qMin = minutesOf(cleanDate(q.date));
+  const rMin = minutesOf(record.start);
+  if (day && positives.length === 0 && qMin !== undefined && rMin !== undefined && Math.abs(qMin - rMin) <= 15) positives.push("time");
   if (day && positives.length > 0) positives.unshift("date");
   return { record, positives, excluded };
 }
