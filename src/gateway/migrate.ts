@@ -9,12 +9,14 @@ import { parseReview, serializeReview, type Ledger, type Observation } from "./s
  * tell a journey from a night's stay from a dinner. This moves what exists to
  * the structured kinds, once, when the gateway starts.
  *
- *   - Items mirrored from the user's own itinerary notes, and not edited
- *     since, are removed: the harness reads those notes again and mirrors
- *     them under the new kinds (a stay becomes one record with both its days,
- *     which no single old item held).
- *   - Everything else — items that came from messages, or that the user has
- *     edited — is converted in place and keeps its history.
+ *   - Items mirrored from the user's own itinerary notes are removed: the
+ *     harness reads those notes again and mirrors them under the new kinds
+ *     (a stay becomes one record with both its days, which no single old
+ *     item held). This holds for everything in the old items folder, which
+ *     nothing writes to any more — including items an earlier run of this
+ *     migration converted in place.
+ *   - An item the user wrote in, or one that came from a message, is
+ *     converted in place and keeps its history.
  */
 export interface MigrationResult {
   removed: number;
@@ -24,6 +26,20 @@ export interface MigrationResult {
 }
 
 const TRANSPORT_ITEMS = new Set(["flight", "train", "transfer", "rental", "bus", "ferry"]);
+
+/** Where the flat items lived. The structured kinds have folders of their own. */
+const LEGACY_FOLDER = "Trips/Items";
+
+/**
+ * Is the body just what the agent wrote — its banner and its history? A
+ * property stamped on by another tool does not count as the user's hand; a
+ * line of their own in the body does.
+ */
+export function bodyUntouched(body: string): boolean {
+  return body
+    .split("\n")
+    .every((l) => l === "" || l.startsWith("> ") || l === ">" || l.startsWith("## History") || l.startsWith("- ") || l.startsWith("  > "));
+}
 
 export function kindForLegacyItem(item: unknown): RecordKind {
   const i = cleanString(item, 20).toLowerCase();
@@ -82,7 +98,8 @@ export async function migrateLegacyItinerary(
     } catch {
       continue;
     }
-    if (!text.includes(LEGACY_ITINERARY_KIND)) continue;
+    const legacyPlace = path.startsWith(`${agentFolder}/${LEGACY_FOLDER}/`);
+    if (!legacyPlace && !text.includes(LEGACY_ITINERARY_KIND)) continue;
 
     if (path.startsWith(reviewDir)) {
       const item = parseReview(path, text);
@@ -112,16 +129,20 @@ export async function migrateLegacyItinerary(
     }
 
     const { data, body } = splitNote(text);
-    if (data.type !== LEGACY_ITINERARY_KIND) continue;
-    const stamped = cleanString(data["agent-hash"], 40);
-    const { "agent-hash": _hash, ...unstamped } = data;
-    void _hash;
-    const edited = stamped !== "" && hashText(joinNote(unstamped, body)) !== stamped;
-    if (data.source === "vault-note" && !edited) {
+    const legacyKind = data.type === LEGACY_ITINERARY_KIND;
+    const inLegacyFolder = path.startsWith(`${agentFolder}/${LEGACY_FOLDER}/`);
+    if (!legacyKind && !(inLegacyFolder && typeof data["agent-id"] === "string")) continue;
+    // A mirror of the user's note, with nothing of theirs written into it: read the note again instead.
+    if (data.source === "vault-note" && bodyUntouched(body)) {
       await io.delete(path);
       result.removed++;
       continue;
     }
+    if (!legacyKind) continue;
+    const stamped = cleanString(data["agent-hash"], 40);
+    const { "agent-hash": _hash, ...unstamped } = data;
+    void _hash;
+    const edited = stamped !== "" && hashText(joinNote(unstamped, body)) !== stamped;
     const title = cleanString(data.title) || path.split("/").pop()!.replace(/\.md$/, "");
     const kind = kindForLegacyItem(data.item);
     const { fields, state, dropPlace } = convertLegacyFields(kind, title, cleanString(data.state, 40) || undefined, data);

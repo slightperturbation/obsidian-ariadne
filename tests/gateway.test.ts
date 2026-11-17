@@ -330,6 +330,44 @@ describe("gateway: conferences and appointments", () => {
   });
 });
 
+describe("gateway: properties other tools add to a record", () => {
+  const trip: Observation = {
+    key: "t", kind: "trip", op: "create", title: "2026 Lancaster", state: "planned", start: "2026-11-21", end: "2026-11-28",
+    place: "Lancaster", refs: ["HUBABCD1234"], fields: { destination: "Lancaster" }, evidence: note,
+  };
+  const move = (id: string): Observation => ({
+    key: "t-move", kind: "trip", op: "update", match: { id, class: "exact" }, refs: ["HUBABCD1234"], end: "2026-11-29", what: "itinerary note changed", evidence: note,
+  });
+
+  it("are not the user editing it, and are kept when the agent next writes", async () => {
+    const { gateway, io } = setup();
+    const made = await gateway.submissions.submit(trip, "theseus");
+    // Another tool stamps the note: tags, a date, a publish flag.
+    const before = await io.read(made.path!);
+    await io.modify(made.path!, before.replace("\n---\n>", "\ntags:\n  - daily\ndate: 2026-11-21\npublish: false\n---\n>"));
+    expect(parseRecord(made.path!, await io.read(made.path!))).toMatchObject({ humanEdited: false, extra: { tags: ["daily"], publish: false } });
+
+    const res = await gateway.submissions.submit(move(made.id!), "theseus");
+    expect(res.status).toBe("applied");
+    const after = await io.read(made.path!);
+    expect(after).toContain("end: 2026-11-29");
+    expect(after).toContain("publish: false");
+    expect(after).toContain("tags:\n  - daily");
+    expect(parseRecord(made.path!, after)!.humanEdited).toBe(false);
+  });
+
+  it("but a change to what the agent wrote — a property of its own, or the body — still is", async () => {
+    const { gateway, io } = setup();
+    const made = await gateway.submissions.submit(trip, "theseus");
+    const text = await io.read(made.path!);
+    await io.modify(made.path!, text.replace("state: planned", "state: booked"));
+    expect(parseRecord(made.path!, await io.read(made.path!))!.humanEdited).toBe(true);
+    expect((await gateway.submissions.submit(move(made.id!), "theseus")).status).toBe("review");
+    await io.modify(made.path!, text.replace("## History", "My own line.\n\n## History"));
+    expect(parseRecord(made.path!, await io.read(made.path!))!.humanEdited).toBe(true);
+  });
+});
+
 describe("gateway: moving the old flat itinerary items to the structured kinds", () => {
   it("removes unedited mirrors of the user's notes, converts the rest, and keeps edits flagged", async () => {
     const { gateway, io, ledger } = setup();
@@ -337,14 +375,19 @@ describe("gateway: moving the old flat itinerary items to the structured kinds",
       `---\ntype: itinerary-item\nagent-id: itinerary-item-${title.replace(/\W/g, "")}\ntitle: ${title}\nstate: booked\nstart: 2026-05-28T13:05\nplace: Tokyo\n${extra}source: ${source}\nagent-access: local\n---\n> [!robot] Agent record\n\n## History\n- 2026-05-01 10:00 · booked\n`;
     await io.create("Agent/Trips/Items/Checkout.md", old("Checkout Megaro", "vault-note", "item: stay\n"));
     await io.create("Agent/Trips/Items/Flight.md", old("Flight AZ 792", "gmail", "item: flight\ncarrier: ITA\nnumber: AZ 792\nfrom: Rome\nto: Tokyo\ntrip: 2026 Japan\n"));
-    await io.create("Agent/Trips/Items/Dinner.md", old("Dinner", "vault-note", "item: event\nagent-hash: not-the-hash\n"));
+    // The plugin on another device stamped this one with properties of its own: still only a mirror.
+    await io.create("Agent/Trips/Items/Stamped.md", old("Checkout Sora", "vault-note", "item: stay\nagent-hash: stale\ntags:\n  - daily\ndate: 2026-05-28\npublish: false\n"));
+    // An earlier run converted this one in place; it is still a mirror in the old folder.
+    await io.create("Agent/Trips/Items/Converted.md", old("Check in Sora", "vault-note", "lodging: Check in Sora\nagent-hash: stale\npublish: false\n").replace("type: itinerary-item", "type: stay"));
+    // The user wrote in this one: it is theirs now, and is kept.
+    await io.create("Agent/Trips/Items/Dinner.md", old("Dinner", "vault-note", "item: event\nagent-hash: not-the-hash\n").replace("## History", "Ask for the window table.\n\n## History"));
     await io.create("Agent/_review/held.md", `---\ntype: agent-review\nkey: k-note\nsummary: New itinerary-item · Train\nreason: looks close\nsubmitted: 2026-11-16T10:00:00\nclient: theseus\n---\n\`\`\`json\n${JSON.stringify({ key: "k-note", kind: "itinerary-item", op: "create", title: "Train", start: "2026-05-29", fields: { item: "train" }, evidence: note })}\n\`\`\`\n`);
     await io.create("Agent/_review/mail.md", `---\ntype: agent-review\nkey: k-mail\nsummary: New itinerary-item · Hotel\nreason: looks close\nsubmitted: 2026-11-16T10:00:00\nclient: theseus\n---\n\`\`\`json\n${JSON.stringify({ key: "k-mail", kind: "itinerary-item", op: "create", title: "Hotel Sora", start: "2026-05-29", end: "2026-06-02", place: "Tokyo", fields: { item: "stay" }, evidence: ev() })}\n\`\`\`\n`);
 
     const { migrateLegacyItinerary } = await import("../src/gateway/migrate");
     const result = await migrateLegacyItinerary(io, "Agent", ledger);
-    expect(result).toEqual({ removed: 1, converted: 2, reviewsRemoved: 1, reviewsConverted: 1 });
-    expect(await io.exists("Agent/Trips/Items/Checkout.md")).toBe(false);
+    expect(result).toEqual({ removed: 3, converted: 2, reviewsRemoved: 1, reviewsConverted: 1 });
+    for (const gone of ["Checkout", "Stamped", "Converted"]) expect(await io.exists(`Agent/Trips/Items/${gone}.md`)).toBe(false);
 
     const flight = parseRecord("Agent/Trips/Items/Flight.md", await io.read("Agent/Trips/Items/Flight.md"))!;
     expect(flight).toMatchObject({ kind: "transport", state: "booked", humanEdited: false });

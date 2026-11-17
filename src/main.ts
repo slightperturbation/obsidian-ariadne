@@ -192,6 +192,8 @@ export default class AriadnePlugin extends Plugin {
    * journals whose entries aren't date-named ("Morning pages 12").
    */
   private isJournalPath = (path: string): boolean => {
+    // What the agent keeps is never the writer's journal, however it is named.
+    if (underFolder(path, this.levelPolicy().agentFolder)) return false;
     if (looksPeriodic(path)) return true;
     if (inFolders(path, this.journalFolders())) return true;
     // Fourth signal: an entry Ariadne (or the writer) already marked. Lets an
@@ -1484,6 +1486,8 @@ export default class AriadnePlugin extends Plugin {
     // and a ctime-derived date DIVERGES across devices (the phone's ctime is
     // the day Sync delivered the file). One writer, convergent marks.
     if (!this.policy.writesIndex) return;
+    // The agent's records and logs are date-named but are not entries: never marked.
+    if (underFolder(path, this.levelPolicy().agentFolder)) return;
     // Eligibility by name/folder only — deliberately NOT the type-property
     // signal. Marks must not self-justify: a note moved out of the journal
     // folder stops being re-marked (its type remains until hand-cleared, and

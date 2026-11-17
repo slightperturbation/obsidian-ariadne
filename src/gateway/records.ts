@@ -226,6 +226,11 @@ export interface AgentRecord {
   body: string;
   /** The note no longer matches what the agent last wrote: the user edited it. */
   humanEdited: boolean;
+  /**
+   * Properties some other tool put on the note (tags, a publish flag). They
+   * are not the agent's, so they are kept as found and are not an edit.
+   */
+  extra?: Record<string, unknown>;
 }
 
 const MAX_STRING = 300;
@@ -411,11 +416,17 @@ function frontmatterOf(r: AgentRecord): Record<string, unknown> {
   };
 }
 
-/** The note text for a record, stamped with the hash that detects human edits. */
+/**
+ * The note text for a record, stamped with the hash that detects human edits.
+ * The stamp covers the agent's own properties and the body; properties other
+ * tools added ride along after it, untouched and unstamped.
+ */
 export function serializeRecord(r: AgentRecord): string {
   const data = frontmatterOf(r);
   const unstamped = joinNote(data, r.body);
-  return joinNote({ ...data, "agent-hash": hashText(unstamped) }, r.body);
+  const extra: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r.extra ?? {})) if (!(k in data) && k !== "agent-hash") extra[k] = v;
+  return joinNote({ ...data, "agent-hash": hashText(unstamped), ...extra }, r.body);
 }
 
 /** Parse a note as a record; null when it is not one. */
@@ -433,9 +444,16 @@ export function parseRecord(path: string, text: string): AgentRecord | null {
     if (one !== undefined) fields[key] = one;
   }
   const stamped = cleanString(data["agent-hash"], 40);
-  const { "agent-hash": _drop, ...rest } = data;
-  void _drop;
-  const humanEdited = stamped !== "" && hashText(joinNote(rest, body)) !== stamped;
+  // Only what the agent writes is the agent's to compare: a tag or a flag
+  // added by another tool is not the user editing the record.
+  const own: Record<string, unknown> = {};
+  const extra: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "agent-hash") continue;
+    if (RESERVED.has(key) || key in spec) own[key] = value;
+    else extra[key] = value;
+  }
+  const humanEdited = stamped !== "" && hashText(joinNote(own, body)) !== stamped;
   return {
     id,
     kind,
@@ -456,6 +474,7 @@ export function parseRecord(path: string, text: string): AgentRecord | null {
     path,
     body,
     humanEdited,
+    extra: Object.keys(extra).length > 0 ? extra : undefined,
   };
 }
 
