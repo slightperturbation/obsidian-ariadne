@@ -41,8 +41,8 @@ export interface Evidence {
 export interface Observation {
   /** Idempotency key: the same key is never applied twice. */
   key: string;
-  kind: RecordKind | "log";
-  op: "create" | "update" | "log";
+  kind: RecordKind | "log" | "digest";
+  op: "create" | "update" | "log" | "digest";
   /** For updates: the record, and how surely the harness matched it. */
   match?: { id: string; class: "exact" | "unique" | "adjudicated" };
   /** The identifying facts the harness resolved with; the gateway re-checks them. */
@@ -60,6 +60,12 @@ export interface Observation {
   what?: string;
   /** For op "log": the line to append to the day's agent log. */
   line?: string;
+  /**
+   * For op "digest": the whole of a note the agent keeps for the user to read
+   * (a trip's itinerary as the records have it). Replaced each time; never a record.
+   * A line may open with "## " (a heading), "- " or "  - " (a list item); the rest is plain text.
+   */
+  lines?: string[];
   /**
    * The harness is not sure this should happen (an entry has gone from the
    * user's note — cancelled, or only reworded?): hold it for the user.
@@ -129,10 +135,16 @@ export function validateObservation(raw: unknown): string[] {
   if (!raw || typeof raw !== "object") return ["observation must be an object"];
   const o = raw as Partial<Observation>;
   if (typeof o.key !== "string" || !o.key.trim() || o.key.length > MAX_KEY) errors.push("key is required (≤200 chars)");
-  if (o.op !== "create" && o.op !== "update" && o.op !== "log") errors.push("op must be create, update or log");
+  if (o.op !== "create" && o.op !== "update" && o.op !== "log" && o.op !== "digest") errors.push("op must be create, update, log or digest");
   if (o.op === "log") {
     if (o.kind !== "log") errors.push('op "log" needs kind "log"');
     if (!cleanString(o.line)) errors.push("log needs a line");
+  } else if (o.op === "digest") {
+    if (o.kind !== "digest") errors.push('op "digest" needs kind "digest"');
+    if (!cleanString(o.title)) errors.push("digest needs a title");
+    if (!Array.isArray(o.lines) || o.lines.length === 0 || o.lines.length > MAX_DIGEST_LINES || o.lines.some((l) => typeof l !== "string")) {
+      errors.push(`digest needs 1–${MAX_DIGEST_LINES} lines of text`);
+    }
   } else if (!isKind(o.kind)) {
     errors.push("unknown kind");
   } else {
@@ -214,6 +226,43 @@ async function planLog(ctx: SubmitContext, o: Observation): Promise<Plan> {
     changes: [{ type: "create", path, after: head }],
     path,
   };
+}
+
+const MAX_DIGEST_LINES = 600;
+const DIGEST_TYPE = "agent-digest";
+
+/** One line of a digest: its list or heading mark kept, everything after it made inert. */
+function digestLine(raw: string): string {
+  const m = /^(## |  - |- )?([\s\S]*)$/.exec(raw.replace(/[\r\n]+/g, " "))!;
+  const body = inertQuote(m[2], 300);
+  if (!body) return "";
+  return `${m[1] ?? ""}${body}`;
+}
+
+/**
+ * A note the agent keeps for the user to read: one per title, under the
+ * agent's folder, written whole each time. It is not a record — nothing
+ * resolves against it — and it only ever replaces a digest of its own.
+ */
+async function planDigest(ctx: SubmitContext, o: Observation): Promise<Plan> {
+  const title = safeTitle(o.title ?? "");
+  const path = `${ctx.agentFolder}/Itineraries/${title}.md`;
+  const summary = `Itinerary · ${title}`;
+  const body = [
+    "> [!robot] As your agent has it",
+    "> Rebuilt from the agent's records whenever they change. Edits here are overwritten: change your own trip note instead.",
+    "",
+    ...(o.lines ?? []).map(digestLine),
+  ].join("\n");
+  const after = joinNote({ type: DIGEST_TYPE, title, authorship: "agent", "agent-access": "local", updated: localStamp(ctx.now()) }, `${body.trimEnd()}\n`);
+  if (!(await ctx.io.exists(path))) {
+    return { decision: "apply", reason: "the agent's own digest", summary, changes: [{ type: "create", path, after }], path };
+  }
+  const before = await ctx.io.read(path);
+  if (splitNote(before).data.type !== DIGEST_TYPE) {
+    return { decision: "reject", reason: "a note that is not an agent digest is in the way", summary, changes: [] };
+  }
+  return { decision: "apply", reason: "the agent's own digest", summary, changes: [{ type: "modify", path, before, after }], path };
 }
 
 function historyEntry(ctx: SubmitContext, o: Observation, state: string | undefined) {
@@ -329,6 +378,7 @@ export async function planObservation(
   }
   const o = raw as Observation;
   if (o.op === "log") return planLog(ctx, o);
+  if (o.op === "digest") return planDigest(ctx, o);
   if (o.op === "create") return planCreate(ctx, o, !!opts.force);
   return planUpdate(ctx, o, !!opts.force);
 }

@@ -610,6 +610,35 @@ describe("gateway: the write rules", () => {
     expect(text).toContain("agent-access: local");
   });
 
+  it("keeps one itinerary note per trip for the user to read, replaced whole, inert, and never over a note of theirs", async () => {
+    const { gateway, io } = setup();
+    const digest = (key: string, lines: string[], title = "2026 Lancaster BMVC"): Observation => ({ key, kind: "digest", op: "digest", title, lines, evidence: ev("2026-11-16T07:15:00") });
+    const first = await gateway.submissions.submit(digest("d1", ["## Thu 19 Nov", "- 18:00 Dinner · [[Secret note]] <b>x</b> #tag", "  - leave by 17:20", "", "Cash to bring: £65"]), "theseus");
+    expect(first.status).toBe("applied");
+    const path = "Agent/Itineraries/2026 Lancaster BMVC.md";
+    const text = await io.read(path);
+    expect(text).toContain("type: agent-digest");
+    expect(text).toContain("agent-access: local");
+    expect(text).toContain("## Thu 19 Nov\n- 18:00 Dinner");
+    expect(text).toContain("  - leave by 17:20");
+    // Text that came from messages cannot make a link, a tag or markup of the user's vault.
+    expect(text).not.toContain("[[Secret note]]");
+    expect(text).not.toContain("<b>");
+    expect(text).not.toContain("#tag");
+    // Written again, it is replaced, not appended to.
+    await gateway.submissions.submit(digest("d2", ["## Fri 20 Nov", "- Nothing scheduled."]), "theseus");
+    const second = await io.read(path);
+    expect(second).toContain("## Fri 20 Nov");
+    expect(second).not.toContain("Thu 19 Nov");
+    // It is not a record: nothing lists it or resolves against it.
+    expect((await gateway.get(theseus, {})).records).toHaveLength(0);
+    // A note of the user's own at that path is left alone.
+    await io.create("Agent/Itineraries/Mine.md", "my own words");
+    expect((await gateway.submissions.submit(digest("d3", ["- x"], "Mine"), "theseus")).status).toBe("rejected");
+    expect(await io.read("Agent/Itineraries/Mine.md")).toBe("my own words");
+    expect((await gateway.submissions.submit({ ...digest("d4", []), lines: [] }, "theseus")).status).toBe("rejected");
+  });
+
   it("matches a bill by payee and period, and a different period is a new bill", async () => {
     const { gateway } = setup();
     const bill = (key: string, period: string, due: string): Observation => ({
