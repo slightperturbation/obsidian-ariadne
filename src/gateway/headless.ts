@@ -66,6 +66,10 @@ async function main(): Promise<void> {
   // Counts only — never names or content.
   process.stdout.write(`vault ready: ${JSON.stringify(health)}\n`);
 
+  // The rules may have changed with this version: release what they no longer hold.
+  const released = await gateway.submissions.recheck().catch(() => 0);
+  if (released > 0) process.stdout.write(`re-check released ${released} held item(s)\n`);
+
   // Pick up review decisions that arrived through Sync.
   setInterval(() => {
     void gateway.submissions.sweep().catch((err) => process.stderr.write(`sweep failed: ${String(err)}\n`));

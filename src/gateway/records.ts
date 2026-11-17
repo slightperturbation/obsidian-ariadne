@@ -30,6 +30,12 @@ export interface KindSpec {
   fields: Readonly<Record<string, FieldType>>;
   /** Tolerance, in days, when testing a date against the record's window. */
   windowDays: number;
+  /**
+   * Several records of this kind on one day are normal (a hotel checkout and a
+   * flight), so an equal date alone says nothing about which record is meant.
+   * The date still excludes records on other days.
+   */
+  severalPerDay?: boolean;
 }
 
 export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
@@ -63,6 +69,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
       to: "string",
     },
     windowDays: 0,
+    severalPerDay: true,
   },
   bill: {
     folder: "Bills",

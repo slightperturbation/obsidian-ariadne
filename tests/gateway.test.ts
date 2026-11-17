@@ -154,6 +154,89 @@ describe("gateway: which record is this about?", () => {
   });
 });
 
+describe("gateway: several things on one day", () => {
+  const item = (key: string, title: string, start: string, place?: string): Observation => ({
+    key,
+    kind: "itinerary-item",
+    op: "create",
+    title,
+    state: "planned",
+    start,
+    place,
+    refs: [`REF${key.toUpperCase()}`],
+    fields: { item: "other", trip: "2026 London" },
+    evidence: { source: "vault-note", at: "2026-11-16T09:00:00" },
+  });
+
+  it("does not hold a flight because a hotel checkout falls on the same day", async () => {
+    const { gateway } = setup();
+    const checkout = await gateway.submissions.submit(item("checkout", "2026-05-28 Checkout hotel", "2026-05-28"), "theseus");
+    const flight = await gateway.submissions.submit(item("flight", "2026-05-28 Flight depart", "2026-05-28T13:05"), "theseus");
+    const dinner = await gateway.submissions.submit(item("dinner", "2026-05-28 Dinner", "2026-05-28T19:00", "Mission District"), "theseus");
+    expect([checkout.status, flight.status, dinner.status]).toEqual(["applied", "applied", "applied"]);
+    expect(await gateway.submissions.pending()).toHaveLength(0);
+  });
+
+  it("the day alone identifies no itinerary item, but still excludes other days", async () => {
+    const { gateway } = setup();
+    await gateway.submissions.submit(item("checkout", "2026-05-28 Checkout hotel", "2026-05-28", "Kings Cross"), "theseus");
+    expect((await gateway.resolve(theseus, { kind: "itinerary-item", date: "2026-05-28" })).class).toBe("none");
+    expect((await gateway.resolve(theseus, { kind: "itinerary-item", date: "2026-05-29", place: "Kings Cross" })).class).toBe("none");
+    // The day and the place together do identify it.
+    expect((await gateway.resolve(theseus, { kind: "itinerary-item", date: "2026-05-28", place: "Kings Cross" })).class).toBe("unique");
+  });
+
+  it("still holds a second item on the same day at the same place", async () => {
+    const { gateway } = setup();
+    await gateway.submissions.submit(item("checkout", "2026-05-28 Checkout hotel", "2026-05-28", "Kings Cross"), "theseus");
+    const again = await gateway.submissions.submit(item("checkout2", "2026-05-28 Leave the hotel", "2026-05-28", "Kings Cross"), "theseus");
+    expect(again.status).toBe("review");
+  });
+
+  it("a date alone still identifies an appointment", async () => {
+    const { gateway } = setup();
+    await gateway.submissions.submit(
+      { key: "appt", kind: "appointment", op: "create", title: "Dentist", start: "2026-12-01T09:00", evidence: ev() },
+      "theseus",
+    );
+    expect((await gateway.resolve(theseus, { kind: "appointment", date: "2026-12-01" })).class).toBe("unique");
+  });
+});
+
+describe("gateway: re-checking what is held", () => {
+  it("releases a held item once the rules would apply it, and keeps the rest held", async () => {
+    const { gateway, io } = setup();
+    const trip = (key: string, title: string, place: string): Observation => ({
+      key,
+      kind: "trip",
+      op: "create",
+      title,
+      state: "planned",
+      start: "2026-11-20",
+      end: "2026-11-27",
+      place,
+      fields: { destination: place },
+      evidence: { source: "vault-note", at: "2026-11-16T09:00:00" },
+    });
+    const first = await gateway.submissions.submit(trip("t1", "2026 London", "London"), "theseus");
+    const second = await gateway.submissions.submit(trip("t2", "2026 London again", "London"), "theseus");
+    expect([first.status, second.status]).toEqual(["applied", "review"]);
+
+    // Nothing has changed: it stays held.
+    expect(await gateway.submissions.recheck()).toBe(0);
+    expect(await gateway.submissions.pending()).toHaveLength(1);
+
+    // The record it resembled is gone, so today's rules would simply create it.
+    await io.delete(first.path!);
+    expect(await gateway.submissions.recheck()).toBe(1);
+    expect(await gateway.submissions.pending()).toHaveLength(0);
+    const status = await gateway.submissions.status(["t2"]);
+    expect(status.t2?.status).toBe("applied");
+    expect(status.t2?.reason).toMatch(/released on re-check/);
+    expect((await gateway.get(theseus, { kind: "trip" })).records.map((r) => r.title)).toEqual(["2026 London again"]);
+  });
+});
+
 describe("gateway: the write rules", () => {
   async function withAppointment() {
     const s = setup();

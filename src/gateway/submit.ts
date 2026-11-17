@@ -516,6 +516,37 @@ export class Submissions {
   }
 
   /**
+   * Look again at what is held, with the rules as they are now. An item that
+   * today's rules would apply without asking is applied and leaves the queue;
+   * everything else stays held. Run when the gateway starts, which is when the
+   * rules can have changed.
+   */
+  async recheck(): Promise<number> {
+    let released = 0;
+    for (const item of await this.pending()) {
+      const plan = await planObservation(this.ctx, item.observation);
+      if (plan.decision !== "apply") continue;
+      try {
+        await applyChanges(this.ctx.io, plan.changes);
+      } catch {
+        continue; // a conflict: leave it held
+      }
+      await this.ctx.io.delete(item.path);
+      await this.ledger.set(item.key, {
+        status: "applied",
+        reason: `${plan.reason} (held earlier; released on re-check)`,
+        summary: plan.summary,
+        id: plan.id,
+        path: plan.path,
+        at: this.ctx.now().toISOString(),
+        client: item.client,
+      });
+      released++;
+    }
+    return released;
+  }
+
+  /**
    * Pick up decisions made elsewhere (the plugin on another device marks a
    * review file decided; Sync brings it here).
    */

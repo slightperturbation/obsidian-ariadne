@@ -182,6 +182,10 @@ function assess(record: AgentRecord, q: ResolveQuery): Scored {
       if (Math.abs(q.amount - record.fields.amount) < 0.005) positives.push("amount");
     }
   }
+  // Where several a day are normal, the day alone identifies nothing.
+  if (SPECS[record.kind].severalPerDay && positives.length === 1 && positives[0] === "date") {
+    positives.length = 0;
+  }
   return { record, positives, excluded };
 }
 
