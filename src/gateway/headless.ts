@@ -60,19 +60,19 @@ async function main(): Promise<void> {
       server.once("error", reject);
       server.listen(port, address, resolve);
     });
-    console.log(`ariadne-gateway listening on ${address}:${port}`);
+    process.stdout.write(`ariadne-gateway listening on ${address}:${port}\n`);
   }
   const health = await gateway.health();
   // Counts only — never names or content.
-  console.log(`vault ready: ${JSON.stringify(health)}`);
+  process.stdout.write(`vault ready: ${JSON.stringify(health)}\n`);
 
   // Pick up review decisions that arrived through Sync.
   setInterval(() => {
-    void gateway.submissions.sweep().catch((err) => console.error(`sweep failed: ${String(err)}`));
+    void gateway.submissions.sweep().catch((err) => process.stderr.write(`sweep failed: ${String(err)}\n`));
   }, 60_000).unref();
 }
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.message : String(err));
+  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });

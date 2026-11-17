@@ -45,7 +45,11 @@ import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { isExcludedPath, type ExclusionFilter } from "./index/crawler";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
-import { cloudAllowed, levelOf, type LevelPolicy, type PrivacyLevel } from "./gateway/levels";
+import { cloudAllowed, levelOf, underFolder, type LevelPolicy, type PrivacyLevel } from "./gateway/levels";
+import { ObsidianGatewayIO } from "./gateway/obsidian-io";
+import { RecordStore } from "./gateway/store";
+import { listReviews, markDecided, planObservation, reviewFolder, type ReviewItem } from "./gateway/submit";
+import { ItemActionsModal, type ActionableItem } from "./ui/item-actions-modal";
 import {
   continuityLabel,
   lastReflectiveGist,
@@ -205,6 +209,8 @@ export default class AriadnePlugin extends Plugin {
    */
   private exclusionFilters(): ExclusionFilter[] {
     const filters: ExclusionFilter[] = parseFolderList(this.settings.excludedFolders);
+    // The agent's review queue is plumbing, not notes.
+    filters.push(reviewFolder(this.levelPolicy().agentFolder));
     const raw = (
       this.app.vault as unknown as { getConfig?: (k: string) => unknown }
     ).getConfig?.("userIgnoreFilters");
@@ -321,7 +327,12 @@ export default class AriadnePlugin extends Plugin {
     if (!(file instanceof TFile)) return false;
     const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
     if (!fm) return false;
-    if (this.settings.quietAiGenerated && fm.authorship === "ai-generated") return true;
+    if (
+      this.settings.quietAiGenerated &&
+      (fm.authorship === "ai-generated" || fm.authorship === "agent")
+    ) {
+      return true;
+    }
     const type = fm.type as unknown;
     return (
       typeof type === "string" && parseFolderList(this.settings.quietTypes).includes(type)
@@ -406,6 +417,84 @@ export default class AriadnePlugin extends Plugin {
           /* diagnostics must never surface an error */
         });
     }, delayMs);
+  }
+
+  private agentReviews: ReviewItem[] = [];
+  private agentReviewTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleAgentReviews(): void {
+    if (this.agentReviewTimer) clearTimeout(this.agentReviewTimer);
+    this.agentReviewTimer = setTimeout(() => {
+      this.agentReviewTimer = null;
+      void this.loadAgentReviews();
+    }, 800);
+  }
+
+  private async loadAgentReviews(): Promise<void> {
+    try {
+      const io = new ObsidianGatewayIO(this.app);
+      const all = await listReviews(io, this.levelPolicy().agentFolder);
+      this.agentReviews = all.filter((r) => !r.decision);
+    } catch (err) {
+      this.log.warn(`agent reviews unreadable: ${String(err)}`);
+      this.agentReviews = [];
+    }
+    this.refreshFootPanels();
+  }
+
+  /**
+   * Changes your agent proposed that the gateway held for you. Approving
+   * applies the change through the action executor (so it can be undone);
+   * either way the decision is recorded on the review file, which Sync
+   * carries back to the gateway.
+   */
+  private async reviewAgentChanges(): Promise<void> {
+    await this.loadAgentReviews();
+    if (this.agentReviews.length === 0) {
+      new Notice("Nothing from your agent is waiting for review.");
+      return;
+    }
+    const io = new ObsidianGatewayIO(this.app);
+    const agentFolder = this.levelPolicy().agentFolder;
+    const ctx = { io, store: new RecordStore(io, agentFolder), agentFolder, now: () => new Date() };
+    const decided = async (item: ReviewItem, decision: "approved" | "dismissed") => {
+      await markDecided(io, item, decision);
+      this.agentReviews = this.agentReviews.filter((r) => r.key !== item.key);
+      this.refreshFootPanels();
+    };
+    const items: ActionableItem[] = this.agentReviews.map((item) => ({
+      title: item.summary || "A change from your agent",
+      detail: `Held because ${item.reason}.${item.target ? ` → ${item.target}` : ""}`,
+      actions: [
+        {
+          label: "Approve",
+          run: async () => {
+            const plan = await planObservation(ctx, item.observation, { force: true });
+            if (plan.decision !== "apply") {
+              new Notice(`Can't apply: ${plan.reason}`);
+              return false;
+            }
+            await this.executor.apply({ title: plan.summary, changes: plan.changes });
+            await decided(item, "approved");
+            return true;
+          },
+        },
+        {
+          label: "Dismiss",
+          run: async () => {
+            await decided(item, "dismissed");
+            return true;
+          },
+        },
+      ],
+    }));
+    new ItemActionsModal(this.app, {
+      title: "From your agent",
+      description:
+        "Changes your agent proposed that were not certain enough to apply on their own. " +
+        "Text quoted from messages is untrusted. Approved changes can be undone.",
+      items,
+    }).open();
   }
 
   /** Privacy levels by folder (gateway/levels.ts). */
@@ -824,6 +913,8 @@ export default class AriadnePlugin extends Plugin {
               .length;
           },
           onTriage: () => void this.actions.triageInbox(),
+          agentReviewCount: () => this.agentReviews.length,
+          onAgentReview: () => void this.reviewAgentChanges(),
           themesTeaser: () => this.themesTeaserCount ?? 0,
           onThemes: () => void this.actions.findJournalThemes(),
           promotedToday: () => this.actions.promotedToday(),
@@ -1020,6 +1111,15 @@ export default class AriadnePlugin extends Plugin {
       if (path.endsWith(".md")) this.scheduler?.markDirty(path);
     };
     this.registerEvent(this.app.vault.on("create", (f) => markIfNote(f.path)));
+    // Changes an agent submitted that are waiting for the user arrive as
+    // files (often through Sync): keep the panel's count current.
+    const reviewTouched = (path: string) => {
+      if (underFolder(path, reviewFolder(this.levelPolicy().agentFolder))) this.scheduleAgentReviews();
+    };
+    this.registerEvent(this.app.vault.on("create", (f) => reviewTouched(f.path)));
+    this.registerEvent(this.app.vault.on("modify", (f) => reviewTouched(f.path)));
+    this.registerEvent(this.app.vault.on("delete", (f) => reviewTouched(f.path)));
+    this.app.workspace.onLayoutReady(() => this.scheduleAgentReviews());
     this.registerEvent(this.app.vault.on("modify", (f) => markIfNote(f.path)));
     this.registerEvent(
       this.app.vault.on("delete", (f) => this.scheduler?.markDeleted(f.path)),

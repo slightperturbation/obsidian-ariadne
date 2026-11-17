@@ -75,6 +75,9 @@ export interface AriadneViewDeps {
   synthesisDue?: () => boolean;
   onWeeklySynthesis?: () => void;
   /** Inbox size, for the Vault zone's triage row. */
+  /** Changes an agent submitted that are waiting for the user's decision. */
+  agentReviewCount?: () => number;
+  onAgentReview?: () => void;
   inboxCount?: () => number;
   onTriage?: () => void;
   /** Contextual verbs for the Now zone. */
@@ -793,6 +796,7 @@ export class AriadneView extends ItemView {
     const topics = (this.deps.wantedTopics?.() ?? []).filter(
       (t) => !this.session.wanted.has(t.title),
     );
+    this.renderAgentReviewRow(doc);
     this.renderFillOutRows(doc);
     this.renderWantedRows(doc, topics);
     this.renderResurfaced();
@@ -852,6 +856,27 @@ export class AriadneView extends ItemView {
       this.actionable(row, () => void this.app.workspace.openLinkText(r.path, "", false));
       this.wantedEl.appendChild(row);
     }
+  }
+
+  /** Agent changes held for the user: first in the zone — someone is waiting. */
+  private renderAgentReviewRow(doc: Document): void {
+    const count = this.deps.agentReviewCount?.() ?? 0;
+    if (count === 0 || !this.deps.onAgentReview) return;
+    const row = doc.createElement("div");
+    row.classList.add("ariadne-row", "ariadne-confidence-quiet");
+    const head = doc.createElement("div");
+    head.classList.add("ariadne-row-head");
+    const title = doc.createElement("span");
+    title.classList.add("ariadne-row-title");
+    title.textContent = "from your agent → review";
+    const n = doc.createElement("span");
+    n.classList.add("ariadne-wanted-count");
+    n.textContent = String(count);
+    head.append(title, n);
+    row.appendChild(head);
+    row.setAttribute("aria-label", `Review ${count} change${count === 1 ? "" : "s"} from your agent`);
+    this.actionable(row, () => this.deps.onAgentReview!());
+    this.wantedEl.appendChild(row);
   }
 
   /** Inbox as an open loop with its count — the triage flow, one click away. */

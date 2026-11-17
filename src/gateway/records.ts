@@ -150,6 +150,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?)?$/;
 export function cleanString(v: unknown, max = MAX_STRING): string {
   if (typeof v !== "string" && typeof v !== "number") return "";
   return String(v)
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
     .replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -291,7 +292,8 @@ export function appendHistory(
   entry: { at: string; state?: string; what?: string; source?: string; quote?: string },
 ): string {
   const when = entry.at.slice(0, 16).replace("T", " ");
-  const parts = [when, entry.state, entry.what && inertQuote(entry.what, 160), entry.source]
+  const what = entry.what && entry.what !== entry.state ? inertQuote(entry.what, 160) : undefined;
+  const parts = [when, entry.state, what, entry.source]
     .filter(Boolean)
     .join(" · ");
   let line = `- ${parts}\n`;
