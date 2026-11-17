@@ -42,7 +42,8 @@ export interface KindSpec {
 /** What a thing costs and how it is paid — shared by everything on an itinerary. */
 const COST = { price: "number", currency: "string", payment: "string", paid: "boolean" } as const;
 /** Where it came from in the user's own notes, which trip it belongs to, and its papers. */
-const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "text" } as const;
+/** `sensitive`: the owner marked it private — its place is never sent to an outside service (a map, a route planner). */
+const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "text", sensitive: "boolean" } as const;
 const BOOKING_STATES = ["planned", "booked", "changed", "done", "cancelled"] as const;
 
 export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
@@ -58,6 +59,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
       url: "string",
       address: "string",
       "travel-min": "number",
+      sensitive: "boolean",
       ...COST,
     },
     windowDays: 0,

@@ -310,6 +310,17 @@ describe("gateway: activities", () => {
     expect(unpaid.records.map((r) => r.title)).toEqual(["Castle tour"]);
   });
 
+  it("carries the owner's sensitive mark, and lets it be taken back", async () => {
+    const { gateway } = setup();
+    const made = await gateway.submissions.submit(act("clinic", "Clinic visit", "2026-11-26T14:00", { place: "Harley Street", refs: ["NOTEREF2"], fields: { sensitive: true } }), "theseus");
+    expect(made.status).toBe("applied");
+    const marked = await gateway.get(theseus, { kind: "activity", where: { sensitive: true } });
+    expect(marked.records.map((r) => r.title)).toEqual(["Clinic visit"]);
+    const undo: Observation = { key: "undo", kind: "activity", op: "update", match: { id: made.id!, class: "exact" }, refs: ["NOTEREF2"], fields: { sensitive: false }, evidence: note };
+    expect((await gateway.submissions.submit(undo, "theseus")).status).toBe("applied");
+    expect((await gateway.get(theseus, { kind: "activity", where: { sensitive: true } })).records).toHaveLength(0);
+  });
+
   it("holds a change the harness itself is unsure of", async () => {
     const { gateway } = setup();
     const made = await gateway.submissions.submit(act("tour", "Castle tour", "2026-11-26T14:00", { refs: ["NOTEREF1"] }), "theseus");
