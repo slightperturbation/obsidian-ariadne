@@ -593,7 +593,7 @@ export class Submissions {
     }
     if (data.length === 0 || data.length > MAX_PAPER_BYTES) return refuse("a paper is at most 10 MB");
     const ext = sniff(data);
-    if (!ext) return refuse("only PDF, PNG and JPEG files are kept");
+    if (!ext) return refuse("only PDF, PNG and JPEG files and wallet passes are kept");
     const folder = `${this.ctx.agentFolder}/Papers/${cleanString(o.folder, 120) ? safeTitle(cleanString(o.folder, 120)) : "Other"}`;
     const base = safeTitle(o.title ?? "");
     let path = `${folder}/${base}.${ext}`;

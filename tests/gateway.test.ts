@@ -716,6 +716,10 @@ describe("gateway: the write rules", () => {
     const away = await gateway.submissions.submit(paper("p6", "../../x", png, { folder: "../../Personal/Journal" }), "theseus");
     expect(away.path?.startsWith("Agent/Papers/")).toBe(true);
     expect(away.path).not.toContain("..");
+    // A wallet pass is kept; any other archive is not.
+    const zip = (names: string[]) => [0x50, 0x4b, 0x03, 0x04, ...names.flatMap((n) => [0, 0, ...[...n].map((c) => c.charCodeAt(0))])];
+    expect((await gateway.submissions.submit(paper("p7", "Boarding pass", zip(["manifest.json", "pass.json", "icon.png"])), "theseus")).path).toBe("Agent/Papers/2026 Lancaster BMVC/Boarding pass.pkpass");
+    expect((await gateway.submissions.submit(paper("p8", "archive", zip(["readme.txt", "run.exe"])), "theseus")).status).toBe("rejected");
     // A paper is not a record.
     expect((await gateway.get(theseus, {})).records).toHaveLength(0);
   });

@@ -46,12 +46,24 @@ function vaultPath(v: unknown): string {
 }
 
 /** What a stored file is, by its first bytes — never by what it is called. */
-export function sniff(data: Uint8Array): "pdf" | "png" | "jpg" | undefined {
+export function sniff(data: Uint8Array): "pdf" | "png" | "jpg" | "pkpass" | undefined {
   const at = (i: number) => data[i] ?? -1;
   if (at(0) === 0x25 && at(1) === 0x50 && at(2) === 0x44 && at(3) === 0x46 && at(4) === 0x2d) return "pdf";
   if (at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47 && at(4) === 0x0d && at(5) === 0x0a) return "png";
   if (at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "jpg";
+  // A wallet pass: an archive that holds a pass and its manifest. No other archive is kept.
+  if (at(0) === 0x50 && at(1) === 0x4b && at(2) === 0x03 && at(3) === 0x04 && holds(data, "pass.json") && holds(data, "manifest.json")) return "pkpass";
   return undefined;
+}
+
+/** Does an archive name a file? Its names are written in plain bytes in its headers. */
+function holds(data: Uint8Array, name: string): boolean {
+  const want = [...name].map((c) => c.charCodeAt(0));
+  outer: for (let i = 0; i + want.length <= data.length; i++) {
+    for (let j = 0; j < want.length; j++) if (data[i + j] !== want[j]) continue outer;
+    return true;
+  }
+  return false;
 }
 
 export const MAX_PAPER_BYTES = 10 * 1024 * 1024;
