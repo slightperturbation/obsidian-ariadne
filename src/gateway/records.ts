@@ -46,11 +46,17 @@ const COST = { price: "number", currency: "string", payment: "string", paid: "bo
 /** `booking`: what was booked, as the confirmation says it — room or fare, through whom, when, the terms. */
 const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "text", sensitive: "boolean", booking: "text" } as const;
 const BOOKING_STATES = ["planned", "booked", "changed", "done", "cancelled"] as const;
+/**
+ * `offered`: someone proposed it — a time, a room, a seat — and nothing yet says the owner took it.
+ * An offer is on record so that it can be found again; it is not a booking until a later message,
+ * or the owner, says it was accepted.
+ */
+const OFFERABLE_STATES = ["planned", "offered", "booked", "changed", "done", "cancelled"] as const;
 
 export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
   appointment: {
     folder: "Appointments",
-    states: ["requested", "confirmed", "rescheduled", "attended", "cancelled"],
+    states: ["offered", "requested", "confirmed", "rescheduled", "attended", "cancelled"],
     initial: "requested",
     terminal: ["attended", "cancelled"],
     fields: {
@@ -91,7 +97,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
    */
   transport: {
     folder: "Trips/Transport",
-    states: BOOKING_STATES,
+    states: OFFERABLE_STATES,
     initial: "booked",
     terminal: ["done", "cancelled"],
     fields: {
@@ -116,7 +122,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
    */
   stay: {
     folder: "Trips/Stays",
-    states: BOOKING_STATES,
+    states: OFFERABLE_STATES,
     initial: "booked",
     terminal: ["done", "cancelled"],
     fields: {
@@ -138,7 +144,7 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
    */
   activity: {
     folder: "Trips/Activities",
-    states: ["planned", "to-confirm", "asked", "confirmed", "done", "cancelled"],
+    states: ["planned", "offered", "to-confirm", "asked", "confirmed", "done", "cancelled"],
     initial: "planned",
     terminal: ["done", "cancelled"],
     fields: {

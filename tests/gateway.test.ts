@@ -154,6 +154,37 @@ describe("gateway: which record is this about?", () => {
   });
 });
 
+describe("gateway: an offer is not a booking", () => {
+  it("keeps something offered as offered, finds it again in its conversation, and takes it as confirmed only when told so", async () => {
+    const { gateway } = setup();
+    const offer = await gateway.submissions.submit(
+      {
+        key: "offer-1", kind: "appointment", op: "create", title: "Physio session", state: "offered", start: "2026-12-04T15:00",
+        thread: "gmail:primary:thread-9", counterparts: ["desk@physio.example"], fields: { with: "Main St Clinic" }, evidence: ev(),
+      } satisfies Observation,
+      "theseus",
+    );
+    expect(offer.status).toBe("applied");
+    const found = await gateway.resolve(theseus, { kind: "appointment", thread: "gmail:primary:thread-9" });
+    expect(found).toMatchObject({ class: "exact", state: "offered" });
+    const taken = await gateway.submissions.submit(
+      { key: "offer-1-yes", kind: "appointment", op: "update", match: { id: found.id!, class: "exact" }, query: { kind: "appointment", thread: "gmail:primary:thread-9" }, thread: "gmail:primary:thread-9", state: "confirmed", what: "accepted", evidence: ev() } satisfies Observation,
+      "theseus",
+    );
+    expect([taken.status, taken.reason]).toEqual(["applied", taken.reason]);
+    expect((await gateway.resolve(theseus, { kind: "appointment", thread: "gmail:primary:thread-9" })).state).toBe("confirmed");
+    // The same state exists for a journey, a stay and an activity — and not for a trip or a bill.
+    for (const kind of ["transport", "stay", "activity"] as const) {
+      const res = await gateway.submissions.submit({ key: `offered-${kind}`, kind, op: "create", title: `Offered ${kind}`, state: "offered", start: "2026-12-05T10:00", fields: kind === "transport" ? { mode: "train", number: "X1" } : {}, evidence: ev() } satisfies Observation, "theseus");
+      expect([kind, res.status, res.reason]).toEqual([kind, "applied", res.reason]);
+    }
+    for (const kind of ["trip", "bill"] as const) {
+      const res = await gateway.submissions.submit({ key: `offered-${kind}`, kind, op: "create", title: `Offered ${kind}`, state: "offered", start: "2026-12-05", evidence: ev() } satisfies Observation, "theseus");
+      expect(res.status).toBe("rejected");
+    }
+  });
+});
+
 const note = { source: "vault-note", at: "2026-11-16T09:00:00" };
 const made = async (gateway: Gateway, o: Observation) => (await gateway.submissions.submit(o, "theseus")).status;
 
