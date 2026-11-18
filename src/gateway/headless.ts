@@ -23,6 +23,8 @@ interface Config {
   policy: LevelPolicy;
   itineraryFolderNames?: string[];
   clients: ClientToken[];
+  /** Requests a client may make per minute (default 600). */
+  rateLimit?: number;
 }
 
 async function main(): Promise<void> {
@@ -64,7 +66,7 @@ async function main(): Promise<void> {
   const hosts = new Set<string>([`localhost:${port}`, `127.0.0.1:${port}`, ...(config.hosts ?? [])]);
   for (const b of binds) hosts.add(`${b}:${port}`);
   for (const address of binds) {
-    const server = createGatewayServer({ gateway, clients: config.clients, allowedHosts: [...hosts] });
+    const server = createGatewayServer({ gateway, clients: config.clients, allowedHosts: [...hosts], rateLimit: config.rateLimit });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(port, address, resolve);
