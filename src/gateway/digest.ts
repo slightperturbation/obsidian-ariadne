@@ -9,10 +9,10 @@ import { cleanString, inertQuote, safeTitle } from "./records";
  * message is made inert, so it cannot become a link, an embed, a tag or
  * HTML. Structure comes only from a small set of line openings, and a link
  * only from a typed part the gateway builds itself — a map from an address,
- * a telephone link from digits, a web link shown with the host it goes to.
+ * the way from one place to another, a telephone link from digits, a web link shown with the host it goes to.
  */
 export type DigestLink =
-  | { kind: "map"; q: string; label?: string }
+  | { kind: "map"; q: string; label?: string; from?: string; mode?: "walk" | "transit" | "car" }
   | { kind: "tel"; number: string; label?: string }
   | { kind: "wa"; number: string; label?: string }
   | { kind: "mail"; address: string; label?: string }
@@ -45,6 +45,9 @@ function vaultPath(v: unknown): string {
   return p;
 }
 
+/** Part of a link's address: nothing in it can close the link or be read as markup. */
+const enc = (v: string): string => encodeURIComponent(v).replace(/[!'()*~_]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+
 /** What a stored file is, by its first bytes — never by what it is called. */
 export function sniff(data: Uint8Array): "pdf" | "png" | "jpg" | "pkpass" | undefined {
   const at = (i: number) => data[i] ?? -1;
@@ -74,7 +77,14 @@ export function renderLink(link: unknown, agentFolder: string): string {
   switch (l.kind) {
     case "map": {
       const q = cleanString(l.q, 200);
-      return q ? `[${label(l.label, "map")}](https://maps.apple.com/?q=${encodeURIComponent(q)})` : "";
+      if (!q) return "";
+      // With a place to start from, it is the way there: the two ends and how the way is made.
+      const from = cleanString(l.from, 200);
+      if (from) {
+        const flag = l.mode === "walk" ? "w" : l.mode === "transit" ? "r" : l.mode === "car" ? "d" : "";
+        return `[${label(l.label, "route")}](https://maps.apple.com/?saddr=${enc(from)}&daddr=${enc(q)}${flag ? `&dirflg=${flag}` : ""})`;
+      }
+      return `[${label(l.label, "map")}](https://maps.apple.com/?q=${enc(q)})`;
     }
     case "tel": {
       const d = digits(l.number);

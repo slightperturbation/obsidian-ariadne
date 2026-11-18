@@ -656,6 +656,7 @@ describe("gateway: the write rules", () => {
       "- bad ones: ⟦6⟧ ⟦7⟧ ⟦8⟧ ⟦9⟧ ⟦10⟧ ⟦99⟧ end",
       "> ![[Agent/Papers/t/plan.png]] typed by hand",
       "⟦11⟧",
+      "    - leave **17:25** · 25 min by public transport from 🛏 Wren Hotel · ⟦12⟧ · ⟦13⟧",
       "Train 13:29 London Euston -> Lancaster <script>",
       "---",
     ];
@@ -672,6 +673,8 @@ describe("gateway: the write rules", () => {
       { kind: "tel", number: "12", label: "short" },
       { kind: "embed", path: "Personal/photo.png" },
       { kind: "embed", path: "Agent/Papers/2026 Lancaster BMVC/Station plan — Lancaster.jpg" },
+      { kind: "map", q: "51.52000,-0.10000", from: "51.50000,-0.12000", mode: "transit" },
+      { kind: "map", q: "NF2 6GB", from: "a) [x](y", mode: "by broom", label: "way [there]" },
     ];
     const res = await gateway.submissions.submit({ key: "links", kind: "digest", op: "digest", title: "Links", lines, links, evidence: ev("2026-11-16T07:15:00") } as Observation, "theseus");
     expect(res.status).toBe("applied");
@@ -681,6 +684,8 @@ describe("gateway: the write rules", () => {
     // An unknown callout kind is only words.
     expect(text).not.toContain("[!evil]");
     expect(text).toContain("- [ ] confirm · [WhatsApp](https://wa.me/447700900222) · [Call](tel:+4407700900222) · [map](https://maps.apple.com/?q=Lantern%20Court%2C%20NF2%206GB%20%26%20more)");
+    // The way from one place to another: both ends, and how the way is made. An unknown way is left unsaid.
+    expect(text).toContain("    - leave **17:25** · 25 min by public transport from 🛏 Wren Hotel · [route](https://maps.apple.com/?saddr=51.50000%2C-0.12000&daddr=51.52000%2C-0.10000&dirflg=r) · [way there](https://maps.apple.com/?saddr=a%29%20%5Bx%5D%28y&daddr=NF2%206GB)");
     // A web link says where it goes, whatever it is called.
     expect(text).toContain("[Website · wren.example](https://www.wren.example/rooms?x=1)");
     expect(text).toContain("[stay@wren.example](mailto:stay@wren.example)");
