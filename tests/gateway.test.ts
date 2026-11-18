@@ -696,6 +696,30 @@ describe("gateway: the write rules", () => {
     expect(text.trimEnd().endsWith("---")).toBe(true);
   });
 
+  it("keeps a paper — a ticket, a station plan — by what its bytes are, under its own name, never over another", async () => {
+    const { gateway, io } = setup();
+    const b64 = (bytes: number[]) => Buffer.from(Uint8Array.from(bytes)).toString("base64");
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3];
+    const pdf = [0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 9, 9];
+    const paper = (key: string, title: string, bytes: number[], over: Partial<Observation> = {}): Observation => ({ key, kind: "paper", op: "paper", title, folder: "2026 Lancaster BMVC", data: b64(bytes), evidence: ev("2026-11-16T07:15:00"), ...over });
+    const first = await gateway.submissions.submit(paper("p1", "Station plan — Lancaster.exe", png), "theseus");
+    expect(first).toMatchObject({ status: "applied", path: "Agent/Papers/2026 Lancaster BMVC/Station plan — Lancaster.exe.png" });
+    expect([...(io as unknown as { binaries: Map<string, Uint8Array> }).binaries.get(first.path!)!]).toEqual(png);
+    // The same submission again changes nothing; a different file of the same name sits beside it.
+    expect(await gateway.submissions.submit(paper("p1", "Station plan — Lancaster.exe", png), "theseus")).toMatchObject({ duplicate: true, path: first.path });
+    const second = await gateway.submissions.submit(paper("p2", "Station plan — Lancaster.exe", [...png, 4]), "theseus");
+    expect(second.path).toBe("Agent/Papers/2026 Lancaster BMVC/Station plan — Lancaster.exe 2.png");
+    expect((await gateway.submissions.submit(paper("p3", "E-ticket", pdf), "theseus")).path).toBe("Agent/Papers/2026 Lancaster BMVC/E-ticket.pdf");
+    // Not what it claims to be, empty, or headed somewhere else: refused, and nothing written.
+    expect((await gateway.submissions.submit(paper("p4", "script.pdf", [0x4d, 0x5a, 0x90, 0x00]), "theseus")).status).toBe("rejected");
+    expect((await gateway.submissions.submit(paper("p5", "nothing", []), "theseus")).status).toBe("rejected");
+    const away = await gateway.submissions.submit(paper("p6", "../../x", png, { folder: "../../Personal/Journal" }), "theseus");
+    expect(away.path?.startsWith("Agent/Papers/")).toBe(true);
+    expect(away.path).not.toContain("..");
+    // A paper is not a record.
+    expect((await gateway.get(theseus, {})).records).toHaveLength(0);
+  });
+
   it("matches a bill by payee and period, and a different period is a new bill", async () => {
     const { gateway } = setup();
     const bill = (key: string, period: string, due: string): Observation => ({
@@ -776,6 +800,7 @@ describe("gateway over HTTP", () => {
     expect((await call("delete", t, {})).status).toBe(404);
     const bad = await fetch(`${base}/v1/search`, { method: "POST", headers: { authorization: `Bearer ${t}` }, body: "{not json" });
     expect(bad.status).toBe(400);
-    expect((await call("search", t, { query: "x".repeat(600_000) })).status).toBe(400);
+    // The limit leaves room for one stored file of 10 MB and no more.
+    expect((await call("search", t, { query: "x".repeat(16 * 1024 * 1024) })).status).toBe(400);
   });
 });

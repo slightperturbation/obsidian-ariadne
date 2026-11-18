@@ -9,6 +9,8 @@ export interface GatewayIO extends VaultIO {
   list(folder: string): Promise<string[]>;
   /** Modification time (ms), or null when absent. */
   mtime(path: string): Promise<number | null>;
+  /** Store a file that is not text (a ticket, a station plan). Absent where the host cannot. */
+  createBinary?(path: string, data: Uint8Array): Promise<void>;
 }
 
 /** Small, fast, synchronous content hash (cyrb53) — change detection only. */
@@ -28,9 +30,14 @@ export function hashText(text: string): string {
 /** In-memory IO for tests. */
 export class MemoryIO implements GatewayIO {
   files = new Map<string, { content: string; mtime: number }>();
+  binaries = new Map<string, Uint8Array>();
   private clock = 1;
   async exists(path: string): Promise<boolean> {
-    return this.files.has(path);
+    return this.files.has(path) || this.binaries.has(path);
+  }
+  async createBinary(path: string, data: Uint8Array): Promise<void> {
+    if (await this.exists(path)) throw new Error(`exists: ${path}`);
+    this.binaries.set(path, data);
   }
   async read(path: string): Promise<string> {
     const f = this.files.get(path);

@@ -45,6 +45,17 @@ function vaultPath(v: unknown): string {
   return p;
 }
 
+/** What a stored file is, by its first bytes — never by what it is called. */
+export function sniff(data: Uint8Array): "pdf" | "png" | "jpg" | undefined {
+  const at = (i: number) => data[i] ?? -1;
+  if (at(0) === 0x25 && at(1) === 0x50 && at(2) === 0x44 && at(3) === 0x46 && at(4) === 0x2d) return "pdf";
+  if (at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47 && at(4) === 0x0d && at(5) === 0x0a) return "png";
+  if (at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "jpg";
+  return undefined;
+}
+
+export const MAX_PAPER_BYTES = 10 * 1024 * 1024;
+
 export function renderLink(link: unknown, agentFolder: string): string {
   if (!link || typeof link !== "object") return "";
   const l = link as Record<string, unknown>;
@@ -55,7 +66,9 @@ export function renderLink(link: unknown, agentFolder: string): string {
     }
     case "tel": {
       const d = digits(l.number);
-      return d ? `[${label(l.label, `+${d}`)}](tel:+${d})` : label(l.label, "");
+      // A number written with its country code dials from anywhere; one without is dialled as written.
+      const plus = /^\s*\+/.test(cleanString(l.number, 40)) ? "+" : "";
+      return d ? `[${label(l.label, `${plus}${d}`)}](tel:${plus}${d})` : label(l.label, "");
     }
     case "wa": {
       const d = digits(l.number);

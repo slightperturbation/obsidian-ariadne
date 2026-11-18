@@ -47,6 +47,16 @@ export class NodeIO implements GatewayIO {
     await fs.rename(tmp, abs);
   }
 
+  async createBinary(path: string, data: Uint8Array): Promise<void> {
+    const abs = this.abs(path);
+    if (!abs) throw new Error(`refused: ${path}`);
+    if (await this.exists(path)) throw new Error(`exists: ${path}`);
+    await fs.mkdir(nodePath.dirname(abs), { recursive: true });
+    const tmp = `${abs}.tmp-${process.pid}-${Date.now()}`;
+    await fs.writeFile(tmp, data);
+    await fs.rename(tmp, abs);
+  }
+
   async create(path: string, content: string): Promise<void> {
     const abs = this.abs(path);
     if (!abs) throw new Error(`refused path: ${path}`);

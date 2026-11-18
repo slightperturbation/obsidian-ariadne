@@ -55,7 +55,8 @@ async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
  * token. One token per client; the token decides the client's class.
  */
 export function createGatewayServer(opts: HttpOptions): Server {
-  const max = opts.maxBodyBytes ?? 512 * 1024;
+  // Room for one stored file (a ticket of up to 10 MB, written in base64) and its envelope.
+  const max = opts.maxBodyBytes ?? 15 * 1024 * 1024;
   const limit = opts.rateLimit ?? 600;
   const windows = new Map<string, { start: number; count: number }>();
   const hosts = new Set(opts.allowedHosts.map((h) => h.toLowerCase()));

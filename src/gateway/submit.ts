@@ -1,5 +1,5 @@
 import type { FileChange } from "../actions/framework";
-import { MAX_DIGEST_LINES, MAX_DIGEST_LINKS, digestPath, renderDigest, type DigestLink } from "./digest";
+import { MAX_DIGEST_LINES, MAX_DIGEST_LINKS, MAX_PAPER_BYTES, digestPath, renderDigest, sniff, type DigestLink } from "./digest";
 import { joinNote, splitNote } from "./frontmatter";
 import { hashText, type GatewayIO } from "./io";
 import {
@@ -42,8 +42,8 @@ export interface Evidence {
 export interface Observation {
   /** Idempotency key: the same key is never applied twice. */
   key: string;
-  kind: RecordKind | "log" | "digest";
-  op: "create" | "update" | "log" | "digest";
+  kind: RecordKind | "log" | "digest" | "paper";
+  op: "create" | "update" | "log" | "digest" | "paper";
   /** For updates: the record, and how surely the harness matched it. */
   match?: { id: string; class: "exact" | "unique" | "adjudicated" };
   /** The identifying facts the harness resolved with; the gateway re-checks them. */
@@ -70,8 +70,13 @@ export interface Observation {
   lines?: string[];
   /** For op "digest": typed links the gateway builds itself — a map, a telephone number, another note. */
   links?: DigestLink[];
-  /** For op "digest": a folder under Itineraries to keep it in (a trip's own folder). */
+  /** For op "digest": a folder under Itineraries to keep it in (a trip's own folder). For "paper": the folder under Papers. */
   folder?: string;
+  /**
+   * For op "paper": a file to keep — a ticket, a station plan, a picture of a
+   * timetable — in base64. Kept as it is: never opened, converted or run.
+   */
+  data?: string;
   /**
    * The harness is not sure this should happen (an entry has gone from the
    * user's note — cancelled, or only reworded?): hold it for the user.
@@ -141,10 +146,14 @@ export function validateObservation(raw: unknown): string[] {
   if (!raw || typeof raw !== "object") return ["observation must be an object"];
   const o = raw as Partial<Observation>;
   if (typeof o.key !== "string" || !o.key.trim() || o.key.length > MAX_KEY) errors.push("key is required (≤200 chars)");
-  if (o.op !== "create" && o.op !== "update" && o.op !== "log" && o.op !== "digest") errors.push("op must be create, update, log or digest");
+  if (o.op !== "create" && o.op !== "update" && o.op !== "log" && o.op !== "digest" && o.op !== "paper") errors.push("op must be create, update, log, digest or paper");
   if (o.op === "log") {
     if (o.kind !== "log") errors.push('op "log" needs kind "log"');
     if (!cleanString(o.line)) errors.push("log needs a line");
+  } else if (o.op === "paper") {
+    if (o.kind !== "paper") errors.push('op "paper" needs kind "paper"');
+    if (!cleanString(o.title)) errors.push("paper needs a title");
+    if (typeof o.data !== "string" || !o.data || o.data.length > Math.ceil((MAX_PAPER_BYTES * 4) / 3) + 8) errors.push("paper needs its data, up to 10 MB");
   } else if (o.op === "digest") {
     if (o.kind !== "digest") errors.push('op "digest" needs kind "digest"');
     if (!cleanString(o.title)) errors.push("digest needs a title");
@@ -373,6 +382,8 @@ export async function planObservation(
   const o = raw as Observation;
   if (o.op === "log") return planLog(ctx, o);
   if (o.op === "digest") return planDigest(ctx, o);
+  // A paper is kept directly by the submissions service, which holds the bytes; there is nothing to plan.
+  if (o.op === "paper") return { decision: "reject", reason: "a paper is kept, not planned", summary: "Paper", changes: [] };
   if (o.op === "create") return planCreate(ctx, o, !!opts.force);
   return planUpdate(ctx, o, !!opts.force);
 }
@@ -521,6 +532,7 @@ export class Submissions {
       const prior = await this.ledger.get(key);
       if (prior) return { key, ...prior, duplicate: true };
     }
+    if ((raw as { op?: unknown } | null)?.op === "paper") return this.keepPaper(raw, key, client);
     const plan = await planObservation(this.ctx, raw);
     const at = this.ctx.now().toISOString();
     const base = { reason: plan.reason, summary: plan.summary, id: plan.id, path: plan.path, at, client };
@@ -554,6 +566,45 @@ export class Submissions {
     else await this.ctx.io.create(path, text);
     const entry: LedgerEntry = { status: "review", ...base };
     await this.ledger.set(key, entry);
+    return { key, ...entry };
+  }
+
+  /**
+   * Keep a file under the agent's Papers folder. What kind of file it is, is
+   * told from its bytes; its name is made here from the title; nothing is
+   * ever overwritten. The bytes are stored as they came and never opened.
+   */
+  private async keepPaper(raw: unknown, key: string, client: string): Promise<SubmitResult> {
+    const at = this.ctx.now().toISOString();
+    const o = raw as Observation;
+    const refuse = async (reason: string): Promise<SubmitResult> => {
+      const entry: LedgerEntry = { status: "rejected", reason, summary: "Paper", at, client };
+      if (key) await this.ledger.set(key, entry);
+      return { key, ...entry };
+    };
+    const errors = validateObservation(raw);
+    if (errors.length > 0) return refuse(errors.slice(0, 3).join("; "));
+    if (!this.ctx.io.createBinary) return refuse("this gateway cannot store files");
+    let data: Uint8Array;
+    try {
+      data = Uint8Array.from(Buffer.from(o.data ?? "", "base64"));
+    } catch {
+      return refuse("the data is not base64");
+    }
+    if (data.length === 0 || data.length > MAX_PAPER_BYTES) return refuse("a paper is at most 10 MB");
+    const ext = sniff(data);
+    if (!ext) return refuse("only PDF, PNG and JPEG files are kept");
+    const folder = `${this.ctx.agentFolder}/Papers/${cleanString(o.folder, 120) ? safeTitle(cleanString(o.folder, 120)) : "Other"}`;
+    const base = safeTitle(o.title ?? "");
+    let path = `${folder}/${base}.${ext}`;
+    for (let n = 2; n < 100 && (await this.ctx.io.exists(path)); n++) path = `${folder}/${base} ${n}.${ext}`;
+    try {
+      await this.ctx.io.createBinary(path, data);
+    } catch (err) {
+      return { key, status: "rejected", reason: String(err), summary: "Paper", at, client };
+    }
+    const entry: LedgerEntry = { status: "applied", reason: "a paper kept by the agent", summary: `Paper · ${base}`, path, at, client };
+    if (key) await this.ledger.set(key, entry);
     return { key, ...entry };
   }
 
