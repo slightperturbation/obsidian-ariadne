@@ -1,4 +1,5 @@
 import type { FileChange } from "../actions/framework";
+import { MAX_DIGEST_LINES, MAX_DIGEST_LINKS, digestPath, renderDigest, type DigestLink } from "./digest";
 import { joinNote, splitNote } from "./frontmatter";
 import { hashText, type GatewayIO } from "./io";
 import {
@@ -63,9 +64,14 @@ export interface Observation {
   /**
    * For op "digest": the whole of a note the agent keeps for the user to read
    * (a trip's itinerary as the records have it). Replaced each time; never a record.
-   * A line may open with "## " (a heading), "- " or "  - " (a list item); the rest is plain text.
+   * A line may open with a heading, a list item or a callout (see digest.ts); the rest is plain
+   * text, in which ⟦n⟧ stands for the n-th of `links`.
    */
   lines?: string[];
+  /** For op "digest": typed links the gateway builds itself — a map, a telephone number, another note. */
+  links?: DigestLink[];
+  /** For op "digest": a folder under Itineraries to keep it in (a trip's own folder). */
+  folder?: string;
   /**
    * The harness is not sure this should happen (an entry has gone from the
    * user's note — cancelled, or only reworded?): hold it for the user.
@@ -145,6 +151,7 @@ export function validateObservation(raw: unknown): string[] {
     if (!Array.isArray(o.lines) || o.lines.length === 0 || o.lines.length > MAX_DIGEST_LINES || o.lines.some((l) => typeof l !== "string")) {
       errors.push(`digest needs 1–${MAX_DIGEST_LINES} lines of text`);
     }
+    if (o.links !== undefined && (!Array.isArray(o.links) || o.links.length > MAX_DIGEST_LINKS)) errors.push(`digest takes at most ${MAX_DIGEST_LINKS} links`);
   } else if (!isKind(o.kind)) {
     errors.push("unknown kind");
   } else {
@@ -228,33 +235,20 @@ async function planLog(ctx: SubmitContext, o: Observation): Promise<Plan> {
   };
 }
 
-const MAX_DIGEST_LINES = 600;
 const DIGEST_TYPE = "agent-digest";
 
-/** One line of a digest: its list or heading mark kept, everything after it made inert. */
-function digestLine(raw: string): string {
-  const m = /^(## |  - |- )?([\s\S]*)$/.exec(raw.replace(/[\r\n]+/g, " "))!;
-  const body = inertQuote(m[2], 300);
-  if (!body) return "";
-  return `${m[1] ?? ""}${body}`;
-}
-
 /**
- * A note the agent keeps for the user to read: one per title, under the
- * agent's folder, written whole each time. It is not a record — nothing
- * resolves against it — and it only ever replaces a digest of its own.
+ * A note the agent keeps for the user to read: one per title (and optional
+ * folder), under the agent's Itineraries folder, written whole each time.
+ * It is not a record — nothing resolves against it — and it only ever
+ * replaces a digest of its own. How its text is made safe: see digest.ts.
  */
 async function planDigest(ctx: SubmitContext, o: Observation): Promise<Plan> {
-  const title = safeTitle(o.title ?? "");
-  const path = `${ctx.agentFolder}/Itineraries/${title}.md`;
+  const path = digestPath(ctx.agentFolder, o.title, o.folder);
+  const title = path.slice(path.lastIndexOf("/") + 1, -3);
   const summary = `Itinerary · ${title}`;
-  const body = [
-    "> [!robot] As your agent has it",
-    "> Rebuilt from the agent's records whenever they change. Edits here are overwritten: change your own trip note instead.",
-    "",
-    ...(o.lines ?? []).map(digestLine),
-  ].join("\n");
-  const after = joinNote({ type: DIGEST_TYPE, title, authorship: "agent", "agent-access": "local", updated: localStamp(ctx.now()) }, `${body.trimEnd()}\n`);
+  const body = renderDigest(o.lines ?? [], Array.isArray(o.links) ? o.links : [], ctx.agentFolder);
+  const after = joinNote({ type: DIGEST_TYPE, authorship: "agent", "agent-access": "local", updated: localStamp(ctx.now()) }, body);
   if (!(await ctx.io.exists(path))) {
     return { decision: "apply", reason: "the agent's own digest", summary, changes: [{ type: "create", path, after }], path };
   }

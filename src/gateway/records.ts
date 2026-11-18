@@ -43,7 +43,8 @@ export interface KindSpec {
 const COST = { price: "number", currency: "string", payment: "string", paid: "boolean" } as const;
 /** Where it came from in the user's own notes, which trip it belongs to, and its papers. */
 /** `sensitive`: the owner marked it private — its place is never sent to an outside service (a map, a route planner). */
-const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "text", sensitive: "boolean" } as const;
+/** `booking`: what was booked, as the confirmation says it — room or fare, through whom, when, the terms. */
+const ITINERARY = { trip: "string", hub: "string", tickets: "list", url: "string", notes: "text", sensitive: "boolean", booking: "text" } as const;
 const BOOKING_STATES = ["planned", "booked", "changed", "done", "cancelled"] as const;
 
 export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
@@ -60,6 +61,8 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
       address: "string",
       "travel-min": "number",
       sensitive: "boolean",
+      booking: "text",
+      options: "text",
       ...COST,
     },
     windowDays: 0,
@@ -149,6 +152,8 @@ export const SPECS: Readonly<Record<RecordKind, KindSpec>> = {
       "confirm-by": "date",
       "travel-min": "number",
       "arrive-by": "date",
+      /** What was on offer and at what price, as the provider's messages put it. */
+      options: "text",
       conference: "string",
       official: "boolean",
       ...ITINERARY,

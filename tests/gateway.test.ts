@@ -610,17 +610,17 @@ describe("gateway: the write rules", () => {
     expect(text).toContain("agent-access: local");
   });
 
-  it("keeps one itinerary note per trip for the user to read, replaced whole, inert, and never over a note of theirs", async () => {
+  it("keeps notes for the user to read — replaced whole, inert, never over a note of theirs, and not a record", async () => {
     const { gateway, io } = setup();
-    const digest = (key: string, lines: string[], title = "2026 Lancaster BMVC"): Observation => ({ key, kind: "digest", op: "digest", title, lines, evidence: ev("2026-11-16T07:15:00") });
-    const first = await gateway.submissions.submit(digest("d1", ["## Thu 19 Nov", "- 18:00 Dinner · [[Secret note]] <b>x</b> #tag", "  - leave by 17:20", "", "Cash to bring: £65"]), "theseus");
+    const digest = (key: string, lines: string[], over: Partial<Observation> = {}): Observation => ({ key, kind: "digest", op: "digest", title: "2026 Lancaster BMVC", lines, evidence: ev("2026-11-16T07:15:00"), ...over });
+    const first = await gateway.submissions.submit(digest("d1", ["## Thu 19 Nov", "- **18:00** Dinner · [[Secret note]] <b>x</b> #tag", "    - leave **17:20**", "", "Cash to bring: £65"]), "theseus");
     expect(first.status).toBe("applied");
     const path = "Agent/Itineraries/2026 Lancaster BMVC.md";
     const text = await io.read(path);
     expect(text).toContain("type: agent-digest");
     expect(text).toContain("agent-access: local");
-    expect(text).toContain("## Thu 19 Nov\n- 18:00 Dinner");
-    expect(text).toContain("  - leave by 17:20");
+    expect(text).toContain("## Thu 19 Nov\n- **18:00** Dinner");
+    expect(text).toContain("\n    - leave **17:20**");
     // Text that came from messages cannot make a link, a tag or markup of the user's vault.
     expect(text).not.toContain("[[Secret note]]");
     expect(text).not.toContain("<b>");
@@ -634,9 +634,66 @@ describe("gateway: the write rules", () => {
     expect((await gateway.get(theseus, {})).records).toHaveLength(0);
     // A note of the user's own at that path is left alone.
     await io.create("Agent/Itineraries/Mine.md", "my own words");
-    expect((await gateway.submissions.submit(digest("d3", ["- x"], "Mine"), "theseus")).status).toBe("rejected");
+    expect((await gateway.submissions.submit(digest("d3", ["- x"], { title: "Mine" }), "theseus")).status).toBe("rejected");
     expect(await io.read("Agent/Itineraries/Mine.md")).toBe("my own words");
     expect((await gateway.submissions.submit({ ...digest("d4", []), lines: [] }, "theseus")).status).toBe("rejected");
+    // One entry's own page goes in the trip's folder — one folder deep, and nowhere else.
+    await gateway.submissions.submit(digest("d5", ["# Wren Hotel"], { title: "Wren Hotel (19 Nov)", folder: "2026 Lancaster BMVC" }), "theseus");
+    expect(await io.exists("Agent/Itineraries/2026 Lancaster BMVC/Wren Hotel (19 Nov).md")).toBe(true);
+    const escaped = await gateway.submissions.submit(digest("d6", ["- x"], { title: "x", folder: "../../Personal/Journal" }), "theseus");
+    expect(escaped.path?.startsWith("Agent/Itineraries/")).toBe(true);
+    expect(escaped.path).not.toContain("..");
+  });
+
+  it("builds a digest's links itself from typed parts, and lets nothing else be one", async () => {
+    const { gateway, io } = setup();
+    const lines = [
+      "> [!tip] Today · Fri 20 Nov",
+      "> - **18:00** ⟦0⟧ — leave **17:25**",
+      "> [!evil]- not a kind of callout",
+      "- [ ] confirm · ⟦1⟧ · ⟦2⟧ · ⟦3⟧",
+      "- site ⟦4⟧ and ⟦5⟧",
+      "- bad ones: ⟦6⟧ ⟦7⟧ ⟦8⟧ ⟦9⟧ ⟦10⟧ ⟦99⟧ end",
+      "> ![[Agent/Papers/t/plan.png]] typed by hand",
+      "⟦11⟧",
+      "Train 13:29 London Euston -> Lancaster <script>",
+      "---",
+    ];
+    const links = [
+      { kind: "note", path: "Agent/Itineraries/2026 Lancaster BMVC/River supper club (20 Nov).md", label: "River supper [club]" },
+      { kind: "wa", number: "+44 7700 900222" },
+      { kind: "tel", number: "+44 (0)7700 900222", label: "Call" },
+      { kind: "map", q: "Lantern Court, NF2 6GB & more" },
+      { kind: "web", url: "https://www.wren.example/rooms?x=1", label: "Website" },
+      { kind: "mail", address: "stay@wren.example" },
+      { kind: "web", url: "javascript:alert(1)", label: "click" },
+      { kind: "web", url: "http://plain.example", label: "plain" },
+      { kind: "note", path: "../../Personal/Journal/secret", label: "up" },
+      { kind: "tel", number: "12", label: "short" },
+      { kind: "embed", path: "Personal/photo.png" },
+      { kind: "embed", path: "Agent/Papers/2026 Lancaster BMVC/Station plan — Lancaster.jpg" },
+    ];
+    const res = await gateway.submissions.submit({ key: "links", kind: "digest", op: "digest", title: "Links", lines, links, evidence: ev("2026-11-16T07:15:00") } as Observation, "theseus");
+    expect(res.status).toBe("applied");
+    const text = await io.read("Agent/Itineraries/Links.md");
+    expect(text).toContain("> [!tip] Today · Fri 20 Nov");
+    expect(text).toContain("> - **18:00** [[Agent/Itineraries/2026 Lancaster BMVC/River supper club (20 Nov)|River supper club]] — leave **17:25**");
+    // An unknown callout kind is only words.
+    expect(text).not.toContain("[!evil]");
+    expect(text).toContain("- [ ] confirm · [WhatsApp](https://wa.me/447700900222) · [Call](tel:+4407700900222) · [map](https://maps.apple.com/?q=Lantern%20Court%2C%20NF2%206GB%20%26%20more)");
+    // A web link says where it goes, whatever it is called.
+    expect(text).toContain("[Website · wren.example](https://www.wren.example/rooms?x=1)");
+    expect(text).toContain("[stay@wren.example](mailto:stay@wren.example)");
+    // What is not a safe link is left as its words, or dropped.
+    expect(text).toContain("- bad ones: click plain up short end");
+    expect(text).not.toContain("javascript:");
+    expect(text).not.toContain("http://plain.example");
+    expect(text).not.toContain("Personal/");
+    // An embed is only ever one of the agent's own papers, and only as a typed link — never typed by hand.
+    expect(text).toContain("\n![[Agent/Papers/2026 Lancaster BMVC/Station plan — Lancaster.jpg]]\n");
+    expect(text).not.toContain("![[Agent/Papers/t/plan.png]]");
+    expect(text).toContain("Train 13:29 London Euston → Lancaster 'script'");
+    expect(text.trimEnd().endsWith("---")).toBe(true);
   });
 
   it("matches a bill by payee and period, and a different period is a new bill", async () => {
