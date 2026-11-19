@@ -537,3 +537,5 @@
 .ariadne-chat-proposal-status { color: var(--text-muted); font-size: var(--font-ui-small); }
 .ariadne-chat-form { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--background-modifier-border); align-items: flex-end; }
 .ariadne-chat-input { flex: 1 1 auto; resize: vertical; min-height: 2.6em; }
+.ariadne-chat-pick { max-width: 100%; flex: 1 1 140px; min-width: 0; font-size: var(--font-ui-smaller); }
+.ariadne-chat-refresh { padding: 0 4px; }

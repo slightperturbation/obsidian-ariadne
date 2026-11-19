@@ -29,6 +29,9 @@ export interface AriadneSettings {
   /** Local model preferences, comma-separated; each endpoint serves the
    * first one it has installed. */
   localModels: string;
+  /** The model picked in the vault chat, as "endpoint|model"; empty = the
+   * preferences above. Only ever one of the local endpoints. */
+  chatModel: string;
   /** On battery, prefer remote endpoints and use this machine's own model
    * only as a last resort for user-initiated, local-only work. */
   avoidLocalOnBattery: boolean;
@@ -158,6 +161,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   gemmaModel: "gemma4:26b",
   localEndpoints: "",
   localModels: "",
+  chatModel: "",
   avoidLocalOnBattery: true,
   routingMode: "auto",
   costLimitUsd: 2,

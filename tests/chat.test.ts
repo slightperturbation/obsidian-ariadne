@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { auditRecords } from "../src/chat/audit";
 import { ChatEngine, parseStep, type ChatMessage } from "../src/chat/engine";
 import { vaultTools, type VaultAccess } from "../src/chat/tools";
+import { choiceKey, listLocalModels, parseChoice } from "../src/chat/models";
 import type { AgentRecord } from "../src/gateway/records";
 
 const notes: Record<string, string> = {
@@ -214,5 +215,29 @@ describe("vault chat: records", () => {
     expect(rules).toContain("trip not found: Agent/Old tour.md");
     // What is in order is not mentioned.
     expect(rules.some((r) => r.includes("2026 Northfield.md") && !r.includes("outside"))).toBe(false);
+  });
+});
+
+describe("vault chat: picking a local model", () => {
+  it("lists what each local endpoint has installed, leaves out models that cannot converse, and says when one is off", async () => {
+    const fetchImpl = (async (input: string | URL) => {
+      const url = String(input);
+      if (url === "http://localhost:11434/v1/models") {
+        return { ok: true, json: async () => ({ data: [{ id: "qwen3.5:35b" }, { id: "gemma4:31b" }, { id: "embeddinggemma:latest" }, { id: "gemma4:31b" }, { id: 7 }] }) } as Response;
+      }
+      throw new Error("unreachable");
+    }) as typeof fetch;
+    const groups = await listLocalModels(["http://localhost:11434/v1/", "http://homebox.example.ts.net:11434/v1"], fetchImpl);
+    expect(groups).toEqual([
+      { url: "http://localhost:11434/v1", label: "this Mac", loopback: true, reachable: true, models: ["gemma4:31b", "qwen3.5:35b"] },
+      { url: "http://homebox.example.ts.net:11434/v1", label: "homebox", loopback: false, reachable: false, models: [] },
+    ]);
+  });
+
+  it("keeps a pick as the endpoint and the model, whatever the model is called", () => {
+    const key = choiceKey("http://localhost:11434/v1", "hf.co/someone/model-GGUF:Q4_K_M");
+    expect(parseChoice(key)).toEqual({ url: "http://localhost:11434/v1", model: "hf.co/someone/model-GGUF:Q4_K_M" });
+    expect(parseChoice("")).toBeNull();
+    expect(parseChoice("gemma4:31b")).toBeNull();
   });
 });

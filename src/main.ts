@@ -65,6 +65,8 @@ import { rankFillOut, type FillOutCandidate, type FillOutRow } from "./margin/fi
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 import { ChatEngine } from "./chat/engine";
 import { vaultTools, type VaultAccess } from "./chat/tools";
+import { listLocalModels, parseChoice } from "./chat/models";
+import { GemmaProvider } from "./model/providers/gemma";
 import { CHAT_VIEW_TYPE, ChatView } from "./chat/view";
 
 const obsidianFetch = makeObsidianFetch(requestUrl);
@@ -114,6 +116,8 @@ export default class AriadnePlugin extends Plugin {
   private chatEngine?: ChatEngine;
   /** Journal entries may be read in the vault chat. Off at every start: it is turned on in the pane, for that session. */
   private chatReadsJournal = false;
+  /** The provider for the model picked in the chat, kept while the pick stands. */
+  private chatPicked?: { key: string; provider: GemmaProvider };
   private actions!: ActionsController;
   private lastMarkdown: MarkdownView | null = null;
   private policy!: DevicePolicy;
@@ -983,6 +987,15 @@ export default class AriadnePlugin extends Plugin {
             if (!active) return { label: "no local model reachable", ready: false };
             return { label: `${active.model ?? "local model"} · ${active.loopback ? "this machine" : active.label}`, ready: true };
           },
+          models: {
+            list: () => listLocalModels(parseEndpoints(this.settings.localEndpoints), obsidianFetch),
+            chosen: () => this.settings.chatModel,
+            choose: (value) => {
+              this.settings.chatModel = value;
+              this.chatPicked = undefined;
+              void this.saveSettings();
+            },
+          },
           apply: (proposal) => this.executor.apply(proposal),
           openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
           journal: {
@@ -1849,7 +1862,24 @@ export default class AriadnePlugin extends Plugin {
       today,
     };
     this.chatEngine = new ChatEngine({
-      complete: async (prompt, opts) => (await pool.complete(prompt, { system: opts.system, schema: opts.schema, maxTokens: opts.maxTokens, lastResort: true })).text,
+      complete: async (prompt, opts) => {
+        const call = { system: opts.system, schema: opts.schema, maxTokens: opts.maxTokens };
+        // A model picked in the pane answers, on the endpoint it was picked from — and only if that
+        // endpoint is still one of the local ones. No pick: the pool's own preferences.
+        const pick = parseChoice(this.settings.chatModel);
+        if (pick && parseEndpoints(this.settings.localEndpoints).some((u) => u.trim().replace(/\/+$/, "") === pick.url)) {
+          if (this.chatPicked?.key !== this.settings.chatModel) {
+            this.chatPicked = { key: this.settings.chatModel, provider: new GemmaProvider({ baseUrl: () => pick.url, models: () => [pick.model], fetch: obsidianFetch }) };
+          }
+          try {
+            return (await this.chatPicked.provider.complete(prompt, call)).text;
+          } catch (err) {
+            // Said as it is: another model is not quietly used in place of the one that was picked.
+            throw new Error(`${pick.model} did not answer (${err instanceof Error ? err.message : "error"}) — pick another model, or start this one`);
+          }
+        }
+        return (await pool.complete(prompt, { ...call, lastResort: true })).text;
+      },
       tools: vaultTools(vault),
       today: () => `${today()} (${new Date().toLocaleDateString("en-US", { weekday: "long" })})`,
     });

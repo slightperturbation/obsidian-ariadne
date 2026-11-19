@@ -2,14 +2,22 @@ import { ItemView, MarkdownRenderer, type WorkspaceLeaf } from "obsidian";
 import { ConflictError, type ActionProposal, type ExecutedAction } from "../actions/framework";
 import { compactDiff, diffLines } from "../ui/diff";
 import type { ChatEngine, ChatMessage } from "./engine";
+import { choiceKey, type ModelGroup } from "./models";
 
 export const CHAT_VIEW_TYPE = "ariadne-chat";
 
 export interface ChatViewDeps {
   /** The engine, or null when no local model is set up. */
   engine: () => ChatEngine | null;
-  /** Who is answering, for the header: "gemma4:31b · this Mac", or why nobody is. */
+  /** Who answers when nothing is picked: "gemma4:31b · this Mac", or why nobody can. */
   model: () => { label: string; ready: boolean };
+  /** The local models there are to pick from, and the pick. */
+  models: {
+    list: () => Promise<ModelGroup[]>;
+    /** "endpoint|model", or "" for the default. */
+    chosen: () => string;
+    choose: (value: string) => void;
+  };
   /** Apply a proposal the owner accepted; the result can undo it. */
   apply: (proposal: ActionProposal) => Promise<ExecutedAction>;
   openNote: (path: string) => void;
@@ -29,6 +37,8 @@ export class ChatView extends ItemView {
   private inputEl!: HTMLTextAreaElement;
   private sendEl!: HTMLButtonElement;
   private headEl!: HTMLElement;
+  /** What the endpoints said they have, when last asked. */
+  private groups: ModelGroup[] | null = null;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -67,6 +77,48 @@ export class ChatView extends ItemView {
     });
     this.renderHead();
     this.renderIntro();
+    void this.refreshModels();
+  }
+
+  /** Ask each local endpoint what it has installed, and show it in the picker. */
+  private async refreshModels(): Promise<void> {
+    try {
+      this.groups = await this.deps.models.list();
+    } catch {
+      this.groups = [];
+    }
+    this.renderHead();
+  }
+
+  /** The picker: every model installed on each local endpoint, and the default. */
+  private renderPicker(head: HTMLElement): void {
+    const chosen = this.deps.models.chosen();
+    const fallback = this.deps.model();
+    const select = head.createEl("select", { cls: "ariadne-chat-pick dropdown", attr: { "aria-label": "Local model that answers", title: "The local model that answers in this chat" } });
+    select.createEl("option", { value: "", text: `Default · ${fallback.label}` });
+    let found = chosen === "";
+    for (const group of this.groups ?? []) {
+      const og = select.createEl("optgroup", { attr: { label: group.reachable ? group.label : `${group.label} — not reachable` } });
+      for (const model of group.models) {
+        const value = choiceKey(group.url, model);
+        og.createEl("option", { value, text: model });
+        if (value === chosen) found = true;
+      }
+    }
+    // A pick that is not there now (its machine is off, the model was removed) is still shown, as what it is.
+    if (!found) select.createEl("option", { value: chosen, text: `${chosen.split("|").pop() ?? chosen} — not available now` });
+    select.value = chosen;
+    select.addEventListener("change", () => {
+      if (this.busy) {
+        select.value = this.deps.models.chosen();
+        return;
+      }
+      this.deps.models.choose(select.value);
+      const label = select.selectedOptions[0]?.text ?? "the default";
+      this.note(`Answers now come from ${select.value ? `${label} (${this.groups?.find((g) => select.value.startsWith(`${g.url}|`))?.label ?? "local"})` : label.replace(/^Default · /, "the default, ")}.`);
+    });
+    const again = head.createEl("button", { cls: "ariadne-chat-refresh clickable-icon", text: "↻", attr: { "aria-label": "Look again for installed models", title: "Look again for installed models" } });
+    again.addEventListener("click", () => void this.refreshModels());
   }
 
   async onClose(): Promise<void> {
@@ -76,8 +128,7 @@ export class ChatView extends ItemView {
   private renderHead(): void {
     const head = this.headEl;
     head.replaceChildren();
-    const model = this.deps.model();
-    head.createSpan({ cls: "ariadne-chat-model", text: model.label });
+    this.renderPicker(head);
     head.createSpan({ cls: "ariadne-chat-local", text: "local only", attr: { title: "Answered by a model on your own machines. Nothing in this chat is sent to a cloud model." } });
     if (this.deps.journal.possible()) {
       const label = head.createEl("label", { cls: "ariadne-chat-journal", attr: { title: "Let the local model read journal entries in this chat. Off: they are never shown to it." } });
