@@ -549,3 +549,5 @@
   paints a solid ground of its own, so nothing behind it can show through.
 */
 .is-translucent .ariadne-chat { background-color: var(--background-secondary); }
+.ariadne-chat-web-what { font-family: var(--font-monospace); font-size: var(--font-ui-small); padding: 4px 6px; margin: 4px 0; background: var(--background-secondary); border-radius: 4px; overflow-wrap: anywhere; }
+.ariadne-chat-web .ariadne-chat-proposal-buttons { flex-wrap: wrap; }

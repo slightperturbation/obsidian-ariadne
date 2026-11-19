@@ -23,6 +23,11 @@ export interface ChatViewDeps {
   /** Apply a proposal the owner accepted; the result can undo it. */
   apply: (proposal: ActionProposal) => Promise<ExecutedAction>;
   openNote: (path: string) => void;
+  /**
+   * Hand the plugin this pane's way of asking the owner whether something may be sent off the
+   * machine. The tools call it before every lookup outside the vault.
+   */
+  webAsker: (ask: ((what: string) => Promise<boolean>) | null) => void;
   /** Keep the conversation as a note; returns where it was put. */
   save: (messages: ChatMessage[]) => Promise<string>;
   /** Whether journal entries may be shown to the local model in this chat. */
@@ -45,6 +50,8 @@ export class ChatView extends ItemView {
   private groups: ModelGroup[] | null = null;
   /** The endpoints have been asked since this pane opened: only then is "nobody is there" a finding. */
   private asked = false;
+  /** The owner said, in this conversation, that lookups outside need not ask each time. */
+  private webAlways = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -88,6 +95,42 @@ export class ChatView extends ItemView {
     this.renderHead();
     this.renderIntro();
     void this.refreshModels();
+    this.deps.webAsker((what) => this.askWeb(what));
+  }
+
+  /**
+   * Before anything leaves the machine: the exact words, shown to the owner,
+   * who sends them or does not. Never while journal entries are being read
+   * in this chat — what was read there must have no way out.
+   */
+  private askWeb(what: string): Promise<boolean> {
+    if (this.deps.journal.on()) {
+      this.note(`Not sent: “${what}”. Lookups outside the vault are off while “journal” is ticked.`);
+      return Promise.resolve(false);
+    }
+    if (this.webAlways) {
+      this.note(`Sent outside: ${what}`);
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      const card = this.listEl.createDiv({ cls: "ariadne-chat-proposal ariadne-chat-web" });
+      card.createDiv({ cls: "ariadne-chat-proposal-title", text: "Send this outside your vault?" });
+      card.createDiv({ cls: "ariadne-chat-web-what", text: what });
+      card.createDiv({ cls: "ariadne-chat-proposal-why", text: "It goes to Wikivoyage or Wikipedia, as written. Nothing else is sent." });
+      const row = card.createDiv({ cls: "ariadne-chat-proposal-buttons" });
+      const done = (ok: boolean, said: string) => {
+        row.remove();
+        card.createDiv({ cls: "ariadne-chat-proposal-status", text: said });
+        resolve(ok);
+      };
+      row.createEl("button", { cls: "mod-cta", text: "Send" }).addEventListener("click", () => done(true, "Sent."));
+      row.createEl("button", { text: "Send, and don't ask again in this chat" }).addEventListener("click", () => {
+        this.webAlways = true;
+        done(true, "Sent. Further lookups in this chat will be shown here, not asked.");
+      });
+      row.createEl("button", { text: "Don't send" }).addEventListener("click", () => done(false, "Not sent."));
+      this.scrollDown();
+    });
   }
 
   /** Ask each local endpoint what it has installed, and show it in the picker. */
@@ -158,6 +201,7 @@ export class ChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
+    this.deps.webAsker(null);
     this.contentEl.replaceChildren();
   }
 
@@ -165,7 +209,7 @@ export class ChatView extends ItemView {
     const head = this.headEl;
     head.replaceChildren();
     this.renderPicker(head);
-    head.createSpan({ cls: "ariadne-chat-local", text: "local only", attr: { title: "Answered by a model on your own machines. Nothing in this chat is sent to a cloud model." } });
+    head.createSpan({ cls: "ariadne-chat-local", text: "local model", attr: { title: "Answered by a model on your own machines; nothing is sent to a cloud model. A lookup on the web (Wikivoyage, Wikipedia) is shown to you first, and sent only if you say so." } });
     if (this.deps.journal.possible()) {
       const label = head.createEl("label", { cls: "ariadne-chat-journal", attr: { title: "Let the local model read journal entries in this chat. Off: they are never shown to it." } });
       const box = label.createEl("input", { type: "checkbox" });
@@ -202,6 +246,7 @@ export class ChatView extends ItemView {
     fresh.addEventListener("click", () => {
       if (this.busy) return;
       this.messages = [];
+      this.webAlways = false;
       this.deps.engine()?.reset();
       this.listEl.replaceChildren();
       this.renderIntro();
@@ -292,6 +337,11 @@ export class ChatView extends ItemView {
       src.createSpan({ text: "Rests on: " });
       reply.sources.forEach((path, i) => {
         if (i > 0) src.appendText(" · ");
+        // A page on the web is marked as such, and opens in the browser; a note opens in the editor.
+        if (/^https?:\/\//.test(path)) {
+          src.createEl("a", { cls: "external-link", text: `🌐 ${decodeURIComponent(path.split("/").pop() ?? path).replace(/_/g, " ")}`, attr: { title: path, href: path, target: "_blank", rel: "noopener" } });
+          return;
+        }
         const a = src.createEl("a", { text: path.split("/").pop()?.replace(/\.md$/, "") ?? path, attr: { title: path, href: "#" } });
         a.addEventListener("click", (ev) => {
           ev.preventDefault();

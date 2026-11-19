@@ -117,6 +117,8 @@ export default class AriadnePlugin extends Plugin {
   private chatEngine?: ChatEngine;
   /** Journal entries may be read in the vault chat. Off at every start: it is turned on in the pane, for that session. */
   private chatReadsJournal = false;
+  /** How the open chat pane asks the owner whether something may be sent outside. No pane: nothing is sent. */
+  private chatWebAsk: ((what: string) => Promise<boolean>) | null = null;
   /** The provider for the model picked in the chat, kept while the pick stands. */
   private chatPicked?: { key: string; provider: GemmaProvider };
   private actions!: ActionsController;
@@ -1000,6 +1002,7 @@ export default class AriadnePlugin extends Plugin {
               void this.saveSettings();
             },
           },
+          webAsker: (ask) => (this.chatWebAsk = ask),
           save: async (messages) => {
             // Kept only when asked, as a note in the inbox like anything else newly made, and marked as a model's.
             const now = new Date();
@@ -1895,6 +1898,14 @@ export default class AriadnePlugin extends Plugin {
         return { ok: true };
       },
       modelName: () => parseChoice(this.settings.chatModel)?.model ?? this.localPool?.state().active?.model ?? "",
+      web: {
+        // Asked of the owner in the pane, every time; with no pane to ask in, the answer is no.
+        allow: (what) => this.chatWebAsk?.(what) ?? Promise.resolve(false),
+        fetchJson: async (url) => {
+          const res = await requestUrl({ url, headers: { "User-Agent": "AriadneVaultChat/1 (Obsidian plugin)", Accept: "application/json" }, throw: true });
+          return res.json as unknown;
+        },
+      },
       today,
     };
     this.chatEngine = new ChatEngine({

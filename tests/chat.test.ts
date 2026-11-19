@@ -12,6 +12,7 @@ import { choiceKey, listLocalModels, parseChoice } from "../src/chat/models";
 import { amountsIn, compareWithNote, dayIn, timesIn } from "../src/chat/compare";
 import { summarizeTrip } from "../src/chat/trip";
 import { transcriptMarkdown, transcriptTitle } from "../src/chat/transcript";
+import { parsePage, partOf, sectionsOf } from "../src/chat/web";
 import type { AgentRecord } from "../src/gateway/records";
 
 const notes: Record<string, string> = {
@@ -462,5 +463,78 @@ describe("vault chat: keeping a conversation", () => {
     expect(text).toContain("## Model\n\n13:29 on Sunday 22 November.\n\nRested on: [[Trips/2026 Northfield]]");
     expect(text).toContain("> Proposed: Edit Wren Hotel — 3 nights ([[Agent/Trips/Stays/Wren Hotel]]). Whether it was applied is not recorded here.");
     expect(text).toContain("Your notes do not say.\n\nRested on no note.");
+  });
+});
+
+describe("vault chat: looking things up outside the vault", () => {
+  const page = "London is big.\n\n== See ==\nThe British Museum is free.\n\n=== Museums ===\nThe V&A is in South Kensington.\n\n== Eat ==\nBorough Market.\n";
+  /** Two reference sites, as stand-ins that record what was asked of them. */
+  function web(answer: boolean | ((what: string) => boolean) = true) {
+    const asked: string[] = [];
+    const fetched: string[] = [];
+    const fetchJson = async (url: string) => {
+      fetched.push(url);
+      const u = new URL(url);
+      if (u.searchParams.get("list") === "search") return { query: { search: [{ title: u.hostname.includes("voyage") ? "London" : "British Museum", snippet: 'Home to <span class="searchmatch">museums</span> &amp; more' }] } };
+      const title = u.searchParams.get("titles");
+      return title === "Nowhere" ? { query: { pages: { "-1": { title: "Nowhere", missing: "" } } } } : { query: { pages: { "1": { title, extract: page } } } };
+    };
+    const allow = async (what: string) => {
+      asked.push(what);
+      return typeof answer === "function" ? answer(what) : answer;
+    };
+    const tools = vaultTools({ ...vault(), web: { allow, fetchJson } });
+    return { asked, fetched, search: tools.find((t) => t.name === "web_search")!, read: tools.find((t) => t.name === "web_read")! };
+  }
+
+  it("has no way outside at all unless the vault gives it one", () => {
+    expect(vaultTools(vault()).some((t) => t.name.startsWith("web_"))).toBe(false);
+  });
+
+  it("shows the owner the exact words before they go, and sends nothing when they say no", async () => {
+    const no = web(false);
+    const refused = await no.search.run({ query: "London   museums" });
+    expect(no.asked).toEqual(["Search Wikivoyage and Wikipedia for: London museums"]);
+    expect(no.fetched).toEqual([]);
+    expect(refused.text).toContain("The owner did not allow that to be sent");
+    expect(refused.sources).toBeUndefined();
+    const read = await no.read.run({ page: "https://en.wikivoyage.org/wiki/London" });
+    expect(no.asked.at(-1)).toBe("Read the Wikivoyage page: London");
+    expect(no.fetched).toEqual([]);
+    expect(read.text).toContain("did not allow");
+  });
+
+  it("searches the two sites, marks what comes back as from the web, and gives the pages as sources", async () => {
+    const w = web();
+    const res = await w.search.run({ query: "London museums" });
+    expect(w.fetched).toHaveLength(2);
+    expect(w.fetched.every((u) => /^https:\/\/en\.(wikivoyage|wikipedia)\.org\/w\/api\.php\?/.test(u) && u.includes("srsearch=London+museums"))).toBe(true);
+    expect(res.text.startsWith("(From the web — not the owner's notes.")).toBe(true);
+    expect(res.text).toContain("https://en.wikivoyage.org/wiki/London\n  Home to museums & more");
+    expect(res.sources).toEqual(["https://en.wikivoyage.org/wiki/London", "https://en.wikipedia.org/wiki/British_Museum"]);
+  });
+
+  it("reads a section of a page, or lists its sections — and only pages of those two sites", async () => {
+    const w = web();
+    const see = await w.read.run({ page: "https://en.wikivoyage.org/wiki/London", section: "see" });
+    expect(see.text).toContain("https://en.wikivoyage.org/wiki/London — see:");
+    expect(see.text).toContain("The British Museum is free.");
+    expect(see.text).toContain("The V&A is in South Kensington.");
+    expect(see.text).not.toContain("Borough Market");
+    expect((await w.read.run({ page: "https://en.wikivoyage.org/wiki/London", section: "Sleep" })).text).toContain('has no section "Sleep". Its sections: See, Eat.');
+    expect((await w.read.run({ page: "https://en.wikivoyage.org/wiki/London" })).text).toContain("Sections: See, Eat");
+    const before = w.asked.length;
+    expect((await w.read.run({ page: "https://evil.example/wiki/London" })).text).toContain("Other sites cannot be read");
+    expect(w.asked.length).toBe(before);
+    expect((await w.read.run({ page: "https://en.wikipedia.org/wiki/Nowhere" })).text).toBe("There is no such page: Nowhere.");
+  });
+
+  it("parses pages and sections", () => {
+    expect(parsePage("https://en.wikipedia.org/wiki/British_Museum#History")).toEqual({ site: "wikipedia", title: "British Museum" });
+    expect(parsePage("wikivoyage: London/City of London")).toEqual({ site: "wikivoyage", title: "London/City of London" });
+    expect(parsePage("https://example.com/x")).toBeUndefined();
+    expect(sectionsOf(page)).toEqual(["See", "Eat"]);
+    expect(partOf(page, { section: "Museums", size: 500 }).part).toContain("The V&A");
+    expect(partOf(page, { section: "eat", size: 500 }).part).toContain("Borough Market");
   });
 });
