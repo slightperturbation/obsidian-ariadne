@@ -63,6 +63,9 @@ import type { PublishLedger } from "./publish/screen";
 import { emptyThreadsLedger, type ThreadsLedger } from "./margin/thread-weave";
 import { rankFillOut, type FillOutCandidate, type FillOutRow } from "./margin/fill-out";
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
+import { ChatEngine } from "./chat/engine";
+import { vaultTools, type VaultAccess } from "./chat/tools";
+import { CHAT_VIEW_TYPE, ChatView } from "./chat/view";
 
 const obsidianFetch = makeObsidianFetch(requestUrl);
 
@@ -107,6 +110,10 @@ export default class AriadnePlugin extends Plugin {
   private onBattery = false;
   private debugStatusTimer: ReturnType<typeof setTimeout> | null = null;
   private executor!: ActionExecutor;
+  /** The vault chat's engine, made when the pane first needs it. */
+  private chatEngine?: ChatEngine;
+  /** Journal entries may be read in the vault chat. Off at every start: it is turned on in the pane, for that session. */
+  private chatReadsJournal = false;
   private actions!: ActionsController;
   private lastMarkdown: MarkdownView | null = null;
   private policy!: DevicePolicy;
@@ -965,6 +972,33 @@ export default class AriadnePlugin extends Plugin {
       callback: () => void this.activateLine(),
     });
 
+    // ── The vault chat: a local model that looks things up and proposes corrections ──
+    this.registerView(
+      CHAT_VIEW_TYPE,
+      (leaf) =>
+        new ChatView(leaf, {
+          engine: () => this.vaultChat(),
+          model: () => {
+            const active = this.localPool?.state().active;
+            if (!active) return { label: "no local model reachable", ready: false };
+            return { label: `${active.model ?? "local model"} · ${active.loopback ? "this machine" : active.label}`, ready: true };
+          },
+          apply: (proposal) => this.executor.apply(proposal),
+          openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
+          journal: {
+            possible: () => this.settings.journalModelCalls !== "none",
+            on: () => this.chatReadsJournal,
+            set: (on) => (this.chatReadsJournal = on),
+          },
+        }),
+    );
+    this.addCommand({
+      id: "open-vault-chat",
+      name: "Open vault chat (local model)",
+      callback: () => void this.activateChat(),
+    });
+    this.addRibbonIcon("message-square", "Vault chat (local model)", () => void this.activateChat());
+
     this.registerAriadneBasesView();
 
     // The OS owns real reminding (Obsidian has no background presence); this
@@ -1761,6 +1795,65 @@ export default class AriadnePlugin extends Plugin {
     }
     this.backlinkIndex = index;
     return index;
+  }
+
+  private async activateChat(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(CHAT_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+      await leaf.setViewState({ type: CHAT_VIEW_TYPE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+    void this.localPool?.probeAll();
+  }
+
+  /**
+   * The vault chat's engine. It is answered by the local pool and by nothing
+   * else: there is no route from here to a cloud model, whatever the routing
+   * setting says. Null when no local endpoint is configured.
+   */
+  private vaultChat(): ChatEngine | null {
+    const pool = this.localPool;
+    if (!pool || !pool.state().configured) return null;
+    if (this.chatEngine) return this.chatEngine;
+    const io = new ObsidianGatewayIO(this.app);
+    const store = new RecordStore(io, this.levelPolicy().agentFolder);
+    const today = () => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const vault: VaultAccess = {
+      search: async (query, limit) => ((await this.manager?.query(query, { limit })) ?? []).map((r) => ({ path: r.path, title: r.title, snippet: r.snippet })),
+      read: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? this.app.vault.cachedRead(file) : undefined;
+      },
+      readable: (path) => {
+        // The walls: a sealed note is never shown to any model; a journal entry only when the owner
+        // has allowed journal text to reach local models and has switched it on in this chat.
+        if (this.levelOfPath(path) === "sealed") return { ok: false, why: "it is sealed" };
+        if (this.isJournalPath(path)) {
+          if (this.settings.journalModelCalls === "none") return { ok: false, why: "journal entries are not given to any model (your setting)" };
+          if (!this.chatReadsJournal) return { ok: false, why: "journal entries are not read unless you switch \"journal\" on in this chat" };
+        }
+        return { ok: true };
+      },
+      resolve: (name) => {
+        const bare = name.replace(/^\[\[|\]\]$/g, "").split("|")[0]!.trim();
+        const direct = this.app.vault.getAbstractFileByPath(bare) ?? this.app.vault.getAbstractFileByPath(`${bare}.md`);
+        if (direct instanceof TFile) return direct.path;
+        return this.app.metadataCache.getFirstLinkpathDest(bare, "")?.path;
+      },
+      records: () => store.all(),
+      today,
+    };
+    this.chatEngine = new ChatEngine({
+      complete: async (prompt, opts) => (await pool.complete(prompt, { system: opts.system, schema: opts.schema, maxTokens: opts.maxTokens, lastResort: true })).text,
+      tools: vaultTools(vault),
+      today: () => `${today()} (${new Date().toLocaleDateString("en-US", { weekday: "long" })})`,
+    });
+    return this.chatEngine;
   }
 
   private async activateLine(focus = true): Promise<void> {

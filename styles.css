@@ -506,3 +506,34 @@
   flex: 1 1 auto;
   max-height: none;
 }
+
+/* ── Vault chat ─────────────────────────────────────────────────────────── */
+.ariadne-chat { display: flex; flex-direction: column; height: 100%; padding: 0; }
+.ariadne-chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-smaller); flex-wrap: wrap; }
+.ariadne-chat-model { color: var(--text-muted); }
+.ariadne-chat-local { color: var(--color-green); border: 1px solid var(--color-green); border-radius: 8px; padding: 0 6px; }
+.ariadne-chat-journal { color: var(--text-muted); display: inline-flex; align-items: center; gap: 2px; }
+.ariadne-chat-new { margin-left: auto; }
+.ariadne-chat-list { flex: 1 1 auto; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
+.ariadne-chat-intro { color: var(--text-muted); font-size: var(--font-ui-small); }
+.ariadne-chat-tries { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.ariadne-chat-tries button { white-space: normal; text-align: left; height: auto; padding: 4px 8px; }
+.ariadne-chat-warn { color: var(--color-orange); }
+.ariadne-chat-msg { border-radius: 8px; padding: 6px 10px; max-width: 100%; overflow-wrap: anywhere; }
+.ariadne-chat-user { align-self: flex-end; background: var(--interactive-accent); color: var(--text-on-accent); white-space: pre-wrap; max-width: 90%; }
+.ariadne-chat-reply { background: var(--background-secondary); }
+.ariadne-chat-failed { border: 1px solid var(--color-orange); }
+.ariadne-chat-body > :first-child { margin-top: 0; }
+.ariadne-chat-body > :last-child { margin-bottom: 0; }
+.ariadne-chat-steps { color: var(--text-faint); font-size: var(--font-ui-smaller); margin-bottom: 4px; }
+.ariadne-chat-sources { color: var(--text-muted); font-size: var(--font-ui-smaller); margin-top: 6px; }
+.ariadne-chat-unsourced { color: var(--color-orange); }
+.ariadne-chat-working, .ariadne-chat-note { color: var(--text-faint); font-size: var(--font-ui-smaller); font-style: italic; }
+.ariadne-chat-proposal { margin-top: 8px; border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 8px; background: var(--background-primary); }
+.ariadne-chat-proposal-title { font-weight: 600; }
+.ariadne-chat-proposal-why { color: var(--text-muted); font-size: var(--font-ui-small); margin: 2px 0 4px; }
+.ariadne-chat-proposal .ariadne-diff-body { max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 4px 0; }
+.ariadne-chat-proposal-buttons { display: flex; gap: 6px; }
+.ariadne-chat-proposal-status { color: var(--text-muted); font-size: var(--font-ui-small); }
+.ariadne-chat-form { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--background-modifier-border); align-items: flex-end; }
+.ariadne-chat-input { flex: 1 1 auto; resize: vertical; min-height: 2.6em; }
