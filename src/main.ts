@@ -66,6 +66,7 @@ import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view
 import { ChatEngine } from "./chat/engine";
 import { vaultTools, type VaultAccess } from "./chat/tools";
 import { listLocalModels, parseChoice } from "./chat/models";
+import { transcriptMarkdown, transcriptTitle } from "./chat/transcript";
 import { GemmaProvider } from "./model/providers/gemma";
 import { CHAT_VIEW_TYPE, ChatView } from "./chat/view";
 
@@ -999,6 +1000,20 @@ export default class AriadnePlugin extends Plugin {
               void this.saveSettings();
             },
           },
+          save: async (messages) => {
+            // Kept only when asked, as a note in the inbox like anything else newly made, and marked as a model's.
+            const now = new Date();
+            const pad = (n: number) => String(n).padStart(2, "0");
+            const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+            const time = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+            const folder = normalizePath(this.settings.inboxFolder.trim() || "Inbox");
+            if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+            const model = parseChoice(this.settings.chatModel)?.model ?? this.localPool?.state().active?.model ?? "";
+            let path = `${folder}/Vault chat ${date} ${time.replace(":", "")} — ${transcriptTitle(messages)}.md`;
+            for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++) path = path.replace(/( \d+)?\.md$/, ` ${n}.md`);
+            await this.executor.apply({ title: "Save vault chat", changes: [{ type: "create", path, after: transcriptMarkdown(messages, { date, time, model }) }] });
+            return path;
+          },
           apply: (proposal) => this.executor.apply(proposal),
           openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
           journal: {
@@ -1871,6 +1886,15 @@ export default class AriadnePlugin extends Plugin {
       open: async (path) => {
         await this.app.workspace.openLinkText(path, "", false);
       },
+      exists: (path) => this.app.vault.getAbstractFileByPath(path) !== null,
+      writable: (path) => {
+        // The agent's folder holds typed records the gateway keeps; a free-form note there would be taken for one.
+        if (underFolder(path, this.levelPolicy().agentFolder)) return { ok: false, why: "that folder is for the agent's records" };
+        if (this.levelOfPath(path) === "sealed") return { ok: false, why: "that folder is sealed" };
+        if (this.isJournalPath(path)) return { ok: false, why: "that is where your journal lives" };
+        return { ok: true };
+      },
+      modelName: () => parseChoice(this.settings.chatModel)?.model ?? this.localPool?.state().active?.model ?? "",
       today,
     };
     this.chatEngine = new ChatEngine({

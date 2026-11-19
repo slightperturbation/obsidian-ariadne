@@ -10,6 +10,8 @@ import { ChatEngine, parseStep, type ChatMessage } from "../src/chat/engine";
 import { vaultTools, type VaultAccess } from "../src/chat/tools";
 import { choiceKey, listLocalModels, parseChoice } from "../src/chat/models";
 import { amountsIn, compareWithNote, dayIn, timesIn } from "../src/chat/compare";
+import { summarizeTrip } from "../src/chat/trip";
+import { transcriptMarkdown, transcriptTitle } from "../src/chat/transcript";
 import type { AgentRecord } from "../src/gateway/records";
 
 const notes: Record<string, string> = {
@@ -31,6 +33,9 @@ function vault(records: AgentRecord[] = []): VaultAccess {
   return {
     notes: () => Object.keys(notes).map((path) => ({ path, mtime: new Date(`${MTIME[path]}T12:00:00`).getTime(), tags: TAGS[path] ?? [] })),
     open: async (path) => void opened.push(path),
+    exists: (path) => path in notes,
+    writable: (path) => (path.startsWith("Agent/") ? { ok: false, why: "that folder is for the agent's records" } : path.startsWith("Personal/Journal/") ? { ok: false, why: "that is where your journal lives" } : { ok: true }),
+    modelName: () => "gemma4:31b",
     search: async (q) =>
       Object.entries(notes)
         .filter(([p, t]) => q.toLowerCase().split(/\s+/).some((w) => `${p} ${t}`.toLowerCase().includes(w)))
@@ -360,5 +365,102 @@ describe("vault chat: a record beside the note it came from", () => {
     const one = await tool.run({ path: "Agent/Train to Lakeside.md" });
     expect(one.text).toContain("agrees on time, day, price and standing");
     expect((await tool.run({ path: "Agent/Dentist.md" })).text).toContain("was not made from a note of yours");
+  });
+});
+
+describe("vault chat: a trip added up", () => {
+  const trip = rec({ kind: "trip", title: "2026 Northfield", state: "planned", start: "2026-11-19", end: "2026-11-28", place: "Northfield" });
+  const of = (over: Partial<AgentRecord> & { kind: AgentRecord["kind"]; title: string }) => rec({ ...over, fields: { trip: "2026 Northfield", ...(over.fields ?? {}) } });
+  const records = [
+    trip,
+    of({ kind: "stay", title: "Wren Hotel", start: "2026-11-19", end: "2026-11-22", fields: { price: 540, currency: "GBP", paid: true } }),
+    of({ kind: "stay", title: "Sun Street Apt 5", start: "2026-11-22", end: "2026-11-26", fields: { price: 480, currency: "GBP", paid: false } }),
+    of({ kind: "transport", title: "Train to Lakeside", start: "2026-11-22T13:29", fields: { from: "Northfield Central", to: "Lakeside", price: 61.5, currency: "GBP", paid: true } }),
+    of({ kind: "activity", title: "Ana massage", state: "to-confirm", start: "2026-11-19T18:00", fields: { price: 150, currency: "GBP", payment: "cash", paid: false } }),
+    of({ kind: "activity", title: "Pottery class", state: "confirmed", start: "2026-11-21T14:00", fields: { price: 40, currency: "EUR", payment: "cash", paid: false } }),
+    of({ kind: "activity", title: "Walk with Hardy", state: "planned", start: "2026-11-20T10:00" }),
+    of({ kind: "activity", title: "Offered tour", state: "offered", start: "2026-11-23T10:00", fields: { price: 99, currency: "GBP" } }),
+    of({ kind: "activity", title: "Dropped dinner", state: "cancelled", start: "2026-11-24T19:00", fields: { price: 70, currency: "GBP" } }),
+    rec({ kind: "appointment", title: "Dentist at home", state: "confirmed", start: "2026-12-03T09:30", fields: { price: 120, currency: "USD" } }),
+  ];
+
+  it("counts nights, journeys and activities, and adds money by arithmetic — each currency on its own, offers and cancellations left out", () => {
+    const text = summarizeTrip(records, trip).lines.join("\n");
+    expect(text).toContain('Trip "2026 Northfield": 2026-11-19 to 2026-11-28 (9 nights), Northfield');
+    expect(text).toContain("2026-11-19 to 2026-11-22 · Wren Hotel · 3 nights · 540 GBP paid");
+    expect(text).toContain("The stays cover 7 of the trip's 9 nights.");
+    expect(text).toContain("Journeys (1):");
+    expect(text).toContain("Activities and events (3): 2026-11-19: 1, 2026-11-20: 1, 2026-11-21: 1");
+    expect(text).toContain("Not yet confirmed: Ana massage (2026-11-19)");
+    expect(text).toContain("  stay: 1020 GBP (2 with a price)");
+    expect(text).toContain("  In all: 1231.5 GBP + 40 EUR.");
+    expect(text).toContain("  Paid: 601.5 GBP. Still to pay in cash: 150 GBP + 40 EUR. Not marked paid: 480 GBP.");
+    expect(text).toContain("1 record has no price, so the total is at least this: Walk with Hardy");
+    expect(text).toContain("Only offered, not counted: Offered tour");
+    expect(text).toContain("Cancelled, not counted: Dropped dinner");
+    expect(text).not.toContain("Dentist at home");
+  });
+
+  it("as a tool: finds the trip by words from its name, or says which trips there are", async () => {
+    const tool = vaultTools(vault(records)).find((t) => t.name === "trip_summary")!;
+    expect((await tool.run({ trip: "northfield" })).text).toContain("In all: 1231.5 GBP + 40 EUR.");
+    expect((await tool.run({ trip: "lisbon" })).text).toContain('No trip matches. The trips on record: "2026 Northfield" (2026-11-19)');
+  });
+});
+
+describe("vault chat: a new note is a proposal", () => {
+  const tool = () => vaultTools(vault()).find((t) => t.name === "propose_note")!;
+  const content = "# A week in Lisbon\n\nDrawn from [[Trips/2026 Northfield]]: three nights near the centre, then the coast.";
+
+  it("drafts the note with its provenance at the head, and creates nothing", async () => {
+    const res = await tool().run({ path: "Plans/Lisbon week", content, reason: "A first plan from last year's trip." });
+    expect(res.text).toBe("Proposed, not created: the owner will see the note Plans/Lisbon week.md and decide.");
+    const change = res.proposal!.changes[0]!;
+    expect(change).toMatchObject({ type: "create", path: "Plans/Lisbon week.md" });
+    expect(change.after).toContain('authorship: ai-generated\nmodel: "gemma4:31b"\nsource: Ariadne vault chat\nstatus: draft\ntags: [ai/generated]');
+    expect(change.after).toContain("> [!robot] Drafted by a local model (gemma4:31b) in the vault chat on 2026-11-18 — A first plan from last year's trip.");
+    expect(change.after).toContain("# A week in Lisbon");
+    expect("Plans/Lisbon week.md" in notes).toBe(false);
+  });
+
+  it("puts its own properties in place of any the model wrote, so a draft cannot pass for the owner's", async () => {
+    const res = await tool().run({ path: "Plans/Other.md", content: `---\nauthorship: human\npublish: true\n---\n${content}`, reason: "x" });
+    const after = res.proposal!.changes[0]!.after!;
+    expect(after).not.toContain("authorship: human");
+    expect(after).not.toContain("publish: true");
+    expect(after.split("authorship:").length).toBe(2);
+  });
+
+  it("will not write over a note, into the agent's records or the journal, or outside the vault", async () => {
+    expect((await tool().run({ path: "Trips/2026 Northfield.md", content })).text).toContain("There is already a note");
+    expect((await tool().run({ path: "Agent/Trips/Plan.md", content })).text).toContain("that folder is for the agent's records");
+    expect((await tool().run({ path: "Personal/Journal/2026-11-19.md", content })).text).toContain("that is where your journal lives");
+    expect((await tool().run({ path: "../outside.md", content })).text).toContain("not a usable note path");
+    expect((await tool().run({ path: "Plans/Short.md", content: "too short" })).text).toBe("Give the note's text.");
+    for (const r of [await tool().run({ path: "Agent/x.md", content }), await tool().run({ path: "../x.md", content })]) expect(r.proposal).toBeUndefined();
+  });
+});
+
+describe("vault chat: keeping a conversation", () => {
+  const messages: ChatMessage[] = [
+    { role: "user", text: "When is my train to Lakeside? / and which seat: H18?" },
+    { role: "assistant", text: "13:29 on Sunday 22 November.", sources: ["Trips/2026 Northfield.md"], proposals: [{ title: "Edit Wren Hotel", description: "3 nights", changes: [{ type: "modify", path: "Agent/Trips/Stays/Wren Hotel.md", before: "a", after: "b" }] }] },
+    { role: "user", text: "And the weather?" },
+    { role: "assistant", text: "Your notes do not say.", sources: [] },
+  ];
+
+  it("names the note from the first question, without characters a file name may not have", () => {
+    expect(transcriptTitle(messages)).toBe("When is my train to Lakeside and which seat H18");
+    expect(transcriptTitle([])).toBe("conversation");
+  });
+
+  it("writes it as a note that says whose words are whose, and what each answer rested on", () => {
+    const text = transcriptMarkdown(messages, { date: "2026-11-18", time: "21:05", model: "gemma4:31b" });
+    expect(text.startsWith('---\ncreated: 2026-11-18\ntype: chat-transcript\nauthorship: ai-assisted\nmodel: "gemma4:31b"')).toBe(true);
+    expect(text).toContain("> [!robot] A conversation with a local model (gemma4:31b) in the vault chat, 2026-11-18 21:05.");
+    expect(text).toContain("## You\n\nWhen is my train to Lakeside? / and which seat: H18?");
+    expect(text).toContain("## Model\n\n13:29 on Sunday 22 November.\n\nRested on: [[Trips/2026 Northfield]]");
+    expect(text).toContain("> Proposed: Edit Wren Hotel — 3 nights ([[Agent/Trips/Stays/Wren Hotel]]). Whether it was applied is not recorded here.");
+    expect(text).toContain("Your notes do not say.\n\nRested on no note.");
   });
 });

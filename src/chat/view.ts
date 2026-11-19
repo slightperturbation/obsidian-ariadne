@@ -23,6 +23,8 @@ export interface ChatViewDeps {
   /** Apply a proposal the owner accepted; the result can undo it. */
   apply: (proposal: ActionProposal) => Promise<ExecutedAction>;
   openNote: (path: string) => void;
+  /** Keep the conversation as a note; returns where it was put. */
+  save: (messages: ChatMessage[]) => Promise<string>;
   /** Whether journal entries may be shown to the local model in this chat. */
   journal: { possible: () => boolean; on: () => boolean; set: (on: boolean) => void };
 }
@@ -174,6 +176,28 @@ export class ChatView extends ItemView {
       });
       label.appendText(" journal");
     }
+    const keep = head.createEl("button", { cls: "ariadne-chat-save", text: "Save", attr: { title: "Keep this conversation as a note. Until you do, it exists only in this pane." } });
+    keep.addEventListener("click", () => {
+      if (this.busy) return;
+      if (this.messages.length === 0) {
+        this.note("There is nothing to save yet.");
+        return;
+      }
+      void this.deps
+        .save(this.messages)
+        .then((path) => {
+          const line = this.listEl.createDiv({ cls: "ariadne-chat-note" });
+          line.appendText("Saved as ");
+          const a = line.createEl("a", { text: path, attr: { href: "#" } });
+          a.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            this.deps.openNote(path);
+          });
+          line.appendText(". It can be undone with “Undo last action”.");
+          this.scrollDown();
+        })
+        .catch((err: unknown) => this.note(`Not saved: ${err instanceof Error ? err.message : "error"}.`));
+    });
     const fresh = head.createEl("button", { cls: "ariadne-chat-new", text: "New chat" });
     fresh.addEventListener("click", () => {
       if (this.busy) return;
@@ -319,7 +343,7 @@ export class ChatView extends ItemView {
             ev.preventDefault();
             void done
               .undo()
-              .then(() => status.setText("Undone — the note is as it was."))
+              .then(() => status.setText(proposal.changes.every((c) => c.type === "create") ? "Undone — the note was removed again." : "Undone — the note is as it was."))
               .catch((err: unknown) => status.setText(`Could not undo: ${err instanceof Error ? err.message : "the note has changed since"}.`));
           });
         })

@@ -2,6 +2,7 @@ import type { ActionProposal } from "../actions/framework";
 import type { AgentRecord } from "../gateway/records";
 import { auditRecords } from "./audit";
 import { compareWithNote } from "./compare";
+import { summarizeTrip } from "./trip";
 import type { ChatTool, ToolResult } from "./engine";
 
 /**
@@ -24,6 +25,12 @@ export interface VaultAccess {
   notes(): Array<{ path: string; mtime: number; tags: string[] }>;
   /** Show a note to the owner in the editor. Nothing of it is handed back. */
   open(path: string): Promise<void>;
+  /** Is there a note at this path already? */
+  exists(path: string): boolean;
+  /** Where a new note may not be put: the agent's own folder, and anything sealed or journal. */
+  writable(path: string): { ok: true } | { ok: false; why: string };
+  /** The model answering now, for the provenance of what it writes. */
+  modelName(): string;
   /** YYYY-MM-DD. */
   today(): string;
 }
@@ -301,5 +308,64 @@ export function vaultTools(vault: VaultAccess): ChatTool[] {
     },
   };
 
-  return [search, list, read, openNote, records, check, compare, propose];
+  const trip: ChatTool = {
+    name: "trip_summary",
+    description: "Add a trip up by arithmetic: its stays and nights, journeys, activities per day, and what it cost — paid, to pay in cash, not marked paid — each currency on its own. Use it for any question of totals or counts about a trip; do not add numbers up yourself.",
+    args: { trip: "the trip's name, or words from it" },
+    async run(args): Promise<ToolResult> {
+      const words = str(args.trip).toLowerCase().split(/\s+/).filter(Boolean);
+      const all = (await vault.records()).filter((r) => vault.readable(r.path).ok);
+      const trips = all.filter((r) => r.kind === "trip");
+      if (trips.length === 0) return { text: "There are no trips on record." };
+      const hits = words.length ? trips.filter((t) => words.every((w) => t.title.toLowerCase().includes(w))) : [];
+      if (hits.length !== 1) {
+        const shown = (hits.length ? hits : trips).sort((a, b) => String(b.start ?? "").localeCompare(String(a.start ?? ""))).slice(0, 20);
+        return { text: `${hits.length ? "More than one trip matches" : words.length ? "No trip matches" : "Which trip?"}. The trips on record: ${shown.map((t) => `"${t.title}" (${(t.start ?? "").slice(0, 10)})`).join("; ")}`, sources: shown.map((t) => t.path) };
+      }
+      const sum = summarizeTrip(all, hits[0]!);
+      return { text: sum.lines.join("\n"), sources: sum.paths.slice(0, 60) };
+    },
+  };
+
+  const newNote: ChatTool = {
+    name: "propose_note",
+    description: "Propose a NEW note for the owner to create or not — a plan, a summary, a list drawn from their notes. It writes nothing by itself. Never use it to change an existing note (that is propose_edit).",
+    args: { path: "where it would go, as Folder/Name.md", content: "the note's text, in Markdown; link the notes it draws on as [[Note name]]", reason: "one sentence: what it is for" },
+    async run(args): Promise<ToolResult> {
+      let path = str(args.path).replace(/^\/+/, "");
+      const content = typeof args.content === "string" ? args.content : "";
+      if (!path) return { text: "Give the path the note would have, as Folder/Name.md." };
+      if (!/\.md$/i.test(path)) path += ".md";
+      if (/[\\:*?"<>|#^[\]]/.test(path.split("/").pop() ?? "") || path.split("/").some((seg) => seg === ".." || seg === "." || seg === "")) return { text: "That is not a usable note path. Use letters, numbers, spaces and dashes, as Folder/Name.md." };
+      if (content.trim().length < 20) return { text: "Give the note's text." };
+      if (content.length > 20_000) return { text: "That is too long for one note (20,000 characters at most). Propose a shorter note." };
+      if (vault.exists(path)) return { text: `There is already a note at ${path}. Pick another name, or use propose_edit to change that note.` };
+      const may = vault.writable(path);
+      if (!may.ok) return { text: `A note cannot be put at ${path}: ${may.why}. Pick another folder.` };
+      const reason = str(args.reason).slice(0, 300);
+      // What a model wrote is marked as such, in the note's properties and at its head, so it is never taken for the owner's own.
+      const today = vault.today();
+      const body = content.replace(/^---\n[\s\S]*?\n---\n?/, "").trimStart();
+      const text = [
+        "---",
+        `created: ${today}`,
+        "authorship: ai-generated",
+        // Quoted: a model's name has a colon in it ("gemma4:31b"), which a bare property value may not.
+        `model: ${JSON.stringify(vault.modelName().replace(/\s+/g, " ").trim() || "local model")}`,
+        "source: Ariadne vault chat",
+        "status: draft",
+        "tags: [ai/generated]",
+        "---",
+        "",
+        `> [!robot] Drafted by a local model (${vault.modelName() || "local"}) in the vault chat on ${today}${reason ? ` — ${reason.replace(/\n/g, " ")}` : ""}. Check it against the notes it links before relying on it.`,
+        "",
+        body,
+        "",
+      ].join("\n");
+      const proposal: ActionProposal = { title: `New note ${path}`, description: reason || undefined, changes: [{ type: "create", path, after: text }] };
+      return { text: `Proposed, not created: the owner will see the note ${path} and decide.`, proposal };
+    },
+  };
+
+  return [search, list, read, openNote, records, check, compare, trip, propose, newNote];
 }
