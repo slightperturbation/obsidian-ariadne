@@ -203,10 +203,10 @@ export class ChatView extends ItemView {
   /** Make the input as tall as its text, between its resting height and about two fifths of the pane. */
   private fitInput(): void {
     const el = this.inputEl;
-    el.style.height = "auto";
+    el.setCssStyles({ height: "auto" });
     const max = Math.max(160, Math.round(this.contentEl.clientHeight * 0.4));
-    el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`;
-    el.style.overflowY = el.scrollHeight + 2 > max ? "auto" : "hidden";
+    const wanted = el.scrollHeight + 2;
+    el.setCssStyles({ height: `${Math.min(wanted, max)}px`, overflowY: wanted > max ? "auto" : "hidden" });
   }
 
   /** A line from the pane itself, not from the model. */

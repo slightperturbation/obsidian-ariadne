@@ -357,6 +357,26 @@ export class Gateway {
     });
   }
 
+  /** The latest changes to records, for the owner to look over. */
+  async recent(client: Client, args: { limit?: unknown }) {
+    return this.audited(client, "recent", async () => {
+      this.requireLocal(client, "recent changes");
+      const limit = typeof args.limit === "number" && Number.isFinite(args.limit) ? Math.floor(args.limit) : 15;
+      const changes = await this.submissions.recent(limit);
+      return { result: { changes }, n: changes.length };
+    });
+  }
+
+  /** Take one change back (the owner, through a trusted channel). */
+  async undo(client: Client, args: { key?: unknown }): Promise<SubmitResult> {
+    return this.audited(client, "undo", async () => {
+      this.requireLocal(client, "taking a change back");
+      if (!client.owner) throw new GatewayError("forbidden", "only the owner's channel may take a change back");
+      const result = await this.submissions.undo(cleanString(args.key, 200));
+      return { result, n: 1, paths: result.path ? [result.path] : [] };
+    });
+  }
+
   async health(): Promise<Record<string, unknown>> {
     await this.scan();
     const records = await this.store.all();

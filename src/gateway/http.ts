@@ -70,6 +70,8 @@ export function createGatewayServer(opts: HttpOptions): Server {
     submit: (c, b) => opts.gateway.submit(c, b),
     status: (c, b) => opts.gateway.status(c, b),
     decide: (c, b) => opts.gateway.decide(c, b),
+    recent: (c, b) => opts.gateway.recent(c, b),
+    undo: (c, b) => opts.gateway.undo(c, b),
   };
 
   return createServer((req, res) => {

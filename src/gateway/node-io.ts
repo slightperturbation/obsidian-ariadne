@@ -130,6 +130,10 @@ export class FileLedger implements Ledger {
     return (await this.load()).get(key);
   }
 
+  async list(): Promise<Array<[string, LedgerEntry]>> {
+    return [...(await this.load())];
+  }
+
   async set(key: string, entry: LedgerEntry): Promise<void> {
     const entries = await this.load();
     entries.set(key, entry);

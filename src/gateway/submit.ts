@@ -97,6 +97,16 @@ export interface Plan {
   path?: string;
 }
 
+/** What a record's file held before and after a change, so that the change can be taken back exactly. */
+export interface UndoStep {
+  path: string;
+  type: "create" | "modify";
+  /** The file as it was (a modify); absent for a file that did not exist. */
+  before?: string;
+  /** The file as the change left it: undo goes ahead only if it still reads so. */
+  after: string;
+}
+
 export interface LedgerEntry {
   status: "applied" | "review" | "rejected" | "dismissed";
   reason: string;
@@ -105,11 +115,29 @@ export interface LedgerEntry {
   path?: string;
   at: string;
   client?: string;
+  /** Kept for the most recent changes to records only: how to take this one back. */
+  undo?: UndoStep[];
+  /** When the owner took it back. */
+  undone?: string;
 }
 
 export interface Ledger {
   get(key: string): Promise<LedgerEntry | undefined>;
   set(key: string, entry: LedgerEntry): Promise<void>;
+  /** Every entry with its key. */
+  list(): Promise<Array<[string, LedgerEntry]>>;
+}
+
+/** How many recent changes can still be taken back. Older ones keep their line in the ledger, not their text. */
+export const UNDO_KEPT = 40;
+
+function undoSteps(plan: Plan): UndoStep[] | undefined {
+  // Only a change to a record: a log line, a reading note or a paper is not something to take back.
+  if (!plan.id) return undefined;
+  const steps = plan.changes
+    .filter((c) => c.type === "create" || c.type === "modify")
+    .map((c) => ({ path: c.path, type: c.type as "create" | "modify", before: c.type === "modify" ? c.before : undefined, after: c.after ?? "" }));
+  return steps.length ? steps : undefined;
 }
 
 export class MemoryLedger implements Ledger {
@@ -119,6 +147,9 @@ export class MemoryLedger implements Ledger {
   }
   async set(key: string, entry: LedgerEntry): Promise<void> {
     this.entries.set(key, entry);
+  }
+  async list(): Promise<Array<[string, LedgerEntry]>> {
+    return [...this.entries];
   }
 }
 
@@ -520,6 +551,20 @@ export interface SubmitResult extends LedgerEntry {
   duplicate?: boolean;
 }
 
+/** Entries by when they were made, latest first; of two made in the same instant, the one written later. */
+function newestFirst(entries: Array<[string, LedgerEntry]>): Array<[string, LedgerEntry]> {
+  return entries
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => b.e[1].at.localeCompare(a.e[1].at) || b.i - a.i)
+    .map((x) => x.e);
+}
+
+/** A ledger entry as it is told to a client: without the kept text of the record. */
+function publicEntry(entry: LedgerEntry): LedgerEntry {
+  const { undo: _kept, ...rest } = entry;
+  return rest;
+}
+
 export class Submissions {
   constructor(
     private ctx: SubmitContext,
@@ -530,7 +575,7 @@ export class Submissions {
     const key = cleanString((raw as { key?: unknown } | null)?.key, MAX_KEY);
     if (key) {
       const prior = await this.ledger.get(key);
-      if (prior) return { key, ...prior, duplicate: true };
+      if (prior) return { key, ...publicEntry(prior), duplicate: true };
     }
     if ((raw as { op?: unknown } | null)?.op === "paper") return this.keepPaper(raw, key, client);
     const plan = await planObservation(this.ctx, raw);
@@ -548,9 +593,10 @@ export class Submissions {
         // A conflict is transient: do not burn the idempotency key on it.
         return { key, status: "rejected", ...base, reason: String(err) };
       }
-      const entry: LedgerEntry = { status: "applied", ...base };
+      const entry: LedgerEntry = { status: "applied", ...base, undo: undoSteps(plan) };
       await this.ledger.set(key, entry);
-      return { key, ...entry };
+      await this.pruneUndo();
+      return { key, ...publicEntry(entry) };
     }
     const path = reviewPath(this.ctx.agentFolder, key);
     const text = serializeReview({
@@ -625,9 +671,54 @@ export class Submissions {
     if (plan.decision !== "apply") return { key, status: "rejected", reason: plan.reason, at };
     await applyChanges(this.ctx.io, plan.changes);
     await this.ctx.io.delete(item.path);
-    const entry: LedgerEntry = { status: "applied", reason: "approved by you", summary: plan.summary, id: plan.id, path: plan.path, at, client: item.client };
+    const entry: LedgerEntry = { status: "applied", reason: "approved by you", summary: plan.summary, id: plan.id, path: plan.path, at, client: item.client, undo: undoSteps(plan) };
     await this.ledger.set(key, entry);
-    return { key, ...entry };
+    await this.pruneUndo();
+    return { key, ...publicEntry(entry) };
+  }
+
+  /** Keep the text needed to take a change back only for the most recent changes. */
+  private async pruneUndo(): Promise<void> {
+    const withUndo = newestFirst(await this.ledger.list()).filter(([, e]) => e.undo);
+    for (const [key, entry] of withUndo.slice(UNDO_KEPT)) {
+      const { undo: _dropped, ...rest } = entry;
+      await this.ledger.set(key, rest);
+    }
+  }
+
+  /** The latest changes made to records, newest first — for the owner to look over. */
+  async recent(limit = 15): Promise<Array<{ key: string; at: string; summary: string; reason: string; client?: string; path?: string; canUndo: boolean; undone?: string }>> {
+    return newestFirst(await this.ledger.list())
+      .filter(([, e]) => e.status === "applied" && !!e.id)
+      .slice(0, Math.max(1, Math.min(50, limit)))
+      .map(([key, e]) => ({ key, at: e.at, summary: e.summary ?? "a change", reason: e.reason, client: e.client, path: e.path, canUndo: !!e.undo && !e.undone, undone: e.undone }));
+  }
+
+  /**
+   * Take one change back: each file it touched is put as it was — but only
+   * if it still reads exactly as that change left it. Anything written since
+   * (by the owner, or by a later change) stops the undo before it starts.
+   * The change is not made again by itself: its key stays used.
+   */
+  async undo(key: string): Promise<SubmitResult> {
+    const at = this.ctx.now().toISOString();
+    const entry = await this.ledger.get(key);
+    if (!entry || entry.status !== "applied") return { key, status: "rejected", reason: "no such change", at };
+    if (entry.undone) return { key, status: "rejected", reason: "already taken back", summary: entry.summary, at };
+    if (!entry.undo) return { key, status: "rejected", reason: "too old to take back: its earlier text is no longer kept", summary: entry.summary, at };
+    const { io } = this.ctx;
+    for (const step of entry.undo) {
+      if (!(await io.exists(step.path))) return { key, status: "rejected", reason: `${step.path} is no longer there`, summary: entry.summary, at };
+      if ((await io.read(step.path)) !== step.after) return { key, status: "rejected", reason: "the record has changed since, so taking this back would lose that", summary: entry.summary, path: step.path, at };
+    }
+    for (const step of [...entry.undo].reverse()) {
+      if (step.type === "modify") await io.modify(step.path, step.before ?? "");
+      else await io.delete(step.path);
+      this.ctx.store.invalidate(step.path);
+    }
+    const { undo: _used, ...rest } = entry;
+    await this.ledger.set(key, { ...rest, undone: at });
+    return { key, status: "applied", reason: "taken back by you", summary: entry.summary, id: entry.id, path: entry.path, at };
   }
 
   /**
@@ -692,7 +783,10 @@ export class Submissions {
   async status(keys: readonly string[]): Promise<Record<string, LedgerEntry | null>> {
     await this.sweep();
     const out: Record<string, LedgerEntry | null> = {};
-    for (const key of keys.slice(0, 200)) out[key] = (await this.ledger.get(key)) ?? null;
+    for (const key of keys.slice(0, 200)) {
+      const entry = await this.ledger.get(key);
+      out[key] = entry ? publicEntry(entry) : null;
+    }
     return out;
   }
 }

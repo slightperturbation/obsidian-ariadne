@@ -185,6 +185,60 @@ describe("gateway: an offer is not a booking", () => {
   });
 });
 
+describe("gateway: looking over what was changed, and taking it back", () => {
+  const appt = (key: string, over: Partial<Observation>): Observation =>
+    ({ key, kind: "appointment", op: "create", title: "Physio", state: "confirmed", start: "2026-12-04T15:00", thread: "t:physio", evidence: ev(), ...over }) as Observation;
+
+  it("lists the latest changes to records, newest first, and takes one back exactly", async () => {
+    const { gateway, io } = setup();
+    const created = await gateway.submissions.submit(appt("c1", {}), "theseus");
+    const path = created.path!;
+    const before = await io.read(path);
+    const moved = await gateway.submissions.submit(appt("c2", { op: "update", match: { id: created.id!, class: "exact" }, query: { kind: "appointment", thread: "t:physio" }, state: "rescheduled", start: "2026-12-05T10:00", what: "moved" }), "theseus");
+    expect(moved.status).toBe("applied");
+    // What is told back never carries the record's text.
+    expect(JSON.stringify(moved)).not.toContain("undo");
+    expect(await io.read(path)).toContain("start: 2026-12-05T10:00");
+    // A log line is not a change to a record.
+    await gateway.submissions.submit({ key: "l1", kind: "log", op: "log", line: "Physio wrote", evidence: ev() } as Observation, "theseus");
+    const recent = await gateway.submissions.recent();
+    expect(recent.map((r) => [r.key, r.canUndo])).toEqual([["c2", true], ["c1", true]]);
+    // Taken back: the record reads exactly as it did before the move.
+    const undone = await gateway.submissions.undo("c2");
+    expect(undone).toMatchObject({ status: "applied", reason: "taken back by you" });
+    expect(await io.read(path)).toBe(before);
+    expect((await gateway.submissions.recent())[0]).toMatchObject({ key: "c2", canUndo: false });
+    expect((await gateway.submissions.undo("c2")).reason).toBe("already taken back");
+    // The same message delivered again does not bring the change back.
+    const again = await gateway.submissions.submit(appt("c2", { op: "update", match: { id: created.id!, class: "exact" }, state: "rescheduled", start: "2026-12-05T10:00" }), "theseus");
+    expect(again.duplicate).toBe(true);
+    expect(await io.read(path)).toBe(before);
+    // Taking a creation back removes the record.
+    expect((await gateway.submissions.undo("c1")).status).toBe("applied");
+    expect(await io.exists(path)).toBe(false);
+  });
+
+  it("will not take a change back once the record has changed again", async () => {
+    const { gateway, io } = setup();
+    const created = await gateway.submissions.submit(appt("d1", {}), "theseus");
+    const path = created.path!;
+    await io.modify(path, (await io.read(path)).replace("## History", "My own note.\n\n## History"));
+    const res = await gateway.submissions.undo("d1");
+    expect(res.status).toBe("rejected");
+    expect(res.reason).toContain("has changed since");
+    expect(await io.read(path)).toContain("My own note.");
+    expect((await gateway.submissions.undo("nope")).reason).toBe("no such change");
+  });
+
+  it("is the owner's to do: another local client may look, but not take back", async () => {
+    const { gateway } = setup();
+    await gateway.submit(theseus, { observations: [appt("e1", {})] });
+    const seen = await gateway.recent(theseus, {});
+    expect((seen as { changes: unknown[] }).changes).toHaveLength(1);
+    await expect(gateway.undo({ ...theseus, owner: false }, { key: "e1" })).rejects.toThrow(/only the owner/);
+  });
+});
+
 const note = { source: "vault-note", at: "2026-11-16T09:00:00" };
 const made = async (gateway: Gateway, o: Observation) => (await gateway.submissions.submit(o, "theseus")).status;
 
