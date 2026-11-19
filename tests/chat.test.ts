@@ -21,8 +21,15 @@ const notes: Record<string, string> = {
 const rec = (over: Partial<AgentRecord> & { kind: AgentRecord["kind"]; title: string }): AgentRecord =>
   ({ id: over.title, state: "booked", fields: {}, refs: [], threads: [], notThreads: [], counterparts: [], path: `Agent/${over.title}.md`, ...over }) as AgentRecord;
 
+/** Notes the test "opened" in the editor. */
+const opened: string[] = [];
+const MTIME: Record<string, string> = { "Trips/2026 Northfield.md": "2026-11-17", "Agent/Trips/Stays/Wren Hotel.md": "2026-11-18", "Personal/Journal/2026-11-01.md": "2026-11-01", "Notes/Trick.md": "2026-10-02" };
+const TAGS: Record<string, string[]> = { "Trips/2026 Northfield.md": ["travel/trip"], "Notes/Trick.md": ["odd"], "Personal/Journal/2026-11-01.md": ["journal"] };
+
 function vault(records: AgentRecord[] = []): VaultAccess {
   return {
+    notes: () => Object.keys(notes).map((path) => ({ path, mtime: new Date(`${MTIME[path]}T12:00:00`).getTime(), tags: TAGS[path] ?? [] })),
+    open: async (path) => void opened.push(path),
     search: async (q) =>
       Object.entries(notes)
         .filter(([p, t]) => q.toLowerCase().split(/\s+/).some((w) => `${p} ${t}`.toLowerCase().includes(w)))
@@ -239,5 +246,44 @@ describe("vault chat: picking a local model", () => {
     expect(parseChoice(key)).toEqual({ url: "http://localhost:11434/v1", model: "hf.co/someone/model-GGUF:Q4_K_M" });
     expect(parseChoice("")).toBeNull();
     expect(parseChoice("gemma4:31b")).toBeNull();
+  });
+});
+
+describe("vault chat: finding and opening notes", () => {
+  const list = () => vaultTools(vault()).find((t) => t.name === "list")!;
+
+  it("says where things are when asked for nothing in particular", async () => {
+    const res = await list().run({});
+    expect(res.text).toContain("4 notes in all.");
+    expect(res.text).toContain("Trips — 1 note");
+    expect(res.text).toContain("  Agent/Trips — 1 note");
+    // A map of folders is not a reading of any note.
+    expect(res.sources).toBeUndefined();
+  });
+
+  it("lists by folder, by tag and by when a note last changed, newest first — and counts what it may not show", async () => {
+    expect((await list().run({ folder: "Trips/" })).text).toContain("2026-11-17 · Trips/2026 Northfield.md");
+    expect((await list().run({ tag: "#travel" })).sources).toEqual(["Trips/2026 Northfield.md"]);
+    const recent = await list().run({ since: "2026-11-01" });
+    expect(recent.sources).toEqual(["Agent/Trips/Stays/Wren Hotel.md", "Trips/2026 Northfield.md"]);
+    expect(recent.text).toContain("(1 more match but are not shown to this chat.)");
+    expect(recent.text).not.toContain("Personal/Journal");
+    expect((await list().run({ tag: "journal" })).text).toBe("1 note matches but is not shown to this chat. Tell the owner so.");
+    expect((await list().run({ name: "wren" })).sources).toEqual(["Agent/Trips/Stays/Wren Hotel.md"]);
+    expect((await list().run({ folder: "Nowhere" })).text).toContain('There is no folder "Nowhere"');
+  });
+
+  it("opens a note for the owner by path or by name, and hands back none of its text", async () => {
+    const open = vaultTools(vault()).find((t) => t.name === "open")!;
+    opened.length = 0;
+    const res = await open.run({ path: "[[Trips/2026 Northfield]]" });
+    expect(opened).toEqual(["Trips/2026 Northfield.md"]);
+    expect(res.text).toBe("Opened Trips/2026 Northfield.md in the editor.");
+    // The owner may open their own journal; the chat is still shown nothing of it.
+    const journal = await open.run({ path: "Personal/Journal/2026-11-01.md" });
+    expect(opened.at(-1)).toBe("Personal/Journal/2026-11-01.md");
+    expect(journal.text).toBe("Opened Personal/Journal/2026-11-01.md in the editor. Its text is not shown to this chat.");
+    expect(journal.sources).toBeUndefined();
+    expect((await open.run({ path: "No such note" })).text).toContain("There is no note");
   });
 });

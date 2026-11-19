@@ -19,6 +19,10 @@ export interface VaultAccess {
   resolve(name: string): string | undefined;
   /** The agent's typed records. */
   records(): Promise<AgentRecord[]>;
+  /** Every note: where it is, when it was last changed, and its tags (without "#"). */
+  notes(): Array<{ path: string; mtime: number; tags: string[] }>;
+  /** Show a note to the owner in the editor. Nothing of it is handed back. */
+  open(path: string): Promise<void>;
   /** YYYY-MM-DD. */
   today(): string;
 }
@@ -173,5 +177,69 @@ export function vaultTools(vault: VaultAccess): ChatTool[] {
     },
   };
 
-  return [search, read, records, check, propose];
+  const day = (ms: number): string => {
+    const d = new Date(ms);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+
+  const list: ChatTool = {
+    name: "list",
+    description: "List notes by where they are, by tag, or by when they were last changed — newest first. With no arguments: the folders of the vault and how many notes each holds.",
+    args: { folder: "(optional) a folder path, such as Projects/Ariadne", tag: "(optional) a tag, with or without #", since: "(optional) YYYY-MM-DD: changed on or after this day", name: "(optional) words in the note's name" },
+    async run(args): Promise<ToolResult> {
+      const folder = str(args.folder).replace(/^\/+|\/+$/g, "");
+      const tag = str(args.tag).replace(/^#/, "").toLowerCase();
+      const since = str(args.since);
+      const words = str(args.name).toLowerCase().split(/\s+/).filter(Boolean);
+      const all = vault.notes();
+      if (!folder && !tag && !since && words.length === 0) {
+        // Where things are: each folder, two levels deep, with the number of notes under it.
+        const counts = new Map<string, number>();
+        for (const n of all) {
+          const parts = n.path.split("/");
+          const top = parts.length > 1 ? parts[0]! : "(vault root)";
+          counts.set(top, (counts.get(top) ?? 0) + 1);
+          if (parts.length > 2) counts.set(`${parts[0]}/${parts[1]}`, (counts.get(`${parts[0]}/${parts[1]}`) ?? 0) + 1);
+        }
+        const lines = [...counts].sort((a, b) => a[0].localeCompare(b[0])).map(([f, n]) => `${f.includes("/") ? "  " : ""}${f} — ${n} note${n === 1 ? "" : "s"}`);
+        return { text: `${all.length} notes in all. Folders:\n${lines.slice(0, 80).join("\n")}` };
+      }
+      const lowerFolder = folder.toLowerCase();
+      const matched = all
+        .filter((n) => !folder || n.path.toLowerCase().startsWith(`${lowerFolder}/`))
+        .filter((n) => !tag || n.tags.some((t) => t.toLowerCase() === tag || t.toLowerCase().startsWith(`${tag}/`)))
+        .filter((n) => !since || day(n.mtime) >= since)
+        .filter((n) => words.every((w) => (n.path.split("/").pop() ?? "").toLowerCase().includes(w)));
+      if (matched.length === 0) {
+        const known = folder && !all.some((n) => n.path.toLowerCase().startsWith(`${lowerFolder}/`));
+        return { text: known ? `There is no folder "${folder}" with notes in it. Call list with no arguments to see the folders.` : "No notes match." };
+      }
+      const shown = matched.filter((n) => vault.readable(n.path).ok).sort((a, b) => b.mtime - a.mtime);
+      const withheld = matched.length - shown.length;
+      const top = shown.slice(0, 40);
+      const note = withheld ? `\n(${withheld} more match but are not shown to this chat.)` : "";
+      if (top.length === 0) return { text: `${withheld} note${withheld === 1 ? " matches but is" : "s match but are"} not shown to this chat. Tell the owner so.` };
+      return {
+        text: `${shown.length} note${shown.length === 1 ? "" : "s"}${shown.length > top.length ? `, the ${top.length} most recently changed shown` : ""} (last changed · path):\n${top.map((n) => `${day(n.mtime)} · ${n.path}`).join("\n")}${note}`,
+        sources: top.map((n) => n.path),
+      };
+    },
+  };
+
+  const openNote: ChatTool = {
+    name: "open",
+    description: "Open a note in the editor for the owner to see. Use it when they ask to open, show or go to a note. It does not read the note to you.",
+    args: { path: "the note's path or name" },
+    async run(args): Promise<ToolResult> {
+      const name = str(args.path);
+      if (!name) return { text: "Give the note's path or name." };
+      const path = vault.resolve(name);
+      if (!path) return { text: `There is no note "${name.slice(0, 120)}". Use search or list to find its path.` };
+      await vault.open(path);
+      // The owner sees their own note; whether this chat may be shown its text is another matter.
+      return vault.readable(path).ok ? { text: `Opened ${path} in the editor.`, sources: [path] } : { text: `Opened ${path} in the editor. Its text is not shown to this chat.` };
+    },
+  };
+
+  return [search, list, read, openNote, records, check, propose];
 }

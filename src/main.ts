@@ -1,4 +1,4 @@
-import { Notice, Plugin, Platform, TFile, TFolder, addIcon, normalizePath, requestUrl } from "obsidian";
+import { Notice, Plugin, Platform, TFile, TFolder, addIcon, getAllTags, normalizePath, requestUrl } from "obsidian";
 import {
   AriadneSettings,
   DEFAULT_SETTINGS,
@@ -1862,6 +1862,15 @@ export default class AriadnePlugin extends Plugin {
         return this.app.metadataCache.getFirstLinkpathDest(bare, "")?.path;
       },
       records: () => store.all(),
+      notes: () =>
+        this.app.vault.getMarkdownFiles().map((file) => {
+          const cache = this.app.metadataCache.getFileCache(file);
+          const tags = cache ? (getAllTags(cache) ?? []).map((t) => t.replace(/^#/, "")) : [];
+          return { path: file.path, mtime: file.stat.mtime, tags: [...new Set(tags)] };
+        }),
+      open: async (path) => {
+        await this.app.workspace.openLinkText(path, "", false);
+      },
       today,
     };
     this.chatEngine = new ChatEngine({
