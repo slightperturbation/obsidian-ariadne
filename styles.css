@@ -539,3 +539,9 @@
 .ariadne-chat-input { flex: 1 1 auto; resize: vertical; min-height: 2.6em; }
 .ariadne-chat-pick { max-width: 100%; flex: 1 1 140px; min-width: 0; font-size: var(--font-ui-smaller); }
 .ariadne-chat-refresh { padding: 0 4px; }
+/*
+  With "Translucent window" on, the sidebar is see-through while the window has
+  focus, and on resize old frames can show through it as trails. The chat pane
+  paints a solid ground of its own, so nothing behind it can show through.
+*/
+.is-translucent .ariadne-chat { background-color: var(--background-secondary); }
