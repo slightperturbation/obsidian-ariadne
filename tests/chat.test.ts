@@ -9,6 +9,7 @@ import { auditRecords } from "../src/chat/audit";
 import { ChatEngine, parseStep, type ChatMessage } from "../src/chat/engine";
 import { vaultTools, type VaultAccess } from "../src/chat/tools";
 import { choiceKey, listLocalModels, parseChoice } from "../src/chat/models";
+import { amountsIn, compareWithNote, dayIn, timesIn } from "../src/chat/compare";
 import type { AgentRecord } from "../src/gateway/records";
 
 const notes: Record<string, string> = {
@@ -285,5 +286,79 @@ describe("vault chat: finding and opening notes", () => {
     expect(journal.text).toBe("Opened Personal/Journal/2026-11-01.md in the editor. Its text is not shown to this chat.");
     expect(journal.sources).toBeUndefined();
     expect((await open.run({ path: "No such note" })).text).toContain("There is no note");
+  });
+});
+
+describe("vault chat: a record beside the note it came from", () => {
+  const note = [
+    "# 2026 Northfield", "",
+    "## Thu 19 Nov",
+    "* Land 11:15",
+    "* 6pm - Ana massage, NF2 6GB. 1hr. 140 + 10, cash. soft-booked, confirm 10am",
+    "",
+    "## Sun 22 Nov",
+    "* Train 13:29 Northfield Central -> Lakeside, arrives 15:57. Booked.",
+    "* Dinner 7.30pm at The Sun, £48 paid",
+  ].join("\n");
+  const made = (over: Partial<AgentRecord> & { title: string; lines: string }) =>
+    rec({ kind: "activity", state: "confirmed", ...over, fields: { hub: "[[Trips/2026 Northfield]]", notes: over.lines, ...(over.fields ?? {}) } });
+
+  it("reads times, sums and days the way people write them", () => {
+    expect(timesIn("6pm - massage, confirm 10am; train 13:29, back 7.30pm, lunch at noon")).toEqual(["10:00", "12:00", "13:29", "18:00", "19:30"]);
+    expect(amountsIn("1hr. 140 + 10, cash; dinner £48; taxi 12 GBP")).toEqual([10, 12, 48, 140, 150]);
+    expect(dayIn("## Thu 19 Nov")).toEqual({ day: 19, month: 11 });
+    expect(dayIn("November 22nd")).toEqual({ day: 22, month: 11 });
+    expect(dayIn("Sunday 22")).toEqual({ day: 22 });
+    expect(dayIn("2026-11-22 arrival")).toEqual({ day: 22, month: 11 });
+    expect(dayIn("Train 13:29 to Lakeside")).toBeUndefined();
+  });
+
+  it("finds nothing to say where the record and its lines agree", () => {
+    const train = made({ kind: "transport", state: "booked", title: "Train to Lakeside", start: "2026-11-22T13:29", end: "2026-11-22T15:57", lines: "Train 13:29 Northfield Central -> Lakeside, arrives 15:57. Booked." });
+    expect(compareWithNote(train, note).findings).toEqual([]);
+    const massage = made({ title: "Ana massage", state: "to-confirm", start: "2026-11-19T18:00", lines: "6pm - Ana massage, NF2 6GB. 1hr. 140 + 10, cash. soft-booked, confirm 10am", fields: { price: 150, paid: false } });
+    expect(compareWithNote(massage, note).findings).toEqual([]);
+  });
+
+  it("says where the record differs from its lines: the time, the day, the price, how settled it is", () => {
+    const wrong = made({ title: "Ana massage", state: "confirmed", start: "2026-11-20T17:00", lines: "6pm - Ana massage, NF2 6GB. 1hr. 140 + 10, cash. soft-booked, confirm 10am", fields: { price: 65, paid: true } });
+    const found = compareWithNote(wrong, note).findings.map((f) => `${f.field}: ${f.record} / ${f.note}`);
+    expect(found).toEqual([
+      "start time: 17:00 / 10:00, 18:00",
+      "day: 2026-11-20 / 19 nov",
+      "price: 65 / 10, 140, 150",
+      "standing: confirmed / your lines say it is not yet confirmed",
+      "paid: paid / your lines do not say it is paid",
+    ]);
+    const dinner = made({ title: "Dinner at The Sun", state: "offered", start: "2026-11-22T19:30", lines: "Dinner 7.30pm at The Sun, £48 paid", fields: { price: 48, paid: false } });
+    expect(compareWithNote(dinner, note).findings.map((f) => f.field)).toEqual(["paid"]);
+  });
+
+  it("says when the lines a record was made from are no longer in the note", () => {
+    const stale = made({ title: "Castle tour", start: "2026-11-21T14:00", lines: "2pm Castle tour, meet at the gate" });
+    const c = compareWithNote(stale, note);
+    expect(c.passage).toEqual([]);
+    expect(c.findings).toHaveLength(1);
+    expect(c.findings[0]!.field).toBe("lines");
+    expect(c.findings[0]!.note).toContain('no longer in the note as written: "2pm Castle tour, meet at the gate"');
+  });
+
+  it("as a tool: every record that differs, with its lines and its note as sources — or one record in full", async () => {
+    const records = [
+      made({ kind: "transport", state: "booked", title: "Train to Lakeside", start: "2026-11-22T13:29", end: "2026-11-22T15:57", lines: "Train 13:29 Northfield Central -> Lakeside, arrives 15:57. Booked." }),
+      made({ title: "Ana massage", state: "confirmed", start: "2026-11-19T17:00", lines: "6pm - Ana massage, NF2 6GB. 1hr. 140 + 10, cash. soft-booked, confirm 10am", fields: { price: 150 } }),
+      rec({ kind: "appointment", title: "Dentist", state: "confirmed", start: "2026-12-03T09:30" }),
+    ];
+    const v = { ...vault(records), read: async (p: string) => (p === "Trips/2026 Northfield.md" ? note : notes[p]) };
+    const tool = vaultTools(v).find((t) => t.name === "compare_with_note")!;
+    const all = await tool.run({});
+    expect(all.text).toContain("2 records compared with the notes they were made from; 1 differ");
+    expect(all.text).toContain("DIFFERS — start time: the record says 17:00; the note says 10:00, 18:00");
+    expect(all.text).toContain("DIFFERS — standing: the record says confirmed");
+    expect(all.text).not.toContain("Train to Lakeside");
+    expect(all.sources).toEqual(["Agent/Ana massage.md", "Trips/2026 Northfield.md"]);
+    const one = await tool.run({ path: "Agent/Train to Lakeside.md" });
+    expect(one.text).toContain("agrees on time, day, price and standing");
+    expect((await tool.run({ path: "Agent/Dentist.md" })).text).toContain("was not made from a note of yours");
   });
 });

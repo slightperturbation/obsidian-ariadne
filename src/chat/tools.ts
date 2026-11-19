@@ -1,6 +1,7 @@
 import type { ActionProposal } from "../actions/framework";
 import type { AgentRecord } from "../gateway/records";
 import { auditRecords } from "./audit";
+import { compareWithNote } from "./compare";
 import type { ChatTool, ToolResult } from "./engine";
 
 /**
@@ -241,5 +242,64 @@ export function vaultTools(vault: VaultAccess): ChatTool[] {
     },
   };
 
-  return [search, list, read, openNote, records, check, propose];
+  /** A record's source note: the note its `hub` field links, when that note may be shown. */
+  const hubOf = (r: AgentRecord): string | undefined => {
+    const hub = typeof r.fields.hub === "string" ? r.fields.hub : "";
+    const path = hub ? vault.resolve(hub) : undefined;
+    return path && vault.readable(path).ok ? path : undefined;
+  };
+
+  const compare: ChatTool = {
+    name: "compare_with_note",
+    description:
+      "Set the agent's records beside the lines of your own note they were made from, field by field, by plain rules: time, day, price, whether it is booked or paid, and lines that are no longer in the note. Give a record's path for one in full, or nothing (or a trip's name) for every record that differs.",
+    args: { path: "(optional) one record's path", trip: "(optional) only records of this trip" },
+    async run(args): Promise<ToolResult> {
+      const all = (await vault.records()).filter((r) => vault.readable(r.path).ok);
+      const given = str(args.path);
+      const trip = str(args.trip).toLowerCase();
+      const one = given ? all.find((r) => r.path === (vault.resolve(given) ?? given)) : undefined;
+      if (given && !one) return { text: `"${given.slice(0, 120)}" is not one of the agent's records. Use records to find its path.` };
+      const chosen = one ? [one] : all.filter((r) => !trip || String(r.fields.trip ?? r.title).toLowerCase().includes(trip));
+      const texts = new Map<string, string | undefined>();
+      const lines: string[] = [];
+      const sources = new Set<string>();
+      let compared = 0;
+      let differing = 0;
+      for (const r of chosen) {
+        const hub = hubOf(r);
+        if (!hub || !String(r.fields.notes ?? "").trim()) {
+          if (one) lines.push(`${r.path} was not made from a note of yours (or the note may not be shown), so there is nothing to set it beside.`);
+          continue;
+        }
+        if (!texts.has(hub)) texts.set(hub, await vault.read(hub));
+        const note = texts.get(hub);
+        if (note === undefined) continue;
+        compared++;
+        const c = compareWithNote(r, note);
+        if (c.findings.length === 0 && !one) continue;
+        if (c.findings.length > 0) differing++;
+        if (differing > 25 && !one) continue;
+        sources.add(r.path);
+        sources.add(hub);
+        lines.push(
+          [
+            `${r.kind} "${r.title}" — ${r.path}`,
+            `  record: start ${r.start ?? "—"}${r.end ? `, end ${r.end}` : ""}, state ${r.state}${typeof r.fields.price === "number" ? `, price ${r.fields.price}` : ""}`,
+            `  your note (${hub}): ${c.passage.length ? c.passage.map((p) => `"${p.slice(0, 160)}"`).join(" / ") : "its lines were not found"}`,
+            ...(c.findings.length ? c.findings.map((f) => `  DIFFERS — ${f.field}: the record says ${f.record}; the note says ${f.note}`) : ["  agrees on time, day, price and standing, as far as these rules can tell"]),
+          ].join("\n"),
+        );
+      }
+      if (one) return { text: lines.join("\n") || "Nothing to compare.", sources: [...sources] };
+      if (compared === 0) return { text: "None of these records was made from a note of yours, so there is nothing to set them beside." };
+      if (differing === 0) return { text: `${compared} record${compared === 1 ? "" : "s"} made from your notes were compared; none differs from its lines on time, day, price or standing. These rules do not read meaning: a wrong place or a wrong name would not be caught.` };
+      return {
+        text: `${compared} records compared with the notes they were made from; ${differing} differ${differing > 25 ? " (the first 25 shown)" : ""}. The note is the owner's word — but it may be the note that is out of date; say what differs and ask before proposing which to change.\n\n${lines.join("\n\n")}`,
+        sources: [...sources],
+      };
+    },
+  };
+
+  return [search, list, read, openNote, records, check, compare, propose];
 }
