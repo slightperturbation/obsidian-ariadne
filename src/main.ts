@@ -987,6 +987,9 @@ export default class AriadnePlugin extends Plugin {
             if (!active) return { label: "no local model reachable", ready: false };
             return { label: `${active.model ?? "local model"} · ${active.loopback ? "this machine" : active.label}`, ready: true };
           },
+          probe: async () => {
+            await this.localPool?.probeAll();
+          },
           models: {
             list: () => listLocalModels(parseEndpoints(this.settings.localEndpoints), obsidianFetch),
             chosen: () => this.settings.chatModel,

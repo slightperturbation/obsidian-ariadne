@@ -9,8 +9,10 @@ export const CHAT_VIEW_TYPE = "ariadne-chat";
 export interface ChatViewDeps {
   /** The engine, or null when no local model is set up. */
   engine: () => ChatEngine | null;
-  /** Who answers when nothing is picked: "gemma4:31b · this Mac", or why nobody can. */
+  /** Who answers when nothing is picked: "gemma4:31b · this Mac", or why nobody can — as last asked. */
   model: () => { label: string; ready: boolean };
+  /** Ask the local endpoints afresh whether they are there. Until this has run, "not reachable" is only "not asked yet". */
+  probe: () => Promise<void>;
   /** The local models there are to pick from, and the pick. */
   models: {
     list: () => Promise<ModelGroup[]>;
@@ -39,6 +41,8 @@ export class ChatView extends ItemView {
   private headEl!: HTMLElement;
   /** What the endpoints said they have, when last asked. */
   private groups: ModelGroup[] | null = null;
+  /** The endpoints have been asked since this pane opened: only then is "nobody is there" a finding. */
+  private asked = false;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -83,11 +87,36 @@ export class ChatView extends ItemView {
   /** Ask each local endpoint what it has installed, and show it in the picker. */
   private async refreshModels(): Promise<void> {
     try {
-      this.groups = await this.deps.models.list();
+      const [groups] = await Promise.all([this.deps.models.list(), this.deps.probe().catch(() => {})]);
+      this.groups = groups;
     } catch {
       this.groups = [];
     }
+    this.asked = true;
     this.renderHead();
+    this.renderWarning();
+  }
+
+  /** Can anybody answer? The model that was picked if one was, otherwise the default. */
+  private reachable(): boolean {
+    const chosen = this.deps.models.chosen();
+    if (!chosen) return this.deps.model().ready;
+    return (this.groups ?? []).some((g) => g.reachable && g.models.some((m) => choiceKey(g.url, m) === chosen));
+  }
+
+  /** Said only once the endpoints have been asked, and taken back as soon as one answers. */
+  private renderWarning(): void {
+    this.listEl.querySelector(".ariadne-chat-warn")?.remove();
+    if (!this.asked || this.reachable()) return;
+    const intro = this.listEl.querySelector(".ariadne-chat-intro");
+    if (!intro) return;
+    const chosen = this.deps.models.chosen();
+    intro.createEl("p", {
+      cls: "ariadne-chat-warn",
+      text: chosen
+        ? `${chosen.split("|").pop() ?? "The model you picked"} is not available right now. Pick another model above, or start it and press ↻.`
+        : "No local model answered. Start your local model server (for example Ollama), or set a local endpoint and model in Ariadne's settings, then press ↻.",
+    });
   }
 
   /** The picker: every model installed on each local endpoint, and the default. */
@@ -95,7 +124,7 @@ export class ChatView extends ItemView {
     const chosen = this.deps.models.chosen();
     const fallback = this.deps.model();
     const select = head.createEl("select", { cls: "ariadne-chat-pick dropdown", attr: { "aria-label": "Local model that answers", title: "The local model that answers in this chat" } });
-    select.createEl("option", { value: "", text: `Default · ${fallback.label}` });
+    select.createEl("option", { value: "", text: `Default · ${this.asked || fallback.ready ? fallback.label : "looking for local models…"}` });
     let found = chosen === "";
     for (const group of this.groups ?? []) {
       const og = select.createEl("optgroup", { attr: { label: group.reachable ? group.label : `${group.label} — not reachable` } });
@@ -114,6 +143,7 @@ export class ChatView extends ItemView {
         return;
       }
       this.deps.models.choose(select.value);
+      this.renderWarning();
       const label = select.selectedOptions[0]?.text ?? "the default";
       this.note(`Answers now come from ${select.value ? `${label} (${this.groups?.find((g) => select.value.startsWith(`${g.url}|`))?.label ?? "local"})` : label.replace(/^Default · /, "the default, ")}.`);
     });
@@ -162,7 +192,7 @@ export class ChatView extends ItemView {
         this.inputEl.focus();
       });
     }
-    if (!this.deps.model().ready) intro.createEl("p", { cls: "ariadne-chat-warn", text: "No local model is reachable. Set a local endpoint and model in Ariadne's settings (for example http://localhost:11434/v1), and start it." });
+    this.renderWarning();
   }
 
   /** A line from the pane itself, not from the model. */
