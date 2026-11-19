@@ -134,6 +134,28 @@ export class FileLedger implements Ledger {
     return [...(await this.load())];
   }
 
+  /**
+   * Forget old entries that were never changes to a record — log lines and
+   * reading notes, written many times a day. Their keys only guard against
+   * the same write arriving twice, which after a month it will not.
+   */
+  async prune(olderThanMs: number, now: number): Promise<number> {
+    const entries = await this.load();
+    let dropped = 0;
+    for (const [key, e] of [...entries]) {
+      if (e.id || e.status !== "applied" || /^Paper/.test(e.summary ?? "")) continue;
+      if (now - Date.parse(e.at) > olderThanMs) {
+        entries.delete(key);
+        dropped++;
+      }
+    }
+    if (dropped > 0) {
+      const first = entries.entries().next().value as [string, LedgerEntry] | undefined;
+      if (first) await this.set(first[0], first[1]);
+    }
+    return dropped;
+  }
+
   async set(key: string, entry: LedgerEntry): Promise<void> {
     const entries = await this.load();
     entries.set(key, entry);

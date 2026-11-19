@@ -1099,6 +1099,9 @@ export default class AriadnePlugin extends Plugin {
     // Indexing must wait for layout-ready: before that, the metadata cache is
     // still resolving and vault events replay the initial file scan.
     this.app.workspace.onLayoutReady(() => {
+      // Has the agent gone silent? Looked at shortly after start, and every twenty minutes.
+      window.setTimeout(() => this.checkAgentAlive(), 45_000);
+      this.registerInterval(window.setInterval(() => this.checkAgentAlive(), 20 * 60_000));
       void this.localPool?.probeAll().then(() => {
         this.status.set({});
         this.scheduleDebugStatus(100);
@@ -1829,6 +1832,25 @@ export default class AriadnePlugin extends Plugin {
     }
     this.backlinkIndex = index;
     return index;
+  }
+
+  private lastSilentNotice = 0;
+
+  /**
+   * The agent writes a short status note every hour. When that note is more
+   * than two and a half hours old, something is wrong — the agent is down,
+   * or cut off from the vault, or this device has not synced — and the owner
+   * should not take silence for "nothing happened". Said at most once in
+   * three hours; nothing at all where no such note exists.
+   */
+  private checkAgentAlive(): void {
+    const file = this.app.vault.getAbstractFileByPath(`${this.levelPolicy().agentFolder}/Itineraries/Theseus status.md`);
+    if (!(file instanceof TFile)) return;
+    const age = Date.now() - file.stat.mtime;
+    if (age < 2.5 * 3_600_000 || Date.now() - this.lastSilentNotice < 3 * 3_600_000) return;
+    this.lastSilentNotice = Date.now();
+    const hours = Math.round(age / 3_600_000);
+    new Notice(`Theseus has written nothing for ${hours} hours. It may be down or cut off from the vault — or this device has not synced. Until it writes again, no news from it is not good news.`, 20_000);
   }
 
   private async activateChat(): Promise<void> {

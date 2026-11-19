@@ -178,7 +178,7 @@ function sourceLabel(e: Evidence): string {
 }
 
 /** Shape check. Returns problems; an empty list means the observation is well-formed. */
-export function validateObservation(raw: unknown): string[] {
+export function validateObservation(raw: unknown, lenient = false): string[] {
   const errors: string[] = [];
   if (!raw || typeof raw !== "object") return ["observation must be an object"];
   const o = raw as Partial<Observation>;
@@ -202,7 +202,7 @@ export function validateObservation(raw: unknown): string[] {
     errors.push("unknown kind");
   } else {
     errors.push(...cleanFields(o.kind, o.fields).errors);
-    if (o.state !== undefined && !validState(o.kind, o.state)) errors.push(`state "${cleanString(o.state, 40)}" is not valid for ${o.kind}`);
+    if (o.state !== undefined && !validState(o.kind, o.state, lenient)) errors.push(`state "${cleanString(o.state, 40)}" is not valid for ${o.kind}`);
     if (o.op === "create" && !cleanString(o.title)) errors.push("create needs a title");
     if (o.op === "update" && !cleanString(o.match?.id, 80)) errors.push("update needs match.id");
     for (const k of ["start", "end"] as const) {
@@ -322,7 +322,7 @@ async function planCreate(ctx: SubmitContext, o: Observation, force: boolean): P
   const summary = `New ${kind} · ${title}`;
   const records = await ctx.store.all();
   const near = resolveAgainst(records, queryOf(o));
-  const state = validState(kind, o.state) ?? spec.initial;
+  const state = validState(kind, o.state, force) ?? spec.initial;
   const id = `${kind}-${hashText(o.key)}`;
   if (records.some((r) => r.id === id)) {
     return { decision: "reject", reason: "a record with this key already exists", summary, changes: [] };
@@ -378,7 +378,7 @@ async function planUpdate(ctx: SubmitContext, o: Observation, force: boolean): P
 
   const before = await ctx.io.read(record.path);
   const fresh = parseRecord(record.path, before) ?? record;
-  const state = validState(kind, o.state);
+  const state = validState(kind, o.state, force);
   const next: AgentRecord = {
     ...fresh,
     state: state ?? fresh.state,
@@ -415,7 +415,8 @@ export async function planObservation(
   raw: unknown,
   opts: { force?: boolean } = {},
 ): Promise<Plan> {
-  const errors = validateObservation(raw);
+  // What the owner approves is carried out even where it names a state this version has not learnt.
+  const errors = validateObservation(raw, !!opts.force);
   if (errors.length > 0) {
     return { decision: "reject", reason: errors.slice(0, 4).join("; "), summary: "Malformed observation", changes: [] };
   }
@@ -461,7 +462,7 @@ export function reviewFolder(agentFolder: string): string {
   return `${agentFolder}/${REVIEW_DIR}`;
 }
 
-function reviewPath(agentFolder: string, key: string): string {
+export function reviewPath(agentFolder: string, key: string): string {
   return `${reviewFolder(agentFolder)}/${hashText(key)}.md`;
 }
 

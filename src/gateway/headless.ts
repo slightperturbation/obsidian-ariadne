@@ -45,6 +45,10 @@ async function main(): Promise<void> {
   const auditFile = nodePath.join(config.stateDir, "audit.jsonl");
   const ledger = new FileLedger(nodePath.join(config.stateDir, "ledger.json"));
 
+  // Old log and reading-note entries are forgotten, so the ledger does not grow without end.
+  const pruned = await ledger.prune(30 * 86_400_000, Date.now()).catch(() => 0);
+  if (pruned > 0) process.stdout.write(`ledger: ${pruned} old log and note entries forgotten\n`);
+
   // Records of a kind this version no longer has are moved to the kinds it does.
   const moved = await migrateLegacyItinerary(io, config.policy.agentFolder, ledger);
   if (moved.removed + moved.converted + moved.reviewsRemoved + moved.reviewsConverted > 0) {

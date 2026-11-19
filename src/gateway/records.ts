@@ -330,12 +330,19 @@ export function cleanFields(
   return { fields, errors };
 }
 
-export function validState(kind: RecordKind, state: unknown): string | undefined {
+/**
+ * `lenient`: also take a state this version does not know, when it is a
+ * plain word. That is for one case only — the owner approving a change that
+ * a newer gateway held: an older plugin (a phone not yet updated) should
+ * carry out their decision, not refuse it over a word it has not learnt.
+ */
+export function validState(kind: RecordKind, state: unknown, lenient = false): string | undefined {
   const s = cleanString(state, 40).toLowerCase();
   if (!s) return undefined;
   const allowed = SPECS[kind].states;
   if (allowed === null) return s;
-  return allowed.includes(s) ? s : undefined;
+  if (allowed.includes(s)) return s;
+  return lenient && /^[a-z][a-z-]{1,30}$/.test(s) ? s : undefined;
 }
 
 /** A filename-safe title. */

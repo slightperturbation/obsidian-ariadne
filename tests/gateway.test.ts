@@ -251,6 +251,24 @@ describe("gateway: looking over what was changed, and taking it back", () => {
     expect(await io.read(other!.path!)).not.toContain("agent-hash: owner");
   });
 
+  it("carries out what the owner approves even when it names a state this version has not learnt", async () => {
+    const { gateway, io } = setup();
+    const [created] = (await gateway.submit(theseus, { observations: [appt("n1", {})] })).results;
+    // Unknown to this version, and submitted in the ordinary way: refused.
+    const [refused] = (await gateway.submit(theseus, { observations: [appt("n2", { op: "update", match: { id: created!.id!, class: "exact" }, query: { kind: "appointment", thread: "t:physio" }, state: "waitlisted" })] })).results;
+    expect(refused!.status).toBe("rejected");
+    // The same change, held by a newer gateway and synced here as a review file: the owner approves, and it is applied.
+    const held = { key: "n3", summary: "Physio — waitlisted", reason: "your agent is not sure", submitted: "2026-11-19T10:00:00", client: "theseus", target: created!.path!, observation: appt("n3", { op: "update", match: { id: created!.id!, class: "exact" }, query: { kind: "appointment", thread: "t:physio" }, state: "waitlisted", what: "put on the waiting list" }) };
+    const { serializeReview, reviewPath } = await import("../src/gateway/submit");
+    await io.create(reviewPath("Agent", "n3"), serializeReview(held as never));
+    const done = await gateway.decide(theseus, { key: "n3", decision: "approve" });
+    expect(done.status).toBe("applied");
+    expect(await io.read(created!.path!)).toContain("state: waitlisted");
+    // Still not anything at all: a state must be a plain word.
+    await io.create(reviewPath("Agent", "n4"), serializeReview({ ...held, key: "n4", observation: { ...held.observation, key: "n4", state: "x; rm -rf" } } as never));
+    expect((await gateway.decide(theseus, { key: "n4", decision: "approve" })).status).toBe("rejected");
+  });
+
   it("is the owner's to do: another local client may look, but not take back", async () => {
     const { gateway } = setup();
     await gateway.submit(theseus, { observations: [appt("e1", {})] });
