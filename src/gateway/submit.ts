@@ -82,6 +82,12 @@ export interface Observation {
    * user's note — cancelled, or only reworded?): hold it for the user.
    */
   ask?: boolean;
+  /**
+   * The owner's own correction, given through their channel: the record is
+   * left reading as edited by the owner, so that what the agent wants to
+   * change in it afterwards asks first. Honoured only from the owner's client.
+   */
+  pin?: boolean;
   evidence: Evidence;
 }
 
@@ -386,7 +392,10 @@ async function planUpdate(ctx: SubmitContext, o: Observation, force: boolean): P
     updated: localStamp(ctx.now()),
     body: appendHistory(fresh.body, historyEntry(ctx, o, state && state !== fresh.state ? state : undefined)),
   };
-  const changes: FileChange[] = [{ type: "modify", path: record.path, before, after: serializeRecord(next) }];
+  const text = serializeRecord(next);
+  // An owner's correction is stamped as the owner's: the record no longer matches the agent's own hash.
+  const after = o.pin === true ? text.replace(/^agent-hash: .*$/m, "agent-hash: owner") : text;
+  const changes: FileChange[] = [{ type: "modify", path: record.path, before, after }];
   const out = { summary, changes, id: record.id, path: record.path };
   if (force) return { decision: "apply", reason: "approved by you", ...out };
 

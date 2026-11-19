@@ -323,7 +323,11 @@ export class Gateway {
       const list = Array.isArray(args.observations) ? args.observations.slice(0, 50) : null;
       if (!list) throw new GatewayError("bad-request", "observations must be a list");
       const results: SubmitResult[] = [];
-      for (const obs of list) results.push(await this.submissions.submit(obs, client.name));
+      for (const obs of list) {
+        // Only the owner's own channel may say that a change is the owner's.
+        const clean = !client.owner && obs && typeof obs === "object" && "pin" in obs ? { ...(obs as object), pin: undefined } : obs;
+        results.push(await this.submissions.submit(clean, client.name));
+      }
       return { result: { results }, n: results.length, paths: results.flatMap((r) => (r.path ? [r.path] : [])) };
     });
   }

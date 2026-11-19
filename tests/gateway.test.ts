@@ -230,6 +230,27 @@ describe("gateway: looking over what was changed, and taking it back", () => {
     expect((await gateway.submissions.undo("nope")).reason).toBe("no such change");
   });
 
+  it("takes the owner's correction as the owner's edit: what the agent wants to change afterwards asks first", async () => {
+    const { gateway, io } = setup();
+    const [created] = (await gateway.submit(theseus, { observations: [appt("p1", {})] })).results;
+    const fix = appt("p2", { op: "update", match: { id: created!.id!, class: "adjudicated" }, query: { kind: "appointment", thread: "t:physio" }, start: "2026-12-04T16:30", what: "you corrected the time", pin: true });
+    const [held] = (await gateway.submit(theseus, { observations: [fix] })).results;
+    expect(held!.status).toBe("review");
+    expect((await gateway.decide(theseus, { key: "p2", decision: "approve" })).status).toBe("applied");
+    const text = await io.read(created!.path!);
+    expect(text).toContain("start: 2026-12-04T16:30");
+    expect(text).toContain("agent-hash: owner");
+    // A later message that would move it again is held, not applied.
+    const later = appt("p3", { op: "update", match: { id: created!.id!, class: "exact" }, query: { kind: "appointment", thread: "t:physio" }, start: "2026-12-04T15:00", what: "reminder" });
+    const [res] = (await gateway.submit(theseus, { observations: [later] })).results;
+    expect(res).toMatchObject({ status: "review", reason: "you have edited this record, so changes to it ask first" });
+    expect(await io.read(created!.path!)).toContain("start: 2026-12-04T16:30");
+    // A client that is not the owner's cannot claim it.
+    const [other] = (await gateway.submit(theseus, { observations: [appt("q1", { title: "Eye test", thread: "t:other", start: "2027-01-10T10:00" })] })).results;
+    await gateway.submit({ ...theseus, owner: false }, { observations: [appt("q2", { op: "update", match: { id: other!.id!, class: "exact" }, query: { kind: "appointment", thread: "t:other" }, thread: "t:other", state: "rescheduled", pin: true })] });
+    expect(await io.read(other!.path!)).not.toContain("agent-hash: owner");
+  });
+
   it("is the owner's to do: another local client may look, but not take back", async () => {
     const { gateway } = setup();
     await gateway.submit(theseus, { observations: [appt("e1", {})] });
