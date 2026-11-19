@@ -70,9 +70,13 @@ export class ChatView extends ItemView {
     this.headEl = root.createDiv({ cls: "ariadne-chat-head" });
     this.listEl = root.createDiv({ cls: "ariadne-chat-list" });
     const form = root.createDiv({ cls: "ariadne-chat-form" });
-    this.inputEl = form.createEl("textarea", { cls: "ariadne-chat-input", attr: { rows: "2", placeholder: "Ask about your notes, or ask for a correction…" } });
-    this.sendEl = form.createEl("button", { cls: "mod-cta", text: "Send" });
+    this.inputEl = form.createEl("textarea", { cls: "ariadne-chat-input", attr: { rows: "4", placeholder: "Ask about your notes, or ask for a correction…" } });
+    const row = form.createDiv({ cls: "ariadne-chat-form-row" });
+    row.createSpan({ cls: "ariadne-chat-hint", text: "Enter sends · Shift+Enter starts a new line" });
+    this.sendEl = row.createEl("button", { cls: "mod-cta", text: "Send" });
     this.sendEl.addEventListener("click", () => void this.send());
+    // The box grows with what is written in it, up to a good part of the pane; beyond that it scrolls.
+    this.inputEl.addEventListener("input", () => this.fitInput());
     this.inputEl.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
         ev.preventDefault();
@@ -189,10 +193,20 @@ export class ChatView extends ItemView {
       const b = tries.createEl("button", { text: q });
       b.addEventListener("click", () => {
         this.inputEl.value = q;
+        this.fitInput();
         this.inputEl.focus();
       });
     }
     this.renderWarning();
+  }
+
+  /** Make the input as tall as its text, between its resting height and about two fifths of the pane. */
+  private fitInput(): void {
+    const el = this.inputEl;
+    el.style.height = "auto";
+    const max = Math.max(160, Math.round(this.contentEl.clientHeight * 0.4));
+    el.style.height = `${Math.min(el.scrollHeight + 2, max)}px`;
+    el.style.overflowY = el.scrollHeight + 2 > max ? "auto" : "hidden";
   }
 
   /** A line from the pane itself, not from the model. */
@@ -216,6 +230,7 @@ export class ChatView extends ItemView {
     this.busy = true;
     this.sendEl.disabled = true;
     this.inputEl.value = "";
+    this.fitInput();
     this.listEl.querySelector(".ariadne-chat-intro")?.remove();
     this.listEl.createDiv({ cls: "ariadne-chat-msg ariadne-chat-user", text });
     const working = this.listEl.createDiv({ cls: "ariadne-chat-working", text: "Thinking…" });

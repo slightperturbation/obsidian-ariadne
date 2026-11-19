@@ -535,8 +535,11 @@
 .ariadne-chat-proposal .ariadne-diff-body { max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 4px 0; }
 .ariadne-chat-proposal-buttons { display: flex; gap: 6px; }
 .ariadne-chat-proposal-status { color: var(--text-muted); font-size: var(--font-ui-small); }
-.ariadne-chat-form { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--background-modifier-border); align-items: flex-end; }
-.ariadne-chat-input { flex: 1 1 auto; resize: vertical; min-height: 2.6em; }
+.ariadne-chat-form { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--background-modifier-border); flex: none; }
+.ariadne-chat-input { width: 100%; box-sizing: border-box; resize: none; min-height: 6.5em; font-size: var(--font-text-size); line-height: var(--line-height-normal); padding: 8px 10px; }
+.ariadne-chat-form-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ariadne-chat-hint { color: var(--text-faint); font-size: var(--font-ui-smaller); }
+.ariadne-chat-list { min-height: 0; }
 .ariadne-chat-pick { max-width: 100%; flex: 1 1 140px; min-width: 0; font-size: var(--font-ui-smaller); }
 .ariadne-chat-refresh { padding: 0 4px; }
 /*
