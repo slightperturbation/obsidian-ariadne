@@ -72,6 +72,12 @@ export class PreviewModal extends Modal {
 
     const head = doc.createElement("div");
     head.classList.add("ariadne-diff-head");
+    if (change.type === "move") {
+      // Nothing of the text changes: where it was and where it goes is the whole of it.
+      head.textContent = `move · ${change.path} → ${change.to ?? ""}`;
+      card.appendChild(head);
+      return card;
+    }
     const verb =
       change.type === "create" ? "create" : change.type === "modify" ? "edit" : "delete";
     head.textContent = `${verb} · ${change.path}`;

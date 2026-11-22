@@ -27,6 +27,13 @@ function memVault(initial: Record<string, string> = {}): VaultIO & { files: Map<
     delete: async (p) => {
       if (!files.delete(p)) throw new Error(`not found: ${p}`);
     },
+    rename: async (from, to) => {
+      const v = files.get(from);
+      if (v === undefined) throw new Error(`not found: ${from}`);
+      if (files.has(to)) throw new Error(`exists: ${to}`);
+      files.delete(from);
+      files.set(to, v);
+    },
   };
 }
 
@@ -182,5 +189,69 @@ describe("ActionExecutor", () => {
     expect(vault.files.get("new.md")).toBe("hello");
     await executor.undoLast();
     expect(vault.files.has("new.md")).toBe(false);
+  });
+
+  describe("moves", () => {
+    it("moves notes without touching their text, and puts them back in one undo", async () => {
+      const vault = memVault({ "Inbox/a.md": "alpha", "Inbox/b.md": "beta" });
+      const executor = new ActionExecutor(vault);
+      await executor.apply({
+        title: "file",
+        changes: [
+          { type: "move", path: "Inbox/a.md", to: "Projects/a.md" },
+          { type: "move", path: "Inbox/b.md", to: "Areas/b.md" },
+        ],
+      });
+      expect([...vault.files]).toEqual([["Projects/a.md", "alpha"], ["Areas/b.md", "beta"]]);
+      await executor.undoLast();
+      expect(Object.fromEntries(vault.files)).toEqual({ "Inbox/a.md": "alpha", "Inbox/b.md": "beta" });
+    });
+
+    it("refuses a move onto a note that exists, or of one that is gone, before moving anything", async () => {
+      const vault = memVault({ "Inbox/a.md": "alpha", "Inbox/b.md": "beta", "Projects/b.md": "other" });
+      const executor = new ActionExecutor(vault);
+      await expect(
+        executor.apply({ title: "x", changes: [{ type: "move", path: "Inbox/a.md", to: "Projects/a.md" }, { type: "move", path: "Inbox/b.md", to: "Projects/b.md" }] }),
+      ).rejects.toBeInstanceOf(ConflictError);
+      await expect(executor.apply({ title: "y", changes: [{ type: "move", path: "Inbox/zzz.md", to: "Projects/zzz.md" }] })).rejects.toBeInstanceOf(ConflictError);
+      expect(Object.fromEntries(vault.files)).toEqual({ "Inbox/a.md": "alpha", "Inbox/b.md": "beta", "Projects/b.md": "other" });
+    });
+
+    it("undoes what moved when a later move in the batch fails", async () => {
+      const vault = memVault({ "Inbox/a.md": "alpha", "Inbox/b.md": "beta" });
+      const rename = vault.rename!;
+      vault.rename = async (from, to) => {
+        if (from === "Inbox/b.md") throw new Error("locked");
+        return rename(from, to);
+      };
+      const executor = new ActionExecutor(vault);
+      await expect(
+        executor.apply({ title: "x", changes: [{ type: "move", path: "Inbox/a.md", to: "Projects/a.md" }, { type: "move", path: "Inbox/b.md", to: "Projects/b.md" }] }),
+      ).rejects.toThrow("locked");
+      expect(Object.fromEntries(vault.files)).toEqual({ "Inbox/a.md": "alpha", "Inbox/b.md": "beta" });
+      expect(executor.undoCount).toBe(0);
+    });
+
+    it("retags a note and moves it in one action, and undoes both in the right order", async () => {
+      const vault = memVault({ "Inbox/a.md": "# A" });
+      const executor = new ActionExecutor(vault);
+      await executor.apply({
+        title: "file and tag",
+        changes: [
+          { type: "modify", path: "Inbox/a.md", before: "# A", after: "---\ntags: [book]\n---\n# A" },
+          { type: "move", path: "Inbox/a.md", to: "Books/a.md" },
+        ],
+      });
+      expect(Object.fromEntries(vault.files)).toEqual({ "Books/a.md": "---\ntags: [book]\n---\n# A" });
+      await executor.undoLast();
+      expect(Object.fromEntries(vault.files)).toEqual({ "Inbox/a.md": "# A" });
+    });
+
+    it("says so when the vault cannot move files", async () => {
+      const vault = memVault({ "a.md": "alpha" });
+      delete vault.rename;
+      await expect(new ActionExecutor(vault).apply({ title: "x", changes: [{ type: "move", path: "a.md", to: "B/a.md" }] })).rejects.toThrow("cannot move files");
+      expect(vault.files.get("a.md")).toBe("alpha");
+    });
   });
 });

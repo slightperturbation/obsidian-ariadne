@@ -29,6 +29,7 @@ function vault(): VaultAccess {
     open: async (path) => void opened.push(path),
     exists: (path) => path in notes,
     writable: (path) => (path.startsWith("Personal/Journal/") ? { ok: false, why: "that is where your journal lives" } : { ok: true }),
+    levelAt: () => "shareable",
     modelName: () => "gemma4:31b",
     search: async (q) =>
       Object.entries(notes)
@@ -330,7 +331,7 @@ describe("vault chat: looking things up outside the vault", () => {
   }
 
   it("has no way outside at all unless the vault gives it one", () => {
-    expect(vaultTools(vault()).map((t) => t.name)).toEqual(["search", "list", "read", "open", "propose_edit", "propose_note"]);
+    expect(vaultTools(vault()).map((t) => t.name)).toEqual(["search", "list", "read", "open", "propose_edit", "propose_note", "tags", "propose_moves", "propose_tags"]);
   });
 
   it("shows the owner the exact words before they go, and sends nothing when they say no", async () => {

@@ -533,6 +533,9 @@
 .ariadne-chat-proposal { margin-top: 8px; border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 6px 8px; background: var(--background-primary); }
 .ariadne-chat-proposal-title { font-weight: 600; }
 .ariadne-chat-proposal-why { color: var(--text-muted); font-size: var(--font-ui-small); margin: 2px 0 4px; }
+.ariadne-chat-moves { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); margin: 4px 0; max-height: 16em; overflow-y: auto; }
+.ariadne-chat-move { padding: 1px 0; overflow-wrap: anywhere; color: var(--text-muted); }
+.ariadne-chat-move a { color: var(--text-normal); }
 .ariadne-chat-proposal .ariadne-diff-body { max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 4px 0; }
 .ariadne-chat-proposal-buttons { display: flex; gap: 6px; }
 .ariadne-chat-proposal-status { color: var(--text-muted); font-size: var(--font-ui-small); }

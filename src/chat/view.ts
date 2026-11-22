@@ -359,7 +359,22 @@ export class ChatView extends ItemView {
     const card = parent.createDiv({ cls: "ariadne-chat-proposal" });
     card.createDiv({ cls: "ariadne-chat-proposal-title", text: `Proposed: ${proposal.title}` });
     if (proposal.description) card.createDiv({ cls: "ariadne-chat-proposal-why", text: proposal.description });
+    const moves = proposal.changes.filter((c) => c.type === "move");
+    if (moves.length > 0) {
+      // A move changes no text: where each note is and where it would go is the whole of it.
+      const list = card.createDiv({ cls: "ariadne-chat-moves" });
+      for (const change of moves) {
+        const row = list.createDiv({ cls: "ariadne-chat-move" });
+        const link = row.createEl("a", { text: change.path, attr: { href: "#" } });
+        link.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          this.deps.openNote(change.path);
+        });
+        row.createSpan({ text: ` → ${change.to ?? ""}` });
+      }
+    }
     for (const change of proposal.changes) {
+      if (change.type === "move") continue;
       const head = card.createDiv({ cls: "ariadne-diff-head" });
       const link = head.createEl("a", { text: change.path, attr: { href: "#" } });
       link.addEventListener("click", (ev) => {
@@ -393,7 +408,17 @@ export class ChatView extends ItemView {
             ev.preventDefault();
             void done
               .undo()
-              .then(() => status.setText(proposal.changes.every((c) => c.type === "create") ? "Undone — the note was removed again." : "Undone — the note is as it was."))
+              .then(() =>
+                status.setText(
+                  proposal.changes.every((c) => c.type === "create")
+                    ? "Undone — the note was removed again."
+                    : proposal.changes.every((c) => c.type === "move")
+                      ? `Undone — ${proposal.changes.length === 1 ? "the note is" : "the notes are"} back where ${proposal.changes.length === 1 ? "it was" : "they were"}.`
+                      : proposal.changes.length > 1
+                        ? "Undone — the notes are as they were."
+                        : "Undone — the note is as it was.",
+                ),
+              )
               .catch((err: unknown) => status.setText(`Could not undo: ${err instanceof Error ? err.message : "the note has changed since"}.`));
           });
         })

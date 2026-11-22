@@ -1796,6 +1796,11 @@ export default class AriadnePlugin extends Plugin {
         if (this.isJournalPath(path)) return { ok: false, why: "that is where your journal lives" };
         return { ok: true };
       },
+      levelAt: (note, at) => {
+        const file = this.app.vault.getAbstractFileByPath(note);
+        const override = file instanceof TFile ? (this.app.metadataCache.getFileCache(file)?.frontmatter?.["agent-access"] as unknown) : undefined;
+        return levelOf(at, this.levelPolicy(), override);
+      },
       modelName: () => parseChoice(this.settings.chatModel)?.model ?? this.localPool?.state().active?.model ?? "",
       web: {
         // Asked of the owner in the pane, every time; with no pane to ask in, the answer is no.

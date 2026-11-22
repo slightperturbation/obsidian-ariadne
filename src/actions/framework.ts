@@ -7,6 +7,10 @@
  * exactly what will happen — the executor validates at accept time that the
  * vault still matches what was previewed, and refuses on any drift.
  *
+ * A "move" relocates a note without touching its text. It goes through the
+ * VaultIO's rename, which in Obsidian is the fileManager's — so links to the
+ * note are rewritten as they are when the user moves it themselves.
+ *
  * Two deliberate exceptions, both non-destructive and both still undoable:
  * creating a scaffolded note and generating a Map of Content write a NEW file
  * on command without a preview (you asked for a note; here it is — read it and
@@ -16,12 +20,14 @@
  */
 
 export interface FileChange {
-  type: "create" | "modify" | "delete";
+  type: "create" | "modify" | "delete" | "move";
   path: string;
   /** Expected current content (modify/delete) — the conflict check anchor. */
   before?: string;
   /** New content (create/modify). */
   after?: string;
+  /** Where the note goes (move): a full path, which must be free. */
+  to?: string;
 }
 
 export interface ActionProposal {
@@ -50,6 +56,8 @@ export interface VaultIO {
   create(path: string, content: string): Promise<void>;
   modify(path: string, content: string): Promise<void>;
   delete(path: string): Promise<void>;
+  /** Move a file, rewriting links to it. Absent: this vault cannot move files. */
+  rename?(from: string, to: string): Promise<void>;
 }
 
 export class ConflictError extends Error {
@@ -76,18 +84,42 @@ export class ActionExecutor {
    * Called immediately before applying — a note edited between preview and
    * accept must abort the action, never silently overwrite the edit.
    */
-  async validate(changes: FileChange[]): Promise<void> {
+  async validate(changes: FileChange[], retry = false): Promise<void> {
+    // Checked as the changes would unfold: after a move, its source is empty
+    // and its destination holds the note — so "edit it, then move it" and its
+    // undo, "move it back, then edit it back", both check the right file.
+    const where = new Map<string, string | null>();
+    const at = (p: string): string | null => (where.has(p) ? where.get(p)! : p);
+    const exists = async (p: string): Promise<boolean> => {
+      const q = at(p);
+      return q !== null && (await this.io.exists(q));
+    };
     for (const c of changes) {
+      if (c.type === "move") {
+        if (!c.to) throw new ConflictError(`no destination given for "${c.path}"`, c.path);
+        // Retrying an undo that stopped part-way: a move that already happened is fine as it is.
+        if (retry && !(await exists(c.path)) && (await exists(c.to))) {
+          where.set(c.to, c.to);
+          where.set(c.path, null);
+          continue;
+        }
+        if (!(await exists(c.path))) throw new ConflictError(`"${c.path}" no longer exists`, c.path);
+        if (await exists(c.to)) throw new ConflictError(`"${c.to}" already exists`, c.to);
+        where.set(c.to, at(c.path));
+        where.set(c.path, null);
+        continue;
+      }
+      if (retry && ((c.type === "create" && (await exists(c.path))) || (c.type === "delete" && !(await exists(c.path))))) continue;
       if (c.type === "create") {
-        if (await this.io.exists(c.path)) {
+        if (await exists(c.path)) {
           throw new ConflictError(`"${c.path}" already exists`, c.path);
         }
       } else {
-        if (!(await this.io.exists(c.path))) {
+        if (!(await exists(c.path))) {
           throw new ConflictError(`"${c.path}" no longer exists`, c.path);
         }
         if (c.before !== undefined) {
-          const current = await this.io.read(c.path);
+          const current = await this.io.read(at(c.path)!);
           if (current !== c.before) {
             throw new ConflictError(`"${c.path}" changed since the preview`, c.path);
           }
@@ -96,8 +128,14 @@ export class ActionExecutor {
     }
   }
 
+  private async rename(from: string, to: string): Promise<void> {
+    if (!this.io.rename) throw new Error("this vault cannot move files");
+    await this.io.rename(from, to);
+  }
+
   private async applyChange(c: FileChange): Promise<void> {
-    if (c.type === "create") await this.io.create(c.path, c.after ?? "");
+    if (c.type === "move") await this.rename(c.path, c.to ?? "");
+    else if (c.type === "create") await this.io.create(c.path, c.after ?? "");
     else if (c.type === "modify") await this.io.modify(c.path, c.after ?? "");
     else await this.io.delete(c.path);
   }
@@ -113,7 +151,10 @@ export class ActionExecutor {
     const inverse: FileChange[] = [];
     try {
       for (const c of proposal.changes) {
-        if (c.type === "create") {
+        if (c.type === "move") {
+          await this.rename(c.path, c.to ?? "");
+          inverse.unshift({ type: "move", path: c.to ?? "", to: c.path });
+        } else if (c.type === "create") {
           await this.io.create(c.path, c.after ?? "");
           inverse.unshift({ type: "delete", path: c.path, before: c.after });
         } else if (c.type === "modify") {
@@ -158,12 +199,15 @@ export class ActionExecutor {
    * on failure.
    */
   private async applyReversible(changes: FileChange[]): Promise<void> {
-    await this.validate(changes.filter((c) => !this.mayBeAlreadyApplied(c)));
+    await this.validate(changes, true);
     const undoSteps: Array<() => Promise<void>> = [];
     try {
       for (const c of changes) {
         if (await this.alreadySatisfied(c)) continue;
-        if (c.type === "create") {
+        if (c.type === "move") {
+          await this.rename(c.path, c.to ?? "");
+          undoSteps.unshift(() => this.rename(c.to ?? "", c.path));
+        } else if (c.type === "create") {
           await this.io.create(c.path, c.after ?? "");
           undoSteps.unshift(() => this.io.delete(c.path));
         } else if (c.type === "modify") {
@@ -188,13 +232,9 @@ export class ActionExecutor {
     }
   }
 
-  /** A change we might be re-applying after a partial undo — skip validation. */
-  private mayBeAlreadyApplied(c: FileChange): boolean {
-    return c.type === "create" || c.type === "delete";
-  }
-
   /** True when a change's effect is already present (so undo is retryable). */
   private async alreadySatisfied(c: FileChange): Promise<boolean> {
+    if (c.type === "move") return !(await this.io.exists(c.path)) && (await this.io.exists(c.to ?? ""));
     const exists = await this.io.exists(c.path);
     if (c.type === "delete") return !exists;
     if (!exists) return false;

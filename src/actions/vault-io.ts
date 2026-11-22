@@ -42,6 +42,22 @@ export class ObsidianVaultIO implements VaultIO {
     await this.app.vault.modify(f, content);
   }
 
+  async rename(from: string, to: string): Promise<void> {
+    const f = this.file(from);
+    if (!f) throw new Error(`not found: ${from}`);
+    const target = normalizePath(to);
+    const parent = target.split("/").slice(0, -1).join("/");
+    if (parent && !this.app.vault.getAbstractFileByPath(parent)) {
+      await this.app.vault.createFolder(parent).catch(() => {
+        /* concurrent creation is fine */
+      });
+    }
+    // fileManager, not vault.rename: links to the note are rewritten (as the
+    // user's "Automatically update internal links" setting says), exactly as
+    // when the user moves a note themselves.
+    await this.app.fileManager.renameFile(f, target);
+  }
+
   async delete(path: string): Promise<void> {
     const f = this.file(path);
     if (!f) throw new Error(`not found: ${path}`);
