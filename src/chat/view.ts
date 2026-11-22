@@ -255,10 +255,10 @@ export class ChatView extends ItemView {
 
   private renderIntro(): void {
     const intro = this.listEl.createDiv({ cls: "ariadne-chat-intro" });
-    intro.createEl("p", { text: "Ask about your notes and records. Every answer names the notes it rests on." });
+    intro.createEl("p", { text: "Ask about your notes. Every answer names the notes it rests on." });
     intro.createEl("p", { text: "To correct something, say what is wrong. A correction is shown as a before and after; nothing is written until you press Apply, and each applied change can be undone." });
     const tries = intro.createDiv({ cls: "ariadne-chat-tries" });
-    for (const q of ["Check my records for problems.", "What is on my next trip, day by day?", "Which records disagree with the note they came from?"]) {
+    for (const q of ["Which notes did I change this week?", "What is on my next trip, day by day?", "Which of my notes mention a deadline?"]) {
       const b = tries.createEl("button", { text: q });
       b.addEventListener("click", () => {
         this.inputEl.value = q;

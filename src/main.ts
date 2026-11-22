@@ -2,6 +2,7 @@ import { Notice, Plugin, Platform, TFile, TFolder, addIcon, getAllTags, normaliz
 import {
   AriadneSettings,
   DEFAULT_SETTINGS,
+  dropRetiredSettings,
   parseEndpoints,
   parseModelList,
 } from "./settings/settings";
@@ -45,11 +46,7 @@ import { wantedTopics, type WantedTopic } from "./margin/wanted";
 import { isExcludedPath, type ExclusionFilter } from "./index/crawler";
 import { onThisDay, openingLine, resurfacePick } from "./margin/resurface";
 import { inFolders, parseFolderList } from "./margin/journal";
-import { cloudAllowed, levelOf, underFolder, type LevelPolicy, type PrivacyLevel } from "./gateway/levels";
-import { ObsidianGatewayIO } from "./gateway/obsidian-io";
-import { RecordStore } from "./gateway/store";
-import { listReviews, markDecided, planObservation, reviewFolder, type ReviewItem } from "./gateway/submit";
-import { ItemActionsModal, type ActionableItem } from "./ui/item-actions-modal";
+import { cloudAllowed, levelOf, type LevelPolicy, type PrivacyLevel } from "./privacy/levels";
 import {
   continuityLabel,
   lastReflectiveGist,
@@ -206,8 +203,6 @@ export default class AriadnePlugin extends Plugin {
    * journals whose entries aren't date-named ("Morning pages 12").
    */
   private isJournalPath = (path: string): boolean => {
-    // What the agent keeps is never the writer's journal, however it is named.
-    if (underFolder(path, this.levelPolicy().agentFolder)) return false;
     if (looksPeriodic(path)) return true;
     if (inFolders(path, this.journalFolders())) return true;
     // Fourth signal: an entry Ariadne (or the writer) already marked. Lets an
@@ -225,8 +220,6 @@ export default class AriadnePlugin extends Plugin {
    */
   private exclusionFilters(): ExclusionFilter[] {
     const filters: ExclusionFilter[] = parseFolderList(this.settings.excludedFolders);
-    // The agent's review queue is plumbing, not notes.
-    filters.push(reviewFolder(this.levelPolicy().agentFolder));
     const raw = (
       this.app.vault as unknown as { getConfig?: (k: string) => unknown }
     ).getConfig?.("userIgnoreFilters");
@@ -435,90 +428,11 @@ export default class AriadnePlugin extends Plugin {
     }, delayMs);
   }
 
-  private agentReviews: ReviewItem[] = [];
-  private agentReviewTimer: ReturnType<typeof setTimeout> | null = null;
-
-  private scheduleAgentReviews(): void {
-    if (this.agentReviewTimer) clearTimeout(this.agentReviewTimer);
-    this.agentReviewTimer = setTimeout(() => {
-      this.agentReviewTimer = null;
-      void this.loadAgentReviews();
-    }, 800);
-  }
-
-  private async loadAgentReviews(): Promise<void> {
-    try {
-      const io = new ObsidianGatewayIO(this.app);
-      const all = await listReviews(io, this.levelPolicy().agentFolder);
-      this.agentReviews = all.filter((r) => !r.decision);
-    } catch (err) {
-      this.log.warn(`agent reviews unreadable: ${String(err)}`);
-      this.agentReviews = [];
-    }
-    this.refreshFootPanels();
-  }
-
-  /**
-   * Changes your agent proposed that the gateway held for you. Approving
-   * applies the change through the action executor (so it can be undone);
-   * either way the decision is recorded on the review file, which Sync
-   * carries back to the gateway.
-   */
-  private async reviewAgentChanges(): Promise<void> {
-    await this.loadAgentReviews();
-    if (this.agentReviews.length === 0) {
-      new Notice("Nothing from your agent is waiting for review.");
-      return;
-    }
-    const io = new ObsidianGatewayIO(this.app);
-    const agentFolder = this.levelPolicy().agentFolder;
-    const ctx = { io, store: new RecordStore(io, agentFolder), agentFolder, now: () => new Date() };
-    const decided = async (item: ReviewItem, decision: "approved" | "dismissed") => {
-      await markDecided(io, item, decision);
-      this.agentReviews = this.agentReviews.filter((r) => r.key !== item.key);
-      this.refreshFootPanels();
-    };
-    const items: ActionableItem[] = this.agentReviews.map((item) => ({
-      title: item.summary || "A change from your agent",
-      detail: `Held because ${item.reason}.${item.target ? ` → ${item.target}` : ""}`,
-      actions: [
-        {
-          label: "Approve",
-          run: async () => {
-            const plan = await planObservation(ctx, item.observation, { force: true });
-            if (plan.decision !== "apply") {
-              new Notice(`Can't apply: ${plan.reason}`);
-              return false;
-            }
-            await this.executor.apply({ title: plan.summary, changes: plan.changes });
-            await decided(item, "approved");
-            return true;
-          },
-        },
-        {
-          label: "Dismiss",
-          run: async () => {
-            await decided(item, "dismissed");
-            return true;
-          },
-        },
-      ],
-    }));
-    new ItemActionsModal(this.app, {
-      title: "From your agent",
-      description:
-        "Changes your agent proposed that were not certain enough to apply on their own. " +
-        "Text quoted from messages is untrusted. Approved changes can be undone.",
-      items,
-    }).open();
-  }
-
-  /** Privacy levels by folder (gateway/levels.ts). */
+  /** Privacy levels by folder (privacy/levels.ts). */
   levelPolicy(): LevelPolicy {
     return {
       localOnlyFolders: parseFolderList(this.settings.localOnlyFolders),
       sealedFolders: parseFolderList(this.settings.sealedFolders),
-      agentFolder: normalizePath(this.settings.agentFolder.trim() || "Agent"),
     };
   }
 
@@ -661,7 +575,6 @@ export default class AriadnePlugin extends Plugin {
         // Nothing local-only or sealed is ever a publish candidate.
         ...this.levelPolicy().localOnlyFolders,
         ...this.levelPolicy().sealedFolders,
-        this.levelPolicy().agentFolder,
       ],
       publishLedger: {
         load: async () => {
@@ -929,8 +842,6 @@ export default class AriadnePlugin extends Plugin {
               .length;
           },
           onTriage: () => void this.actions.triageInbox(),
-          agentReviewCount: () => this.agentReviews.length,
-          onAgentReview: () => void this.reviewAgentChanges(),
           themesTeaser: () => this.themesTeaserCount ?? 0,
           onThemes: () => void this.actions.findJournalThemes(),
           promotedToday: () => this.actions.promotedToday(),
@@ -1099,9 +1010,6 @@ export default class AriadnePlugin extends Plugin {
     // Indexing must wait for layout-ready: before that, the metadata cache is
     // still resolving and vault events replay the initial file scan.
     this.app.workspace.onLayoutReady(() => {
-      // Has the agent gone silent? Looked at shortly after start, and every twenty minutes.
-      window.setTimeout(() => this.checkAgentAlive(), 45_000);
-      this.registerInterval(window.setInterval(() => this.checkAgentAlive(), 20 * 60_000));
       void this.localPool?.probeAll().then(() => {
         this.status.set({});
         this.scheduleDebugStatus(100);
@@ -1184,15 +1092,6 @@ export default class AriadnePlugin extends Plugin {
       if (path.endsWith(".md")) this.scheduler?.markDirty(path);
     };
     this.registerEvent(this.app.vault.on("create", (f) => markIfNote(f.path)));
-    // Changes an agent submitted that are waiting for the user arrive as
-    // files (often through Sync): keep the panel's count current.
-    const reviewTouched = (path: string) => {
-      if (underFolder(path, reviewFolder(this.levelPolicy().agentFolder))) this.scheduleAgentReviews();
-    };
-    this.registerEvent(this.app.vault.on("create", (f) => reviewTouched(f.path)));
-    this.registerEvent(this.app.vault.on("modify", (f) => reviewTouched(f.path)));
-    this.registerEvent(this.app.vault.on("delete", (f) => reviewTouched(f.path)));
-    this.app.workspace.onLayoutReady(() => this.scheduleAgentReviews());
     this.registerEvent(this.app.vault.on("modify", (f) => markIfNote(f.path)));
     this.registerEvent(
       this.app.vault.on("delete", (f) => this.scheduler?.markDeleted(f.path)),
@@ -1557,8 +1456,6 @@ export default class AriadnePlugin extends Plugin {
     // and a ctime-derived date DIVERGES across devices (the phone's ctime is
     // the day Sync delivered the file). One writer, convergent marks.
     if (!this.policy.writesIndex) return;
-    // The agent's records and logs are date-named but are not entries: never marked.
-    if (underFolder(path, this.levelPolicy().agentFolder)) return;
     // Eligibility by name/folder only — deliberately NOT the type-property
     // signal. Marks must not self-justify: a note moved out of the journal
     // folder stops being re-marked (its type remains until hand-cleared, and
@@ -1834,25 +1731,6 @@ export default class AriadnePlugin extends Plugin {
     return index;
   }
 
-  private lastSilentNotice = 0;
-
-  /**
-   * The agent writes a short status note every hour. When that note is more
-   * than two and a half hours old, something is wrong — the agent is down,
-   * or cut off from the vault, or this device has not synced — and the owner
-   * should not take silence for "nothing happened". Said at most once in
-   * three hours; nothing at all where no such note exists.
-   */
-  private checkAgentAlive(): void {
-    const file = this.app.vault.getAbstractFileByPath(`${this.levelPolicy().agentFolder}/Itineraries/Theseus status.md`);
-    if (!(file instanceof TFile)) return;
-    const age = Date.now() - file.stat.mtime;
-    if (age < 2.5 * 3_600_000 || Date.now() - this.lastSilentNotice < 3 * 3_600_000) return;
-    this.lastSilentNotice = Date.now();
-    const hours = Math.round(age / 3_600_000);
-    new Notice(`Theseus has written nothing for ${hours} hours. It may be down or cut off from the vault — or this device has not synced. Until it writes again, no news from it is not good news.`, 20_000);
-  }
-
   private async activateChat(): Promise<void> {
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(CHAT_VIEW_TYPE)[0];
@@ -1873,8 +1751,6 @@ export default class AriadnePlugin extends Plugin {
     const pool = this.localPool;
     if (!pool || !pool.state().configured) return null;
     if (this.chatEngine) return this.chatEngine;
-    const io = new ObsidianGatewayIO(this.app);
-    const store = new RecordStore(io, this.levelPolicy().agentFolder);
     const today = () => {
       const d = new Date();
       return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -1901,7 +1777,6 @@ export default class AriadnePlugin extends Plugin {
         if (direct instanceof TFile) return direct.path;
         return this.app.metadataCache.getFirstLinkpathDest(bare, "")?.path;
       },
-      records: () => store.all(),
       notes: () =>
         this.app.vault.getMarkdownFiles().map((file) => {
           const cache = this.app.metadataCache.getFileCache(file);
@@ -1913,8 +1788,6 @@ export default class AriadnePlugin extends Plugin {
       },
       exists: (path) => this.app.vault.getAbstractFileByPath(path) !== null,
       writable: (path) => {
-        // The agent's folder holds typed records the gateway keeps; a free-form note there would be taken for one.
-        if (underFolder(path, this.levelPolicy().agentFolder)) return { ok: false, why: "that folder is for the agent's records" };
         if (this.levelOfPath(path) === "sealed") return { ok: false, why: "that folder is sealed" };
         if (this.isJournalPath(path)) return { ok: false, why: "that is where your journal lives" };
         return { ok: true };
@@ -2025,6 +1898,9 @@ export default class AriadnePlugin extends Plugin {
       }
       await this.saveData(this.settings);
     }
+
+    // Migration: settings that no longer exist (the retired agent folder).
+    if (dropRetiredSettings(this.settings)) await this.saveData(this.settings);
     if (!this.settings.localModels.trim()) this.settings.localModels = "gemma4:26b";
   }
 

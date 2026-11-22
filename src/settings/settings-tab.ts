@@ -166,16 +166,16 @@ export class AriadneSettingTab extends PluginSettingTab {
       .setName("Journal model calls")
       .setDesc(
         "Which brain may read journal content — tension checks, theme naming, weekly synthesis. " +
-          "Cloud is the most capable (default). Local only walls journal text to your home box and " +
-          "never falls back to cloud (checks simply skip when the box is asleep). None makes no " +
-          "model calls on journal content at all; echoes and relatedness still work — they never " +
-          "leave the device.",
+          "Local only (default) walls journal text to your own local models and never falls back " +
+          "to cloud (checks simply skip when no local model is awake). Cloud is the most capable, " +
+          "but sends journal text to an external model. None makes no model calls on journal " +
+          "content at all; echoes and relatedness still work — they never leave the device.",
       )
       .addDropdown((d) =>
         d
           .addOptions({
+            local: "Local only",
             cloud: "Cloud (most capable)",
-            local: "Local box only",
             none: "None",
           })
           .setValue(this.plugin.settings.journalModelCalls)
@@ -303,9 +303,9 @@ export class AriadneSettingTab extends PluginSettingTab {
       .setName("Local-only folders")
       .setDesc(
         "Notes here never reach a model you don't run: a task on them uses a local " +
-          "model or doesn't run, and they are never publish candidates. Everything " +
-          "an agent writes is local-only too. A note can opt in or out with an " +
-          "agent-access property (shareable, local, sealed). Comma-separated.",
+          "model or doesn't run, and they are never publish candidates. A note can " +
+          "opt in or out with an agent-access property (shareable, local, sealed). " +
+          "Comma-separated.",
       )
       .addText((t) =>
         t.setValue(this.plugin.settings.localOnlyFolders).onChange(async (v) => {
@@ -318,24 +318,11 @@ export class AriadneSettingTab extends PluginSettingTab {
       .setName("Sealed folders")
       .setDesc(
         "For you alone — typically the journal. Local-only, and additionally never " +
-          "served to any agent, local or not. Comma-separated.",
+          "shown to the vault chat, even on a local model. Comma-separated.",
       )
       .addText((t) =>
         t.setValue(this.plugin.settings.sealedFolders).onChange(async (v) => {
           this.plugin.settings.sealedFolders = v;
-          await this.plugin.saveSettings();
-        }),
-      );
-
-    new Setting(containerEl)
-      .setName("Agent folder")
-      .setDesc(
-        "Where records submitted by your agent live (appointments, bills, trips, " +
-          "the daily agent log). Always local-only.",
-      )
-      .addText((t) =>
-        t.setValue(this.plugin.settings.agentFolder).onChange(async (v) => {
-          this.plugin.settings.agentFolder = v;
           await this.plugin.saveSettings();
         }),
       );

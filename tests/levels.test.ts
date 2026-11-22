@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { cloudAllowed, combinedLevel, levelOf, type LevelPolicy } from "../src/gateway/levels";
+import { cloudAllowed, combinedLevel, levelOf, type LevelPolicy } from "../src/privacy/levels";
 import { ModelRouter, type ReasoningProvider } from "../src/model/router";
 import { StatusStore } from "../src/core/status";
 
 const policy: LevelPolicy = {
   localOnlyFolders: ["Personal", "Periodic"],
   sealedFolders: ["Personal/Journal"],
-  agentFolder: "Agent",
 };
 
 describe("privacy levels", () => {
@@ -15,17 +14,15 @@ describe("privacy levels", () => {
     expect(levelOf("Personal/Health.md", policy)).toBe("local");
     expect(levelOf("Periodic/Daily/2026-11-16.md", policy)).toBe("local");
     expect(levelOf("Personal/Journal/2026-11-16.md", policy)).toBe("sealed");
-    expect(levelOf("Agent/Bills/pge.md", policy)).toBe("local");
     // A folder that merely shares a prefix is not inside it.
     expect(levelOf("Personal Projects/x.md", policy)).toBe("shareable");
   });
 
-  it("lets a property tighten anything, and loosen only outside sealed and agent trees", () => {
+  it("lets a property tighten anything, and loosen only outside sealed folders", () => {
     expect(levelOf("Head MRI.md", policy, "local")).toBe("local");
     expect(levelOf("Research/Idea.md", policy, "sealed")).toBe("sealed");
     expect(levelOf("Personal/Recipe.md", policy, "shareable")).toBe("shareable");
     expect(levelOf("Personal/Journal/x.md", policy, "shareable")).toBe("sealed");
-    expect(levelOf("Agent/Log/2026-11-16.md", policy, "shareable")).toBe("local");
     expect(levelOf("Research/Idea.md", policy, "nonsense")).toBe("shareable");
   });
 
@@ -78,7 +75,6 @@ describe("the local-only wall", () => {
     expect(
       await r.run("scaffold", "p", { sources: ["Research/Idea.md", "Personal/Health.md"] }),
     ).toBe("local");
-    expect(await r.run("scaffold", "p", { sources: ["Agent/Bills/x.md"] })).toBe("local");
     expect(cloud.prompts).toHaveLength(0);
   });
 

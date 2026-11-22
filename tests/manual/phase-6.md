@@ -359,7 +359,7 @@ Needs the Obsidian Publish core plugin enabled.
       a terminal (or an OS Reminder/Shortcut) opens/creates today's
       entry directly.
 - [ ] **Journal privacy.** Settings → Journaling → Journal model calls:
-      *Local box only* with the box asleep → tension checks on journal
+      *Local only* (the default) with the box asleep → tension checks on journal
       paragraphs silently skip (echoes still appear); weekly synthesis
       says the box is unreachable; NOTHING journal-flavored reaches the
       cloud (verify via glyph cost staying flat). *None* → no model

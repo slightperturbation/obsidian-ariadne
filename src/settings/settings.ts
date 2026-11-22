@@ -79,8 +79,9 @@ export interface AriadneSettings {
   closeDayHour: number;
   /**
    * Which brain may read journal content (tension checks, theme naming,
-   * weekly synthesis). "cloud" is most capable; "local" walls journal text
-   * to the home box; "none" makes no model calls on journal content.
+   * weekly synthesis). "local" (default) walls journal text to local models;
+   * "cloud" also lets an external model read it; "none" makes no model calls
+   * on journal content.
    */
   journalModelCalls: JournalPrivacy;
   /** One quiet Notice on the day's first launch when no entry exists. */
@@ -112,13 +113,11 @@ export interface AriadneSettings {
    */
   privateFolders: string;
 
-  // Privacy levels (who may read a note — see gateway/levels.ts)
+  // Privacy levels (who may read a note — see privacy/levels.ts)
   /** Folders whose notes never reach an external model. Comma-separated. */
   localOnlyFolders: string;
-  /** Folders no agent may read at all — the journal. Comma-separated. */
+  /** Folders for the user alone — the journal. Comma-separated. */
   sealedFolders: string;
-  /** Where agent-written records live; always local-only. */
-  agentFolder: string;
 
   // Margin
   enableMargin: boolean;
@@ -182,7 +181,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   journalTag: "journal",
   enableTagSuggestions: true,
   closeDayHour: 18,
-  journalModelCalls: "cloud",
+  journalModelCalls: "local",
   remindOnLaunch: false,
 
   enablePublishReview: true,
@@ -196,7 +195,6 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
 
   localOnlyFolders: "",
   sealedFolders: "",
-  agentFolder: "Agent",
 
   enableMargin: true,
   tensionMode: "quiet",
@@ -231,4 +229,16 @@ export function parseModelList(setting: string): string[] {
     .split(/[\n,]/)
     .map((m) => m.trim())
     .filter(Boolean);
+}
+
+/**
+ * Settings from an older data.json that no longer exist, dropped in place.
+ * `agentFolder` named where a retired agent wrote its records.
+ * Returns whether anything changed, so the caller knows to save.
+ */
+export function dropRetiredSettings(settings: AriadneSettings): boolean {
+  const s = settings as AriadneSettings & { agentFolder?: unknown };
+  if (!("agentFolder" in s)) return false;
+  delete s.agentFolder;
+  return true;
 }
