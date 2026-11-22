@@ -24,7 +24,7 @@ import { DraftWatcher } from "./margin/draft-watcher";
 import { GhostEngine } from "./margin/ghost/engine";
 import { TensionEngine } from "./margin/tension/engine";
 import { ghostExtension } from "./margin/ghost/extension";
-import { MarkdownView } from "obsidian";
+import { MarkdownView, type WorkspaceLeaf } from "obsidian";
 import { ClaudeProvider } from "./model/providers/claude";
 import { LocalPool } from "./model/providers/local-pool";
 import { makeObsidianFetch } from "./util/obsidian-fetch";
@@ -140,6 +140,7 @@ export default class AriadnePlugin extends Plugin {
   private fillOutCache: FillOutRow[] = [];
   private fillOutTimer: ReturnType<typeof setTimeout> | null = null;
   private threadScanTimer: ReturnType<typeof setTimeout> | null = null;
+  private lineTimer: ReturnType<typeof setTimeout> | null = null;
 
   private publishLedgerPath(): string {
     return normalizePath(`${this.manifest.dir}/ariadne-publish.json`);
@@ -157,6 +158,7 @@ export default class AriadnePlugin extends Plugin {
   private scheduleThreadScan(delayMs: number): void {
     if (!this.settings.suggestJournalThreads) return;
     if (this.threadScanTimer) clearTimeout(this.threadScanTimer);
+    if (this.lineTimer) clearTimeout(this.lineTimer);
     if (this.fillOutTimer) clearTimeout(this.fillOutTimer);
     if (this.debugStatusTimer) clearTimeout(this.debugStatusTimer);
     this.threadScanTimer = setTimeout(() => {
@@ -1017,13 +1019,15 @@ export default class AriadnePlugin extends Plugin {
       void this.startIndexing();
       this.warnFolderSettings();
       this.maybeInviteToday();
-      // The Line is an always-present surface (PRD §3.1). A plugin reload
-      // detaches its leaves and Obsidian doesn't reliably restore them, so a
-      // hot-reload during development — or any update — silently removed the
-      // panel. Recreate it, without stealing focus from the editor.
-      if (this.app.workspace.getLeavesOfType(ARIADNE_VIEW_TYPE).length === 0) {
-        void this.activateLine(false);
-      }
+      // The Line is an always-present surface (PRD §3.1): make sure exactly
+      // one is open, without stealing focus from the editor. Looked at after
+      // a pause — on a plugin update or reload Obsidian puts the old panel
+      // back itself, a moment after the plugin loads; checking at once found
+      // none, opened a second, and every update added one more.
+      this.lineTimer = setTimeout(() => {
+        this.lineTimer = null;
+        void this.ensureOneLine();
+      }, 1500);
     });
 
     this.log.info(
@@ -1828,9 +1832,28 @@ export default class AriadnePlugin extends Plugin {
     return this.chatEngine;
   }
 
+  /**
+   * Every leaf meant to show the Line, counted by its saved view type, so a
+   * panel Obsidian has not finished restoring (or has deferred) counts too.
+   */
+  private lineLeaves(): WorkspaceLeaf[] {
+    const out: WorkspaceLeaf[] = [];
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      if (leaf.getViewState().type === ARIADNE_VIEW_TYPE) out.push(leaf);
+    });
+    return out;
+  }
+
+  /** One Line: extras (left by earlier updates) are closed; none, and one is opened. */
+  private async ensureOneLine(): Promise<void> {
+    const leaves = this.lineLeaves();
+    for (const extra of leaves.slice(1)) extra.detach();
+    if (leaves.length === 0) await this.activateLine(false);
+  }
+
   private async activateLine(focus = true): Promise<void> {
     const { workspace } = this.app;
-    let leaf = workspace.getLeavesOfType(ARIADNE_VIEW_TYPE)[0];
+    let leaf = this.lineLeaves()[0];
     if (!leaf) {
       leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
       await leaf.setViewState({ type: ARIADNE_VIEW_TYPE, active: focus });
