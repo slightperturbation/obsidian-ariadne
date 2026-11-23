@@ -1,4 +1,4 @@
-import { Notice, Plugin, Platform, TFile, TFolder, addIcon, getAllTags, normalizePath, requestUrl } from "obsidian";
+import { FuzzySuggestModal, Notice, Plugin, Platform, TFile, TFolder, addIcon, getAllTags, normalizePath, requestUrl, type App } from "obsidian";
 import {
   AriadneSettings,
   DEFAULT_SETTINGS,
@@ -62,10 +62,15 @@ import { rankFillOut, type FillOutCandidate, type FillOutRow } from "./margin/fi
 import { ARIADNE_BASES_VIEW, makeAriadneRelatedView } from "./bases/related-view";
 import { ChatEngine } from "./chat/engine";
 import { vaultTools, type VaultAccess } from "./chat/tools";
-import { listLocalModels, parseChoice } from "./chat/models";
+import { choiceKey, listLocalModels, parseChoice } from "./chat/models";
 import { transcriptMarkdown, transcriptTitle } from "./chat/transcript";
 import { GemmaProvider } from "./model/providers/gemma";
 import { CHAT_VIEW_TYPE, ChatView } from "./chat/view";
+import type { Complete } from "./chat/engine";
+import { AdapterBatchStore } from "./batch/obsidian-store";
+import { BatchRunner, StopJob, workOnNote } from "./batch/runner";
+import type { BatchRecord, BatchStore } from "./batch/record";
+import type { BatchUi, ModelChoice } from "./batch/card";
 
 const obsidianFetch = makeObsidianFetch(requestUrl);
 
@@ -112,6 +117,16 @@ export default class AriadnePlugin extends Plugin {
   private executor!: ActionExecutor;
   /** The vault chat's engine, made when the pane first needs it. */
   private chatEngine?: ChatEngine;
+  /** What the vault chat may see and how it is answered — shared with batch jobs, which see no more than it does. */
+  private chatVaultAccess?: VaultAccess;
+  private chatComplete?: Complete;
+  private batchRunner?: BatchRunner;
+  private batchStore?: BatchStore;
+  private batchWatchers = new Map<string, Set<(record: BatchRecord) => void>>();
+  /** Notes a batch job has touched this session: the auto-tagger leaves them be, so its writes never block their undo. */
+  private batchTouched = new Set<string>();
+  /** What each batch job has spent on Claude this session, in USD. */
+  private batchSpent = new Map<string, number>();
   /** Journal entries may be read in the vault chat. Off at every start: it is turned on in the pane, for that session. */
   private chatReadsJournal = false;
   /** How the open chat pane asks the owner whether something may be sent outside. No pane: nothing is sent. */
@@ -436,6 +451,18 @@ export default class AriadnePlugin extends Plugin {
       localOnlyFolders: parseFolderList(this.settings.localOnlyFolders),
       sealedFolders: parseFolderList(this.settings.sealedFolders),
     };
+  }
+
+  /**
+   * How private the note `note` would be at `at`, for batch jobs: 0 shareable, 1 local-only, 2 journal,
+   * 3 sealed. `note` "" is a new note: the folder alone decides, never a note now at that path.
+   */
+  private rankAt(note: string, at: string): number {
+    const file = note ? this.app.vault.getAbstractFileByPath(note) : null;
+    const override = file instanceof TFile ? (this.app.metadataCache.getFileCache(file)?.frontmatter?.["agent-access"] as unknown) : undefined;
+    const level = levelOf(at, this.levelPolicy(), override);
+    const r = level === "sealed" ? 3 : level === "local" ? 1 : 0;
+    return this.isJournalPath(at) ? Math.max(r, 2) : r;
   }
 
   /** A note's privacy level: folder, then its `agent-access` property. */
@@ -937,8 +964,19 @@ export default class AriadnePlugin extends Plugin {
             on: () => this.chatReadsJournal,
             set: (on) => (this.chatReadsJournal = on),
           },
+          batch: this.batchUi(),
         }),
     );
+    this.addCommand({
+      id: "undo-batch-job",
+      name: "Undo a batch job",
+      callback: () => void this.chooseBatchToUndo(),
+    });
+    this.addCommand({
+      id: "forget-batch-job",
+      name: "Forget a batch job (delete its undo record)",
+      callback: () => void this.chooseBatchToForget(),
+    });
     this.addCommand({
       id: "open-vault-chat",
       name: "Open vault chat (local model)",
@@ -1456,6 +1494,7 @@ export default class AriadnePlugin extends Plugin {
    */
   private maybeAutoTag(path: string): void {
     if (!this.settings.autoTagEntries) return;
+    if (this.batchTouched.has(path)) return;
     // Owner-only: two devices auto-tagging race Sync on the same frontmatter,
     // and a ctime-derived date DIVERGES across devices (the phone's ctime is
     // the day Sync delivered the file). One writer, convergent marks.
@@ -1471,6 +1510,8 @@ export default class AriadnePlugin extends Plugin {
       path,
       setTimeout(() => {
         this.tagTimers.delete(path);
+        // Asked again when it fires: a batch may have touched the note in the three seconds since.
+        if (this.batchTouched.has(path)) return;
         void this.autoTag(path);
       }, 3_000),
     );
@@ -1751,6 +1792,213 @@ export default class AriadnePlugin extends Plugin {
    * else: there is no route from here to a cloud model, whatever the routing
    * setting says. Null when no local endpoint is configured.
    */
+  /** The batch runner, made once: it works on what the vault chat may see, with the chat's model. */
+  private batches(): BatchRunner {
+    if (this.batchRunner) return this.batchRunner;
+    this.batchStore = new AdapterBatchStore(this.app.vault.adapter, normalizePath(`${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/ariadne`}/batches`));
+    this.batchRunner = new BatchRunner({
+      executor: this.executor,
+      store: this.batchStore,
+      work: async (path, job) => {
+        // The chat is set up first: a batch sees exactly what the chat may see, and is answered by its model.
+        if (!this.vaultChat() || !this.chatVaultAccess || !this.chatComplete) throw new Error("no local model is set up");
+        const chat = this.chatVaultAccess;
+        const route = job.route ? parseChoice(job.route) : null;
+        const cloud = route?.url === "cloud";
+        // The journal switch as it was when the job was set up — and as it is now: both must be on.
+        // What the batch may see: the chat's walls, the journal switch as it was when the job was set up, and
+        // never a note the owner excluded from Ariadne.
+        const vault: VaultAccess = {
+          ...chat,
+          readable: (p) => {
+            if (isExcludedPath(p, this.exclusionFilters())) return { ok: false, why: "it is in a folder or file you excluded from Ariadne" };
+            // Sent to Anthropic: shareable notes only — never a local-only, journal or sealed one, whatever else allows.
+            if (cloud) {
+              const no = this.notForCloud(p);
+              if (no) return { ok: false, why: `it is ${no}, and this job runs on a cloud model` };
+            }
+            if (!job.journal && this.isJournalPath(p)) return { ok: false, why: "journal entries were not switched on when this job was set up" };
+            return chat.readable(p);
+          },
+          // A cloud job is not told even the names of notes it may not read.
+          ...(cloud ? { notes: () => chat.notes().filter((n) => !this.notForCloud(n.path)) } : {}),
+        };
+        return workOnNote(path, job, {
+          vault,
+          complete: route ? this.batchComplete(job.id, route) : this.chatComplete,
+          isJournal: (p) => this.isJournalPath(p),
+          today: () => `${new Date().toISOString().slice(0, 10)} (${new Date().toLocaleDateString("en-US", { weekday: "long" })})`,
+        });
+      },
+      // Before a step writes anything: the auto-tagger must already know to leave these notes be.
+      onTouch: (paths) => {
+        for (const p of paths) this.batchTouched.add(p);
+      },
+      onUpdate: (record) => {
+        for (const s of record.steps) for (const c of s.changes) for (const p of [c.path, c.to]) if (p) this.batchTouched.add(p);
+        for (const cb of this.batchWatchers.get(record.job.id) ?? []) cb(record);
+      },
+      rank: (note, at) => this.rankAt(note, at),
+      // The text on disk, not a cached copy: whether the note changed while its agent worked.
+      read: async (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? this.app.vault.read(file) : undefined;
+      },
+      isOpen: (path) => this.app.workspace.getLeavesOfType("markdown").some((leaf) => leaf.view instanceof MarkdownView && leaf.view.file?.path === path),
+      isJournal: (path) => this.isJournalPath(path),
+    });
+    return this.batchRunner;
+  }
+
+  private batchUi(): BatchUi {
+    return {
+      create: (spec, route) => {
+        if (this.batches().busy) return Promise.reject(new Error("another batch job is running — stop it or let it finish first"));
+        const pick = route ? parseChoice(route) : null;
+        const model = pick?.model ?? parseChoice(this.settings.chatModel)?.model ?? this.localPool?.state().active?.model ?? "local model";
+        // A cloud job never reads the journal, whatever the chat's switch says.
+        return this.batches().create(spec, model, pick?.url === "cloud" ? false : this.chatReadsJournal, route || undefined);
+      },
+      run: (id, opts) => this.batches().run(id, opts),
+      stop: (id) => this.batches().stop(id),
+      end: (id) => this.batches().end(id),
+      choices: () => this.batchChoices(),
+      defaultRoute: () => {
+        const pick = parseChoice(this.settings.chatModel);
+        if (pick) return this.settings.chatModel;
+        const active = this.localPool?.state().active;
+        return active?.model ? choiceKey(active.url, active.model) : "";
+      },
+      notForCloud: (paths) => paths.flatMap((path) => {
+        const why = this.notForCloud(path);
+        return why ? [{ path, why }] : [];
+      }),
+      spent: (id) => this.batchSpent.get(id) ?? 0,
+      undo: async (id, path) => {
+        const r = await this.batches().undo(id, path);
+        new Notice(r.problems.length ? `Batch: put back ${r.undone}; ${r.problems.length} not undone (changed since).` : `Batch: put back ${r.undone} note${r.undone === 1 ? "" : "s"}.`);
+        return r;
+      },
+      watch: (id, cb) => {
+        const set = this.batchWatchers.get(id) ?? new Set();
+        set.add(cb);
+        this.batchWatchers.set(id, set);
+        return () => set.delete(cb);
+      },
+      model: () => parseChoice(this.settings.chatModel)?.model ?? this.localPool?.state().active?.model ?? "",
+      openNote: (path) => void this.app.workspace.openLinkText(path, "", false),
+    };
+  }
+
+  /**
+   * Why a note may not be sent to a cloud model, or undefined when it may:
+   * only shareable notes go — not local-only, journal or sealed ones (by folder
+   * or by their own property), not ones tagged as journal, not excluded ones.
+   */
+  private notForCloud(path: string): string | undefined {
+    if (isExcludedPath(path, this.exclusionFilters())) return "excluded from Ariadne";
+    const rank = this.rankAt(path, path);
+    if (rank >= 3) return "sealed";
+    if (rank === 2 || this.isJournalPath(path)) return "a journal entry";
+    if (rank === 1) return "local-only";
+    const file = this.app.vault.getAbstractFileByPath(path);
+    const cache = file instanceof TFile ? this.app.metadataCache.getFileCache(file) : null;
+    const journalTag = (normalizeTag(this.settings.journalTag) || "journal").toLowerCase();
+    const tags = (cache ? (getAllTags(cache) ?? []) : []).map((t) => t.replace(/^#/, "").toLowerCase());
+    if (tags.some((t) => t === journalTag || t.startsWith(`${journalTag}/`))) return "tagged as journal";
+    return undefined;
+  }
+
+  /** The models a batch job can be run on now: every reachable local server's, then Claude's when a key is set. */
+  private async batchChoices(): Promise<ModelChoice[]> {
+    const groups = await listLocalModels(parseEndpoints(this.settings.localEndpoints), obsidianFetch);
+    const out: ModelChoice[] = [];
+    for (const g of groups) {
+      if (!g.reachable) continue;
+      for (const m of g.models) out.push({ route: choiceKey(g.url, m), label: `${m} — ${g.label}`, cloud: false });
+    }
+    if (this.settings.claudeApiKey.trim()) {
+      out.push({ route: "cloud|claude-sonnet-5-5", label: "Claude Sonnet 5.5 — Anthropic (cloud, paid)", cloud: true });
+      out.push({ route: "cloud|claude-opus-5-5", label: "Claude Opus 5.5 — Anthropic (cloud, paid)", cloud: true });
+    }
+    return out;
+  }
+
+  /**
+   * The model a batch job was set up with, as the job's agents call it. Local:
+   * that server and that model, and no other in its place. Cloud: Claude, with
+   * what it costs counted against the session cost limit.
+   */
+  private batchComplete(jobId: string, route: { url: string; model: string }): Complete {
+    if (route.url !== "cloud") {
+      if (!parseEndpoints(this.settings.localEndpoints).some((u) => u.trim().replace(/\/+$/, "") === route.url)) {
+        return async () => {
+          throw new Error(`${route.url} is no longer one of your local model servers`);
+        };
+      }
+      const provider = new GemmaProvider({ baseUrl: () => route.url, models: () => [route.model], fetch: obsidianFetch });
+      return async (prompt, opts) => {
+        try {
+          return (await provider.complete(prompt, { system: opts.system, schema: opts.schema, maxTokens: opts.maxTokens })).text;
+        } catch (err) {
+          throw new Error(`${route.model} did not answer (${err instanceof Error ? err.message : "error"})`);
+        }
+      };
+    }
+    const provider = new ClaudeProvider({ apiKey: () => this.settings.claudeApiKey, model: () => route.model, fetch: obsidianFetch });
+    return async (prompt, opts) => {
+      const limit = this.settings.costLimitUsd;
+      const spent = this.router.sessionCost + [...this.batchSpent.values()].reduce((a, b) => a + b, 0);
+      if (limit > 0 && spent >= limit) {
+        throw new StopJob(`the session cost limit ($${limit.toFixed(2)}) is reached — raise it in Ariadne's settings, then resume`);
+      }
+      // No schema: the chat's step format has a free-form "args", which Claude's structured outputs do not take; the
+      // prompt asks for the JSON object, and the reply is read the same way as a local model's. Room for its thinking.
+      const r = await provider.complete(prompt, { system: `${opts.system}\n\nReply with the JSON object only, with no words around it.`, maxTokens: Math.max(opts.maxTokens, 16000) });
+      this.batchSpent.set(jobId, (this.batchSpent.get(jobId) ?? 0) + r.usage.costUsd);
+      return r.text;
+    };
+  }
+
+  /** The command: pick a past batch job and put back everything it did. */
+  private async chooseBatchToUndo(): Promise<void> {
+    const runner = this.batches();
+    const records = (await this.batchStore!.list()).filter((r) =>
+      r.steps.some((s) => s.status === "applied" || s.status === "pending"),
+    );
+    if (records.length === 0) {
+      new Notice("No batch job has changes left to undo.");
+      return;
+    }
+    new BatchUndoModal(this.app, records, async (record) => {
+      try {
+        const r = await runner.undo(record.job.id);
+        new Notice(r.problems.length ? `Put back ${r.undone}; not undone (changed since): ${r.problems.slice(0, 3).join("; ")}${r.problems.length > 3 ? "…" : ""}` : `Put back ${r.undone} note${r.undone === 1 ? "" : "s"}.`);
+      } catch (err) {
+        new Notice(`Could not undo: ${err instanceof Error ? err.message : "error"}`);
+      }
+    }).open();
+  }
+
+  /** The command: delete a past job's record — the note text it holds goes with it, and so does its undo. */
+  private async chooseBatchToForget(): Promise<void> {
+    const runner = this.batches();
+    const records = await this.batchStore!.list();
+    if (records.length === 0) {
+      new Notice("There is no batch job record to forget.");
+      return;
+    }
+    new BatchUndoModal(
+      this.app,
+      records.filter((r) => r.job.id !== runner.busy),
+      async (record) => {
+        await this.batchStore!.forget?.(record.job.id);
+        new Notice("Forgotten: that job's record is deleted, and its changes can no longer be undone.");
+      },
+      "Forget which batch job? Its changes can no longer be undone afterwards.",
+    ).open();
+  }
+
   private vaultChat(): ChatEngine | null {
     const pool = this.localPool;
     if (!pool || !pool.state().configured) return null;
@@ -1796,6 +2044,16 @@ export default class AriadnePlugin extends Plugin {
         if (this.isJournalPath(path)) return { ok: false, why: "that is where your journal lives" };
         return { ok: true };
       },
+      excluded: (path) => isExcludedPath(path, this.exclusionFilters()),
+      rankAt: (note, at) => this.rankAt(note, at),
+      linksTo: (path) => {
+        const links = this.app.metadataCache.resolvedLinks;
+        return Object.keys(links).filter((source) => source !== path && (links[source]?.[path] ?? 0) > 0);
+      },
+      properties: (path) => {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        return file instanceof TFile ? (this.app.metadataCache.getFileCache(file)?.frontmatter as Record<string, unknown> | undefined) : undefined;
+      },
       levelAt: (note, at) => {
         const file = this.app.vault.getAbstractFileByPath(note);
         const override = file instanceof TFile ? (this.app.metadataCache.getFileCache(file)?.frontmatter?.["agent-access"] as unknown) : undefined;
@@ -1812,8 +2070,7 @@ export default class AriadnePlugin extends Plugin {
       },
       today,
     };
-    this.chatEngine = new ChatEngine({
-      complete: async (prompt, opts) => {
+    const complete: Complete = async (prompt, opts) => {
         const call = { system: opts.system, schema: opts.schema, maxTokens: opts.maxTokens };
         // A model picked in the pane answers, on the endpoint it was picked from — and only if that
         // endpoint is still one of the local ones. No pick: the pool's own preferences.
@@ -1830,7 +2087,11 @@ export default class AriadnePlugin extends Plugin {
           }
         }
         return (await pool.complete(prompt, { ...call, lastResort: true })).text;
-      },
+    };
+    this.chatVaultAccess = vault;
+    this.chatComplete = complete;
+    this.chatEngine = new ChatEngine({
+      complete,
       tools: vaultTools(vault),
       today: () => `${today()} (${new Date().toLocaleDateString("en-US", { weekday: "long" })})`,
     });
@@ -1942,3 +2203,30 @@ export default class AriadnePlugin extends Plugin {
     this.scheduleDebugStatus();
   }
 }
+
+/** The batch jobs that can still be undone, newest first. */
+class BatchUndoModal extends FuzzySuggestModal<BatchRecord> {
+  constructor(
+    app: App,
+    private records: BatchRecord[],
+    private onPick: (record: BatchRecord) => void | Promise<void>,
+    placeholder = "Undo which batch job?",
+  ) {
+    super(app);
+    this.setPlaceholder(placeholder);
+  }
+
+  getItems(): BatchRecord[] {
+    return this.records;
+  }
+
+  getItemText(r: BatchRecord): string {
+    const changed = r.steps.filter((s) => s.status === "applied" || s.status === "pending").length;
+    return `${r.job.createdAt.slice(0, 16).replace("T", " ")} · ${changed} changed · ${r.job.instruction.slice(0, 80)} (${r.job.selection})`;
+  }
+
+  onChooseItem(r: BatchRecord): void {
+    void this.onPick(r);
+  }
+}
+

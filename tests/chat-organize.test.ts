@@ -122,10 +122,11 @@ describe("propose_moves with tags", () => {
       remove: ["later"],
     });
     expect(r.proposal?.title).toBe("Move 2 notes to Resources/Books; add #book; remove #later");
+    // Every tag edit first, then every move: Obsidian's link rewriting on a move must not meet a stale edit.
     expect(r.proposal?.changes.map((c) => [c.type, c.path, c.to])).toEqual([
       ["modify", "Inbox/Atomic habits.md", undefined],
-      ["move", "Inbox/Atomic habits.md", "Resources/Books/Atomic habits.md"],
       ["modify", "Inbox/Garden plan.md", undefined],
+      ["move", "Inbox/Atomic habits.md", "Resources/Books/Atomic habits.md"],
       ["move", "Inbox/Garden plan.md", "Resources/Books/Garden plan.md"],
     ]);
     expect(r.proposal?.changes[0]?.after).toBe("---\ntags: [reading, book]\n---\n# Atomic habits\n\nNotes on the book. #later\n");

@@ -21,8 +21,11 @@ function norm(folder: string): string {
 }
 
 export function underFolder(path: string, folder: string): boolean {
-  const f = norm(folder);
-  return f !== "" && (path === f || path.startsWith(`${f}/`));
+  // Without regard to case: on a disk that ignores case (macOS, Windows), "journal/x" IS "Journal/x".
+  const fold = (x: string) => x.normalize("NFC").replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, " ").toLowerCase();
+  const f = fold(norm(folder));
+  const p = fold(path);
+  return f !== "" && (p === f || p.startsWith(`${f}/`));
 }
 
 /** The stricter of two levels. */

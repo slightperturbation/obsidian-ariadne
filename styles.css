@@ -554,3 +554,19 @@
 .is-translucent .ariadne-chat { background-color: var(--background-secondary); }
 .ariadne-chat-web-what { font-family: var(--font-monospace); font-size: var(--font-ui-small); padding: 4px 6px; margin: 4px 0; background: var(--background-secondary); border-radius: 4px; overflow-wrap: anywhere; }
 .ariadne-chat-web .ariadne-chat-proposal-buttons { flex-wrap: wrap; }
+
+/* Batch jobs in the vault chat */
+.ariadne-batch-instruction { width: 100%; font-size: var(--font-ui-small); resize: vertical; margin: 2px 0 6px; }
+.ariadne-batch-label { font-size: var(--font-ui-small); color: var(--text-muted); margin-top: 4px; }
+.ariadne-batch-notes { font-size: var(--font-ui-smaller); margin: 4px 0; max-height: 14em; overflow-y: auto; }
+.ariadne-batch-option { display: block; font-size: var(--font-ui-small); color: var(--text-muted); margin: 4px 0; }
+.ariadne-batch-progress { font-size: var(--font-ui-small); margin: 6px 0 4px; }
+.ariadne-batch-steps { font-size: var(--font-ui-smaller); max-height: 22em; overflow-y: auto; }
+.ariadne-batch-step { padding: 2px 0; overflow-wrap: anywhere; }
+.ariadne-batch-detail { color: var(--text-muted); }
+.ariadne-batch-finding { color: var(--text-normal); padding-left: 1.4em; }
+.ariadne-batch-held, .ariadne-batch-failed { color: var(--text-warning); }
+.ariadne-batch-undo { font-size: var(--font-ui-smaller); }
+.ariadne-batch-findings { font-size: var(--font-ui-smaller); border-collapse: collapse; margin: 4px 0; }
+.ariadne-batch-findings td { border-top: 1px solid var(--background-modifier-border); padding: 2px 6px; vertical-align: top; }
+

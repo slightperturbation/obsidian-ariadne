@@ -1,3 +1,4 @@
+import { joinFront, propertySpan, splitFront } from "./frontmatter";
 /**
  * Adding and removing tags in a note's properties — and nothing else.
  *
@@ -33,8 +34,7 @@ export interface TagEdit {
   missing: string[];
 }
 
-const FRONTMATTER = /^(---[ \t]*\r?\n)(?:([\s\S]*?)\r?\n)?(---[ \t]*(?:\r?\n|$))/;
-const KEY = /^(tags|tag)[ \t]*:(.*)$/;
+const KEY = /^(tags|tag)[ \t]*:(.*)$/i;
 const ITEM = /^(\s*)-[ \t]*(.*)$/;
 
 const unquote = (s: string): string => s.trim().replace(/^(["'])(.*)\1$/, "$2").trim();
@@ -70,10 +70,9 @@ export function editTags(note: string, addRaw: string[], removeRaw: string[]): T
   if (add.some((a) => remove.some((r) => lower(r) === lower(a)))) return { error: "the same tag is both added and removed" };
 
   const nl = note.includes("\r\n") ? "\r\n" : "\n";
-  const fm = FRONTMATTER.exec(note);
-  const lines = fm ? (fm[2] ?? "").split(/\r?\n/) : [];
-  if (fm && fm[2] === undefined) lines.length = 0;
-  const body = fm ? note.slice(fm[0].length) : note;
+  const fm = splitFront(note);
+  const lines = fm ? [...fm.lines] : [];
+  const body = fm ? fm.body : note;
 
   // Where the tags property is, what it holds, and how it is written.
   const at = lines.map((l, i) => (KEY.test(l) ? i : -1)).filter((i) => i >= 0);
@@ -89,14 +88,18 @@ export function editTags(note: string, addRaw: string[], removeRaw: string[]): T
     const m = KEY.exec(lines[start]!)!;
     key = m[1]!;
     const rest = m[2]!.trim();
-    end = start + 1;
-    if (rest === "") {
-      while (end < lines.length && ITEM.test(lines[end]!)) {
-        const item = ITEM.exec(lines[end]!)!;
-        if (end === start + 1) indent = item[1]!;
+    end = propertySpan(lines, start);
+    const following = lines.slice(start + 1, end);
+    if (rest === "" || /^(null|~)$/i.test(rest)) {
+      // Every line that belongs to the property must be a list item, or nothing here is understood well enough to change.
+      if (following.some((l) => !ITEM.test(l))) return { error: "the tags property is written in a form I do not change; change it by hand" };
+      for (const l of following) {
+        const item = ITEM.exec(l)!;
+        if (current.length === 0) indent = item[1]!;
         current.push(unquote(item[2]!));
-        end++;
       }
+    } else if (following.length > 0) {
+      return { error: "the tags property runs over several lines in a form I do not change; change it by hand" };
     } else if (rest.startsWith("[")) {
       if (!rest.endsWith("]")) return { error: "the tags property is written over several lines in a form I do not change; change it by hand" };
       style = "flow";
@@ -139,15 +142,56 @@ export function editTags(note: string, addRaw: string[], removeRaw: string[]): T
   if (start >= 0) next = [...lines.slice(0, start), ...property, ...lines.slice(end)];
   else next = [...lines, ...property];
 
-  let text: string;
-  if (!fm) {
-    // Only reached when adding: a note with no properties gets them, with tags alone.
-    text = `---${nl}${property.join(nl)}${nl}---${nl}${note}`;
-  } else if (next.every((l) => l.trim() === "")) {
-    // Nothing is left in the properties but the tags just taken out: no empty block is left behind.
-    text = body;
-  } else {
-    text = `${fm[1]}${next.join(nl)}${nl}${fm[3]}${body}`;
-  }
+  // No properties yet (only reached when adding): the note gets them, with tags alone. Nothing left: no empty block.
+  const text = fm ? joinFront(fm, next) : `---${nl}${property.join(nl)}${nl}---${nl}${note}`;
   return { text, added, removed, inline, missing };
+}
+
+/**
+ * Properties a batch may never set: they decide who may read a note, whether
+ * it is published, and who wrote it — the owner's to change, by hand.
+ */
+const GUARDED = new Set(["agent-access", "publish", "authorship", "type", "tags", "tag", "aliases", "alias", "cssclasses"]);
+
+/** A value as YAML reads it back as written: dates, numbers and true/false plain; other text plain or quoted. */
+function propertyValue(v: string): string {
+  // Written plain only where YAML reads back exactly what was meant: a date, true/false, a plain decimal number.
+  if (/^(true|false|-?(0|[1-9]\d*)(\.\d+)?|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?)$/.test(v)) return v;
+  // Text that YAML could read as something else (a number in another form, a boolean, null) is quoted.
+  const looksTyped = /^[-+.]?\d/.test(v) || /^(yes|no|on|off|null|~|true|false)$/i.test(v);
+  if (!looksTyped && /^[\p{L}][\p{L}\p{N} _.,/()'-]*$/u.test(v)) return v;
+  return JSON.stringify(v);
+}
+
+/**
+ * Set one plain property (`key: value`) in a note's properties, or take it
+ * out (`value` null). Every other line stays as it was. Lists and nested
+ * values are not changed here — tags have their own editor — and the guarded
+ * properties are never set at all.
+ */
+export function editProperty(note: string, keyRaw: string, value: string | null): { text: string } | { error: string } {
+  const key = keyRaw.trim();
+  if (!/^[A-Za-z][\w-]*( [\w-]+)*$/.test(key) || key.length > 60) return { error: `"${keyRaw.slice(0, 60)}" is not a property name` };
+  if (GUARDED.has(key.toLowerCase())) return { error: `"${key}" is not changed by a batch: ${["tags", "tag"].includes(key.toLowerCase()) ? "use the tag tools" : "the owner sets it by hand"}` };
+  const val = value === null ? null : value.replace(/[\r\n]+/g, " ").trim();
+  if (val !== null && val.length > 300) return { error: "that value is too long for a property" };
+
+  const nl = note.includes("\r\n") ? "\r\n" : "\n";
+  const fm = splitFront(note);
+  const lines = fm ? [...fm.lines] : [];
+  const re = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*:(.*)$`, "i");
+  const at = lines.map((l, i) => (re.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (at.length > 1) return { error: `the note has "${key}" more than once; change it by hand` };
+  if (at.length === 1) {
+    const i = at[0]!;
+    const rest = re.exec(lines[i]!)![1]!.trim();
+    // Any line after it that belongs to it (indented, or a flush-left "- item") makes it more than one plain value.
+    if (propertySpan(lines, i) > i + 1) return { error: `"${key}" holds a list or more than one line; change it by hand` };
+    if (/^[[{|>&*!]/.test(rest)) return { error: `"${key}" holds a list or more than one line; change it by hand` };
+  }
+  const line = val === null ? [] : [`${key}: ${propertyValue(val)}`];
+  if (at.length === 0 && val === null) return { text: note };
+  const nextLines = at.length === 1 ? [...lines.slice(0, at[0]!), ...line, ...lines.slice(at[0]! + 1)] : [...lines, ...line];
+  if (!fm) return { text: `---${nl}${line.join(nl)}${nl}---${nl}${note}` };
+  return { text: joinFront(fm, nextLines) };
 }

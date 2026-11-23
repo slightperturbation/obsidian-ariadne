@@ -42,6 +42,13 @@ export class ObsidianVaultIO implements VaultIO {
     await this.app.vault.modify(f, content);
   }
 
+  async process(path: string, fn: (current: string) => string): Promise<void> {
+    const f = this.file(path);
+    if (!f) throw new Error(`not found: ${path}`);
+    // vault.process reads and writes in one step, so nothing can land between the check and the write.
+    await this.app.vault.process(f, fn);
+  }
+
   async rename(from: string, to: string): Promise<void> {
     const f = this.file(from);
     if (!f) throw new Error(`not found: ${from}`);

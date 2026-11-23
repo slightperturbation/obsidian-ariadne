@@ -3,6 +3,7 @@ import { ConflictError, type ActionProposal, type ExecutedAction } from "../acti
 import { compactDiff, diffLines } from "../ui/diff";
 import type { ChatEngine, ChatMessage } from "./engine";
 import { choiceKey, type ModelGroup } from "./models";
+import { renderJobCard, type BatchUi } from "../batch/card";
 
 export const CHAT_VIEW_TYPE = "ariadne-chat";
 
@@ -32,6 +33,8 @@ export interface ChatViewDeps {
   save: (messages: ChatMessage[]) => Promise<string>;
   /** Whether journal entries may be shown to the local model in this chat. */
   journal: { possible: () => boolean; on: () => boolean; set: (on: boolean) => void };
+  /** Running batch jobs from their cards. Absent: a job card says it cannot run here. */
+  batch?: BatchUi;
 }
 
 /**
@@ -255,7 +258,7 @@ export class ChatView extends ItemView {
 
   private renderIntro(): void {
     const intro = this.listEl.createDiv({ cls: "ariadne-chat-intro" });
-    intro.createEl("p", { text: "Ask about your notes. Every answer names the notes it rests on." });
+    intro.createEl("p", { text: "Ask about your notes. Every answer lists the notes it is based on." });
     intro.createEl("p", { text: "To correct something, say what is wrong. A correction is shown as a before and after; nothing is written until you press Apply, and each applied change can be undone." });
     const tries = intro.createDiv({ cls: "ariadne-chat-tries" });
     for (const q of ["Which notes did I change this week?", "What is on my next trip, day by day?", "Which of my notes mention a deadline?"]) {
@@ -334,7 +337,7 @@ export class ChatView extends ItemView {
     await MarkdownRenderer.render(this.app, reply.text, body, "", this);
     if (reply.sources?.length) {
       const src = el.createDiv({ cls: "ariadne-chat-sources" });
-      src.createSpan({ text: "Rests on: " });
+      src.createSpan({ text: "Based on: " });
       reply.sources.forEach((path, i) => {
         if (i > 0) src.appendText(" · ");
         // A page on the web is marked as such, and opens in the browser; a note opens in the editor.
@@ -349,9 +352,13 @@ export class ChatView extends ItemView {
         });
       });
     } else if (!reply.failed) {
-      el.createDiv({ cls: "ariadne-chat-sources ariadne-chat-unsourced", text: "Rests on no note — treat it as unverified." });
+      el.createDiv({ cls: "ariadne-chat-sources ariadne-chat-unsourced", text: "Not based on any of your notes — check it before relying on it." });
     }
     for (const proposal of reply.proposals ?? []) this.renderProposal(el, proposal);
+    for (const job of reply.jobs ?? []) {
+      if (this.deps.batch) renderJobCard(el, job, this.deps.batch);
+      else el.createDiv({ cls: "ariadne-chat-proposal", text: "A batch job was set up, but batch jobs cannot run here." });
+    }
     this.scrollDown();
   }
 

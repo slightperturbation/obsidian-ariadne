@@ -50,7 +50,10 @@ export function isLogLine(line: string): boolean {
 
 /** Is `path` inside any of `folders` (vault-relative, no trailing slash)? */
 export function inFolders(path: string, folders: string[]): boolean {
-  return folders.some((f) => f.length > 0 && (path === f || path.startsWith(`${f}/`)));
+  // Without regard to case, as the disk may: a wall that a capital letter gets round is no wall.
+  const fold = (x: string) => x.normalize("NFC").replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, " ").toLowerCase();
+  const p = fold(path);
+  return folders.some((f) => f.length > 0 && (p === fold(f) || p.startsWith(`${fold(f)}/`)));
 }
 
 /** Parse the comma-separated journal-folders setting. */

@@ -58,6 +58,23 @@ export interface VaultIO {
   delete(path: string): Promise<void>;
   /** Move a file, rewriting links to it. Absent: this vault cannot move files. */
   rename?(from: string, to: string): Promise<void>;
+  /**
+   * Read and write a file as one step: `fn` gets the text as it is at that
+   * moment and returns the new text (or throws, and nothing is written).
+   * Absent: a read then a write.
+   */
+  process?(path: string, fn: (current: string) => string): Promise<void>;
+}
+
+/**
+ * An action failed part-way AND putting back what had landed failed too: the
+ * vault holds part of it. The caller must keep its own record of how to undo.
+ */
+export class PartialApplyError extends Error {
+  constructor(readonly cause: unknown) {
+    super(`stopped part-way and could not be fully put back: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "PartialApplyError";
+  }
 }
 
 export class ConflictError extends Error {
@@ -85,47 +102,87 @@ export class ActionExecutor {
    * accept must abort the action, never silently overwrite the edit.
    */
   async validate(changes: FileChange[], retry = false): Promise<void> {
-    // Checked as the changes would unfold: after a move, its source is empty
-    // and its destination holds the note — so "edit it, then move it" and its
-    // undo, "move it back, then edit it back", both check the right file.
-    const where = new Map<string, string | null>();
-    const at = (p: string): string | null => (where.has(p) ? where.get(p)! : p);
+    // Checked as the changes would unfold, one after another: after a move its
+    // source is empty and its destination holds the note; after an edit the
+    // note holds the new text. So "edit it, move it, edit it again" — and its
+    // undo — each check the file and the text that will really be there.
+    // `retry`: an undo that stopped part-way is being run again, so a step
+    // whose effect is already present is accepted as done.
+    type Entry = { gone: true } | { gone: false; phys: string | null; text?: string };
+    const state = new Map<string, Entry>();
+    const entry = (p: string): Entry => state.get(p) ?? { gone: false, phys: p };
     const exists = async (p: string): Promise<boolean> => {
-      const q = at(p);
-      return q !== null && (await this.io.exists(q));
+      const e = entry(p);
+      if (e.gone) return false;
+      return e.phys === null || (await this.io.exists(e.phys));
+    };
+    const textOf = async (p: string): Promise<string> => {
+      const e = entry(p);
+      if (e.gone) throw new ConflictError(`"${p}" no longer exists`, p);
+      return e.text !== undefined ? e.text : await this.io.read(e.phys!);
     };
     for (const c of changes) {
       if (c.type === "move") {
         if (!c.to) throw new ConflictError(`no destination given for "${c.path}"`, c.path);
-        // Retrying an undo that stopped part-way: a move that already happened is fine as it is.
         if (retry && !(await exists(c.path)) && (await exists(c.to))) {
-          where.set(c.to, c.to);
-          where.set(c.path, null);
+          state.set(c.path, { gone: true });
           continue;
         }
         if (!(await exists(c.path))) throw new ConflictError(`"${c.path}" no longer exists`, c.path);
         if (await exists(c.to)) throw new ConflictError(`"${c.to}" already exists`, c.to);
-        where.set(c.to, at(c.path));
-        where.set(c.path, null);
+        state.set(c.to, entry(c.path));
+        state.set(c.path, { gone: true });
         continue;
       }
-      if (retry && ((c.type === "create" && (await exists(c.path))) || (c.type === "delete" && !(await exists(c.path))))) continue;
       if (c.type === "create") {
         if (await exists(c.path)) {
+          if (retry) continue;
           throw new ConflictError(`"${c.path}" already exists`, c.path);
         }
-      } else {
-        if (!(await exists(c.path))) {
-          throw new ConflictError(`"${c.path}" no longer exists`, c.path);
-        }
-        if (c.before !== undefined) {
-          const current = await this.io.read(at(c.path)!);
-          if (current !== c.before) {
-            throw new ConflictError(`"${c.path}" changed since the preview`, c.path);
-          }
+        state.set(c.path, { gone: false, phys: null, text: c.after ?? "" });
+        continue;
+      }
+      if (!(await exists(c.path))) {
+        if (retry && c.type === "delete") continue;
+        throw new ConflictError(`"${c.path}" no longer exists`, c.path);
+      }
+      if (c.before !== undefined) {
+        const current = await textOf(c.path);
+        const done = retry && c.type === "modify" && current === (c.after ?? "");
+        if (current !== c.before && !done) {
+          throw new ConflictError(`"${c.path}" changed since the preview`, c.path);
         }
       }
+      if (c.type === "modify") {
+        const e = entry(c.path);
+        state.set(c.path, e.gone ? e : { ...e, text: c.after ?? "" });
+      } else {
+        state.set(c.path, { gone: true });
+      }
     }
+  }
+
+  /**
+   * Write a modify, checking at the moment of writing that the note still
+   * holds the text the change was made on — not only when the batch was
+   * validated. Between the two, something else may have written it: the
+   * owner, or Obsidian rewriting links after a move earlier in the action.
+   * Returns the text that was replaced.
+   */
+  private async writeChecked(c: FileChange): Promise<string> {
+    const after = c.after ?? "";
+    if (this.io.process && c.before !== undefined) {
+      const expected = c.before;
+      await this.io.process(c.path, (current) => {
+        if (current !== expected) throw new ConflictError(`"${c.path}" changed since the preview`, c.path);
+        return after;
+      });
+      return expected;
+    }
+    const current = await this.io.read(c.path);
+    if (c.before !== undefined && current !== c.before) throw new ConflictError(`"${c.path}" changed since the preview`, c.path);
+    await this.io.modify(c.path, after);
+    return current;
   }
 
   private async rename(from: string, to: string): Promise<void> {
@@ -146,11 +203,33 @@ export class ActionExecutor {
    * fails. On success the exact inverse is pushed onto the undo stack.
    */
   async apply(proposal: ActionProposal): Promise<ExecutedAction> {
-    await this.validate(proposal.changes);
+    const inverse = await this.applyRaw(proposal.changes);
+    // The text undo re-validates the inverse (so a file changed since the
+    // action aborts the undo) then applies it — same abort-before-commit
+    // guarantee as apply().
+    const executed: ExecutedAction = {
+      title: proposal.title,
+      at: Date.now(),
+      undo: async () => this.revert(inverse),
+    };
+    this.push(executed);
+    return executed;
+  }
+
+  /**
+   * Apply changes as one transaction — validate everything, apply in order,
+   * roll back on failure — and return their exact inverse, without putting
+   * anything on the undo stack. For callers that keep their own undo record
+   * (a batch job's, which has to outlive a restart).
+   */
+  async applyRaw(changes: FileChange[], opts: { beforeEach?: (index: number) => Promise<void> } = {}): Promise<FileChange[]> {
+    await this.validate(changes);
 
     const inverse: FileChange[] = [];
     try {
-      for (const c of proposal.changes) {
+      for (const [index, c] of changes.entries()) {
+        // Told first, so a caller keeping its own record knows how far it got if the app stops here.
+        await opts.beforeEach?.(index);
         if (c.type === "move") {
           await this.rename(c.path, c.to ?? "");
           inverse.unshift({ type: "move", path: c.to ?? "", to: c.path });
@@ -158,37 +237,35 @@ export class ActionExecutor {
           await this.io.create(c.path, c.after ?? "");
           inverse.unshift({ type: "delete", path: c.path, before: c.after });
         } else if (c.type === "modify") {
-          const current = await this.io.read(c.path);
-          await this.io.modify(c.path, c.after ?? "");
+          const current = await this.writeChecked(c);
           inverse.unshift({ type: "modify", path: c.path, before: c.after, after: current });
         } else {
+          // Checked again at the moment of deleting: the text that goes to the trash is the text the change was made on.
           const current = await this.io.read(c.path);
+          if (c.before !== undefined && current !== c.before) throw new ConflictError(`"${c.path}" changed since the preview`, c.path);
           await this.io.delete(c.path);
           inverse.unshift({ type: "create", path: c.path, after: current });
         }
       }
     } catch (err) {
       // Roll back what was applied (inverse is already newest-first).
+      let whole = true;
       for (const inv of inverse) {
         try {
           await this.applyChange(inv);
         } catch {
-          /* best-effort rollback; original error is the one that matters */
+          whole = false;
         }
       }
+      if (!whole) throw new PartialApplyError(err);
       throw err;
     }
+    return inverse;
+  }
 
-    // The text undo re-validates the inverse (so a file changed since the
-    // action aborts the undo) then applies it — same abort-before-commit
-    // guarantee as apply().
-    const executed: ExecutedAction = {
-      title: proposal.title,
-      at: Date.now(),
-      undo: async () => this.applyReversible(inverse),
-    };
-    this.push(executed);
-    return executed;
+  /** Put back what `applyRaw` did, given its inverse: checked first, retry-safe. */
+  async revert(inverse: FileChange[]): Promise<void> {
+    await this.applyReversible(inverse);
   }
 
   /**
@@ -211,8 +288,7 @@ export class ActionExecutor {
           await this.io.create(c.path, c.after ?? "");
           undoSteps.unshift(() => this.io.delete(c.path));
         } else if (c.type === "modify") {
-          const previous = await this.io.read(c.path);
-          await this.io.modify(c.path, c.after ?? "");
+          const previous = await this.writeChecked(c);
           undoSteps.unshift(() => this.io.modify(c.path, previous));
         } else {
           const previous = await this.io.read(c.path);
