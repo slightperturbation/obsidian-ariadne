@@ -391,15 +391,31 @@ export interface RunnerDeps {
   onUpdate?: (record: BatchRecord) => void;
   /** Told of every path a step will write, before it writes. */
   onTouch?: (paths: string[]) => void;
-  /** A note's text on disk now, to see whether it changed while its agent worked. */
+  /** A note's text now — in its editor, when it is open there — to see whether it changed while its agent worked. */
   read?: (path: string) => Promise<string | undefined>;
-  /** Is the note open in an editor? Then the batch leaves it, so nothing being typed is lost. */
+  /**
+   * Is the owner in the middle of something in this note — typing in it?
+   * Then the note waits: it is done once they stop. Says why, in a few words.
+   * (A note that is only open is written through its editor, so it does not wait.)
+   */
+  busy?: (path: string) => string | undefined;
+  /** Is the note open in a tab? Only a note to be trashed waits for that: trashing it would close the tab. */
   isOpen?: (path: string) => boolean;
+  /** For waiting on a busy note; tests pass their own. */
+  sleep?: (ms: number) => Promise<void>;
   isJournal?: (path: string) => boolean;
   /** How private a note would be at a path (see GuardContext.rank). */
   rank?: (note: string, at: string) => number;
   now?: () => Date;
 }
+
+/** How often a waiting job looks again at the notes it waits for. */
+const WAIT_POLL_MS = 1500;
+/** A note whose agent's work is thrown away this many times (it kept changing under it) fails, so the job can end. */
+const MAX_REWORK = 3;
+
+/** What became of one note: nothing more to say, the whole job must stop, or the note must wait. */
+type Outcome = undefined | { halt: string } | { wait: true };
 
 export class BatchRunner {
   private stopping = new Set<string>();
@@ -482,6 +498,9 @@ export class BatchRunner {
       await this.save(record);
       const seen = new Set(record.steps.map((s) => s.path));
       let worked = 0;
+      // Notes the owner is busy in: put off, and done at the end, once they are free.
+      const later: string[] = [];
+      const reworked = new Map<string, number>();
       for (const path of record.job.paths) {
         if (seen.has(path)) continue;
         if (this.stopping.has(id)) {
@@ -492,15 +511,22 @@ export class BatchRunner {
           record.status = "paused";
           break;
         }
-        const halt = await this.one(record, path);
-        if (halt !== undefined) {
+        const out = await this.one(record, path, reworked);
+        if (out && "halt" in out) {
           // Nothing was done to this note: it is the first one worked on when the job is resumed.
           record.status = "stopped";
-          record.why = halt;
+          record.why = out.halt;
           break;
+        }
+        if (out) {
+          later.push(path);
+          await this.showWaiting(record, later);
+          continue;
         }
         worked++;
       }
+      if (record.status === "running" && later.length) await this.drain(id, record, later, reworked);
+      record.waiting = undefined;
       if (record.status === "running") record.status = "done";
       await this.save(record);
       return record;
@@ -520,14 +546,79 @@ export class BatchRunner {
     this.deps.onUpdate?.(record);
   }
 
-  /** One note. Returns why the whole job must stop, when the work says so (a cost limit, say); then nothing is recorded for the note. */
-  private async one(record: BatchRecord, path: string): Promise<string | undefined> {
+  /** Why the owner is busy in a note now, or undefined. */
+  private busyIn(path: string): string | undefined {
+    return this.deps.busy?.(path);
+  }
+
+  /**
+   * Of these changes, the notes that must wait, and why: one the owner is
+   * typing in, and one to be trashed while it is open in a tab.
+   */
+  private waitsFor(changes: FileChange[]): Array<{ path: string; why: string }> {
+    const out: Array<{ path: string; why: string }> = [];
+    for (const c of changes) {
+      if (c.type === "create" || out.some((w) => w.path === c.path)) continue;
+      const busy = this.busyIn(c.path);
+      if (busy) out.push({ path: c.path, why: busy });
+      else if (c.type === "delete" && this.deps.isOpen?.(c.path)) out.push({ path: c.path, why: "it is open in a tab, which trashing it would close" });
+    }
+    return out;
+  }
+
+  /** The waiting notes, on the record for the card — written only when what it says changes. */
+  private async showWaiting(record: BatchRecord, later: string[]): Promise<void> {
+    const waiting = later.map((path) => ({ path, why: this.busyIn(path) ?? (this.deps.isOpen?.(path) ? "it is open in a tab" : "next") }));
+    if (JSON.stringify(waiting) === JSON.stringify(record.waiting ?? [])) return;
+    record.waiting = waiting;
+    await this.save(record);
+  }
+
+  /** The notes put off: each done as soon as the owner is free of it, until none is left or the job is stopped. */
+  private async drain(id: string, record: BatchRecord, later: string[], reworked: Map<string, number>): Promise<void> {
+    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    while (later.length) {
+      if (this.stopping.has(id)) {
+        record.status = "stopped";
+        return;
+      }
+      // Free: not typed in now, and — when its last try waited for its tab to close (a trash) — that tab closed.
+      const free = later.findIndex((p) => !this.busyIn(p) && !(this.openWait.has(p) && this.deps.isOpen?.(p)));
+      if (free < 0) {
+        await this.showWaiting(record, later);
+        await sleep(WAIT_POLL_MS);
+        continue;
+      }
+      const [path] = later.splice(free, 1);
+      const out = await this.one(record, path!, reworked);
+      if (out && "halt" in out) {
+        record.status = "stopped";
+        record.why = out.halt;
+        return;
+      }
+      if (out) later.push(path!);
+      await this.showWaiting(record, later);
+    }
+  }
+
+  /** Notes whose last try waited for their tab to close (a trash), so that they are not worked on again while it is open. */
+  private openWait = new Set<string>();
+
+  /**
+   * One note. Says when the whole job must stop (the work says so: a cost
+   * limit, say) or when the note must wait (the owner is busy in it); in
+   * either case nothing is recorded for the note, and nothing done to it.
+   */
+  private async one(record: BatchRecord, path: string, reworked: Map<string, number>): Promise<Outcome> {
     const step: BatchStep = { path, status: "pending", summary: "", changes: [], inverse: [], findings: [], at: this.now() };
+    // Typing in it now: not worked on until they stop, so no model call is spent on text about to change.
+    if (this.busyIn(path)) return { wait: true };
+    this.openWait.delete(path);
     let result: AgentResult;
     try {
       result = await this.deps.work(path, record.job);
     } catch (err) {
-      if (err instanceof StopJob) return err.message;
+      if (err instanceof StopJob) return { halt: err.message };
       result = { summary: "", changes: [], findings: [], failed: err instanceof Error ? err.message : String(err) };
     }
     step.summary = result.summary;
@@ -542,21 +633,22 @@ export class BatchRunner {
       await this.save(record);
       return undefined;
     }
-    // Not while the owner may be typing in it, and not if it changed since the agent was shown it.
-    const touched = [...new Set(result.changes.flatMap((c) => (c.type === "move" ? [c.path] : c.type === "create" ? [] : [c.path])))];
-    const open = touched.filter((p) => this.deps.isOpen?.(p));
-    if (open.length) {
-      record.steps.push({ ...step, status: "failed", changes: result.changes, why: `not applied: ${open.join(", ")} is open in the editor — close it, then try again, so nothing being typed is lost` });
+    // Not while the owner is typing in a note it changes, and not if the note changed since the agent was shown it:
+    // then the work is thrown away and the note done again, afresh, once they are free of it.
+    const waits = this.waitsFor(result.changes);
+    let changedUnder = false;
+    if (waits.length === 0 && result.startText !== undefined && this.deps.read) changedUnder = (await this.deps.read(path)) !== result.startText;
+    if (waits.length || changedUnder) {
+      const n = (reworked.get(path) ?? 0) + 1;
+      reworked.set(path, n);
+      if (n < MAX_REWORK) {
+        if (waits.some((w) => !this.busyIn(w.path))) this.openWait.add(path);
+        return { wait: true };
+      }
+      const why = changedUnder ? "the note kept changing while the model was working on it" : `${waits.map((w) => `${w.path}: ${w.why}`).join("; ")}`;
+      record.steps.push({ ...step, status: "failed", changes: result.changes, why: `not applied: ${why} — try it again when you are done with it` });
       await this.save(record);
       return undefined;
-    }
-    if (result.startText !== undefined && this.deps.read) {
-      const now = await this.deps.read(path);
-      if (now !== result.startText) {
-        record.steps.push({ ...step, status: "failed", changes: result.changes, why: "not applied: the note changed while the model was working on it" });
-        await this.save(record);
-      return undefined;
-      }
     }
     const isJournal = this.deps.isJournal ?? (() => false);
     // The text of notes moved without their text in hand, so the guard can see what they are.
@@ -629,10 +721,11 @@ export class BatchRunner {
         if (step.status !== "applied" && step.status !== "pending") continue;
         // A step the app stopped in the middle of: only what may have landed is put back — up to the change it was on.
         const inverse = step.status === "pending" ? (step.attempting === undefined ? [] : inverseOf(step.changes.slice(0, step.attempting + 1))) : step.inverse;
-        const open = [...new Set(inverse.flatMap((c) => (c.type === "create" ? [] : [c.path])))].filter((p) => this.deps.isOpen?.(p));
-        if (open.length) {
-          step.why = `not undone yet: ${open.join(", ")} is open in the editor — close it and undo again`;
-          problems.push(`${step.path}: open in the editor`);
+        // Written through the editor when the note is open; only typing in it, or a tab a trash would close, waits.
+        const waits = this.waitsFor(inverse);
+        if (waits.length) {
+          step.why = `not undone yet: ${waits.map((w) => `${w.path} — ${w.why}`).join("; ")}`;
+          problems.push(`${step.path}: not undone yet (${waits[0]!.why})`);
           continue;
         }
         try {

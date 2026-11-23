@@ -59,6 +59,8 @@ export interface BatchRecord {
   steps: BatchStep[];
   /** Why the job stopped by itself (a cost limit, say), shown on its card. */
   why?: string;
+  /** While it runs: the notes it is waiting to do, because the owner is busy in them, and why. */
+  waiting?: Array<{ path: string; why: string }>;
 }
 
 /** Where records live. Obsidian keeps them in the plugin's folder; tests in memory. */

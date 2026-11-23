@@ -73,6 +73,8 @@ import type { BatchRecord, BatchStore } from "./batch/record";
 import type { BatchUi, ModelChoice } from "./batch/card";
 
 const obsidianFetch = makeObsidianFetch(requestUrl);
+/** A note typed in within this long is one the owner is busy in: a batch job waits for it. */
+const TYPING_QUIET_MS = 8000;
 
 /** Debounce between the index going idle and a snapshot hitting disk. */
 const SAVE_DELAY_MS = 5_000;
@@ -127,6 +129,12 @@ export default class AriadnePlugin extends Plugin {
   private batchTouched = new Set<string>();
   /** What each batch job has spent on Claude this session, in USD. */
   private batchSpent = new Map<string, number>();
+  /** Batch jobs' writer: an open note is written through its editor, and read from there. */
+  private batchIO?: ObsidianVaultIO;
+  /** When the owner last typed in each note — a batch job waits for a note typed in moments ago. */
+  private lastTyped = new Map<string, number>();
+  /** Text a batch job just put into a note's editor: the change events it causes are not the owner typing. */
+  private batchWrote = new Map<string, string>();
   /** Journal entries may be read in the vault chat. Off at every start: it is turned on in the pane, for that session. */
   private chatReadsJournal = false;
   /** How the open chat pane asks the owner whether something may be sent outside. No pane: nothing is sent. */
@@ -1796,8 +1804,21 @@ export default class AriadnePlugin extends Plugin {
   private batches(): BatchRunner {
     if (this.batchRunner) return this.batchRunner;
     this.batchStore = new AdapterBatchStore(this.app.vault.adapter, normalizePath(`${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/ariadne`}/batches`));
+    this.batchIO = new ObsidianVaultIO(this.app, { throughEditor: true, onEditorWrite: (path, text) => this.batchWrote.set(path, text) });
+    const io = this.batchIO;
+    // Typing, as the editor reports it — but not the edits a batch job makes there itself.
+    this.registerEvent(
+      this.app.workspace.on("editor-change", (editor, info) => {
+        const path = info.file?.path;
+        if (!path) return;
+        const ours = this.batchWrote.get(path);
+        if (ours !== undefined && editor.getValue() === ours) return;
+        this.batchWrote.delete(path);
+        this.lastTyped.set(path, Date.now());
+      }),
+    );
     this.batchRunner = new BatchRunner({
-      executor: this.executor,
+      executor: new ActionExecutor(io),
       store: this.batchStore,
       work: async (path, job) => {
         // The chat is set up first: a batch sees exactly what the chat may see, and is answered by its model.
@@ -1810,6 +1831,8 @@ export default class AriadnePlugin extends Plugin {
         // never a note the owner excluded from Ariadne.
         const vault: VaultAccess = {
           ...chat,
+          // An open note as its editor holds it, unsaved typing included: what the owner sees is what the agent sees.
+          read: async (p) => io.openText(p) ?? chat.read(p),
           readable: (p) => {
             if (isExcludedPath(p, this.exclusionFilters())) return { ok: false, why: "it is in a folder or file you excluded from Ariadne" };
             // Sent to Anthropic: shareable notes only — never a local-only, journal or sealed one, whatever else allows.
@@ -1842,7 +1865,11 @@ export default class AriadnePlugin extends Plugin {
       // The text on disk, not a cached copy: whether the note changed while its agent worked.
       read: async (path) => {
         const file = this.app.vault.getAbstractFileByPath(path);
-        return file instanceof TFile ? this.app.vault.read(file) : undefined;
+        return file instanceof TFile ? io.read(path) : undefined;
+      },
+      busy: (path) => {
+        const at = this.lastTyped.get(path);
+        return at !== undefined && Date.now() - at < TYPING_QUIET_MS ? "you are typing in it — it is done once you stop" : undefined;
       },
       isOpen: (path) => this.app.workspace.getLeavesOfType("markdown").some((leaf) => leaf.view instanceof MarkdownView && leaf.view.file?.path === path),
       isJournal: (path) => this.isJournalPath(path),
@@ -1876,7 +1903,7 @@ export default class AriadnePlugin extends Plugin {
       spent: (id) => this.batchSpent.get(id) ?? 0,
       undo: async (id, path) => {
         const r = await this.batches().undo(id, path);
-        new Notice(r.problems.length ? `Batch: put back ${r.undone}; ${r.problems.length} not undone (changed since).` : `Batch: put back ${r.undone} note${r.undone === 1 ? "" : "s"}.`);
+        new Notice(r.problems.length ? `Batch: put back ${r.undone}; ${r.problems.length} not undone yet — see the job card.` : `Batch: put back ${r.undone} note${r.undone === 1 ? "" : "s"}.`);
         return r;
       },
       watch: (id, cb) => {
@@ -1973,7 +2000,7 @@ export default class AriadnePlugin extends Plugin {
     new BatchUndoModal(this.app, records, async (record) => {
       try {
         const r = await runner.undo(record.job.id);
-        new Notice(r.problems.length ? `Put back ${r.undone}; not undone (changed since): ${r.problems.slice(0, 3).join("; ")}${r.problems.length > 3 ? "…" : ""}` : `Put back ${r.undone} note${r.undone === 1 ? "" : "s"}.`);
+        new Notice(r.problems.length ? `Put back ${r.undone}; not undone: ${r.problems.slice(0, 3).join("; ")}${r.problems.length > 3 ? "…" : ""}` : `Put back ${r.undone} note${r.undone === 1 ? "" : "s"}.`);
       } catch (err) {
         new Notice(`Could not undo: ${err instanceof Error ? err.message : "error"}`);
       }

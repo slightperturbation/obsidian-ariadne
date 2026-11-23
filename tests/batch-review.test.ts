@@ -139,18 +139,41 @@ describe("3. a whole rewrite never drops what the owner typed meanwhile", () => 
     expect(r.text).toMatch(/no longer as you were shown it/);
   });
 
-  it("does not apply a step to a note that changed while its agent worked", async () => {
+  it("does not apply a step to a note that changed while its agent worked — it works on it again, and gives up if it keeps changing", async () => {
     const w = world({ "a.md": "as shown, then the owner typed more" });
+    let calls = 0;
     const runner = new BatchRunner({
       executor: w.executor,
       store: w.store,
       read: async (p) => w.files.get(p),
-      work: async () => ({ summary: "", changes: [{ type: "modify", path: "a.md", before: "as shown, then the owner typed more", after: "tidied" }], findings: [], startText: "as shown" }),
+      work: async () => (calls++, { summary: "", changes: [{ type: "modify", path: "a.md", before: "as shown, then the owner typed more", after: "tidied" }], findings: [], startText: "as shown" }),
     });
     const rec = await runner.run((await runner.create(spec(["a.md"]), "m")).job.id);
+    expect(calls).toBe(3);
     expect(rec.steps[0]?.status).toBe("failed");
-    expect(rec.steps[0]?.why).toMatch(/changed while the model was working/);
+    expect(rec.steps[0]?.why).toMatch(/kept changing while the model was working/);
     expect(w.files.get("a.md")).toBe("as shown, then the owner typed more");
+  });
+
+  it("works afresh on a note that changed under its agent once, and applies that", async () => {
+    const w = world({ "a.md": "v1" });
+    let calls = 0;
+    const runner = new BatchRunner({
+      executor: w.executor,
+      store: w.store,
+      read: async (p) => w.files.get(p),
+      work: async () => {
+        calls++;
+        const seen = w.files.get("a.md")!;
+        // The owner adds a word while the first agent works.
+        if (calls === 1) w.files.set("a.md", "v1 more");
+        return { summary: "", changes: [{ type: "modify", path: "a.md", before: w.files.get("a.md")!, after: `${seen}!` }], findings: [], startText: seen };
+      },
+    });
+    const rec = await runner.run((await runner.create(spec(["a.md"]), "m")).job.id);
+    expect(calls).toBe(2);
+    expect(rec.steps.map((s) => s.status)).toEqual(["applied"]);
+    expect(w.files.get("a.md")).toBe("v1 more!");
   });
 });
 
@@ -446,17 +469,65 @@ describe("11–12. nothing is written over text that changed since it was read",
     expect(w.files.get("a.md")).toBe("old, and what the owner typed");
   });
 
-  it("leaves a note open in the editor, so nothing being typed is lost", async () => {
-    const w = world({ "a.md": "a" });
+  it("does a note that is only open (it is written through its editor), and waits for one being typed in", async () => {
+    const w = world({ "a.md": "a", "b.md": "b" });
+    let typing = true;
+    const order: string[] = [];
     const runner = new BatchRunner({
       executor: w.executor,
       store: w.store,
-      isOpen: (p) => p === "a.md",
-      work: async () => ({ summary: "", changes: [{ type: "modify", path: "a.md", before: "a", after: "b" }], findings: [] }),
+      isOpen: () => true,
+      busy: (p) => (typing && p === "a.md" ? "you are typing in it" : undefined),
+      // Waiting: the owner stops typing a moment later.
+      sleep: async () => void (typing = false),
+      work: async (p) => (order.push(p), { summary: "", changes: [{ type: "modify", path: p, before: w.files.get(p)!, after: `${w.files.get(p)}!` }], findings: [] }),
+    });
+    const rec = await runner.run((await runner.create(spec(["a.md", "b.md"]), "m")).job.id);
+    expect(order).toEqual(["b.md", "a.md"]);
+    expect(rec.status).toBe("done");
+    expect(rec.waiting).toBeUndefined();
+    expect(rec.steps.map((s) => [s.path, s.status])).toEqual([["b.md", "applied"], ["a.md", "applied"]]);
+    expect(Object.fromEntries(w.files)).toEqual({ "a.md": "a!", "b.md": "b!" });
+  });
+
+  it("waits for the tab of a note it would trash to close, without working on it again meanwhile", async () => {
+    const w = world({ "a.md": "a words" });
+    let open = true;
+    let sleeps = 0;
+    let calls = 0;
+    const runner = new BatchRunner({
+      executor: w.executor,
+      store: w.store,
+      isOpen: (p) => open && p === "a.md",
+      sleep: async () => void (++sleeps === 3 && (open = false)),
+      work: async () => (calls++, { summary: "", changes: [{ type: "delete", path: "a.md", before: "a words" }], findings: [] }),
     });
     const rec = await runner.run((await runner.create(spec(["a.md"]), "m")).job.id);
-    expect(rec.steps[0]?.why).toMatch(/open in the editor/);
+    expect(sleeps).toBe(3);
+    expect(calls).toBe(2);
+    expect(rec.steps.map((s) => s.status)).toEqual(["applied"]);
+    expect(w.files.has("a.md")).toBe(false);
+  });
+
+  it("a waiting job can be stopped, and the note it waited for is done when it is resumed", async () => {
+    const w = world({ "a.md": "a" });
+    let typing = true;
+    let id = "";
+    const runner: BatchRunner = new BatchRunner({
+      executor: w.executor,
+      store: w.store,
+      busy: () => (typing ? "you are typing in it" : undefined),
+      sleep: async () => runner.stop(id),
+      work: async (p) => ({ summary: "", changes: [{ type: "modify", path: p, before: w.files.get(p)!, after: "a!" }], findings: [] }),
+    });
+    id = (await runner.create(spec(["a.md"]), "m")).job.id;
+    const stopped = await runner.run(id);
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.steps).toEqual([]);
     expect(w.files.get("a.md")).toBe("a");
+    typing = false;
+    expect((await runner.run(id)).steps.map((s) => s.status)).toEqual(["applied"]);
+    expect(w.files.get("a.md")).toBe("a!");
   });
 });
 
@@ -476,14 +547,14 @@ describe("low: links in code, case, and folder walls", () => {
 describe("failed notes are tried again", () => {
   it("retries, on the next run, a note that failed with nothing applied — and only that one", async () => {
     const w = world({ "a.md": "a", "b.md": "b" });
-    let open = true;
+    let down = true;
     const calls: string[] = [];
     const runner = new BatchRunner({
       executor: w.executor,
       store: w.store,
-      isOpen: (p) => open && p === "a.md",
       work: async (path) => {
         calls.push(path);
+        if (down && path === "a.md") throw new Error("the model could not be reached");
         const before = w.files.get(path)!;
         return { summary: "", changes: [{ type: "modify", path, before, after: `${before}!` }], findings: [] };
       },
@@ -491,7 +562,7 @@ describe("failed notes are tried again", () => {
     const id = (await runner.create(spec(["a.md", "b.md"]), "m")).job.id;
     const first = await runner.run(id);
     expect(first.steps.map((s) => s.status)).toEqual(["failed", "applied"]);
-    open = false;
+    down = false;
     const second = await runner.run(id);
     expect(calls).toEqual(["a.md", "b.md", "a.md"]);
     expect(second.steps.map((s) => [s.path, s.status])).toEqual([["b.md", "applied"], ["a.md", "applied"]]);

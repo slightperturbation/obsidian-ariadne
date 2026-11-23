@@ -160,18 +160,35 @@ describe("5. undo and run never overlap", () => {
     expect((await w.store.read(id))?.steps[0]?.status).toBe("undone");
   });
 
-  it("leaves a note open in the editor for later, saying so", async () => {
+  it("leaves a note being typed in for later, saying so — and undoes one that is only open", async () => {
+    const w = world({ "a.md": "a" });
+    let typing = false;
+    const runner = new BatchRunner({ executor: w.executor, store: w.store, isOpen: () => true, busy: () => (typing ? "you are typing in it" : undefined), work: async () => ({ summary: "", changes: [{ type: "modify", path: "a.md", before: "a", after: "a+" }], findings: [] }) });
+    const id = (await runner.run((await runner.create(spec(["a.md"]), "m")).job.id)).job.id;
+    typing = true;
+    const r = await runner.undo(id);
+    expect(r.undone).toBe(0);
+    expect(r.problems[0]).toMatch(/not undone yet \(you are typing in it\)/);
+    expect(r.record.steps[0]?.why).toMatch(/^not undone yet: a\.md — you are typing in it/);
+    expect(w.files.get("a.md")).toBe("a+");
+    typing = false;
+    expect((await runner.undo(id)).undone).toBe(1);
+    expect(w.files.get("a.md")).toBe("a");
+  });
+
+  it("does not undo a created note's trash while that note is open in a tab", async () => {
     const w = world({ "a.md": "a" });
     let open = false;
-    const runner = new BatchRunner({ executor: w.executor, store: w.store, isOpen: () => open, work: async () => ({ summary: "", changes: [{ type: "modify", path: "a.md", before: "a", after: "a+" }], findings: [] }) });
+    const runner = new BatchRunner({ executor: w.executor, store: w.store, isOpen: (p) => open && p === "New.md", work: async () => ({ summary: "", changes: [{ type: "create", path: "New.md", after: "made" }], findings: [] }) });
     const id = (await runner.run((await runner.create(spec(["a.md"]), "m")).job.id)).job.id;
     open = true;
     const r = await runner.undo(id);
     expect(r.undone).toBe(0);
-    expect(r.problems[0]).toMatch(/open in the editor/);
-    expect(w.files.get("a.md")).toBe("a+");
+    expect(r.problems[0]).toMatch(/open in a tab/);
+    expect(w.files.has("New.md")).toBe(true);
     open = false;
     expect((await runner.undo(id)).undone).toBe(1);
+    expect(w.files.has("New.md")).toBe(false);
   });
 
   it("undoing one note does not end the job", async () => {

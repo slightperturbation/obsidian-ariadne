@@ -162,7 +162,8 @@ describe("an undo that meets a note open in the editor", () => {
     const runner = new BatchRunner({
       executor: w.executor,
       store: w.store,
-      isOpen: (p) => open.has(p),
+      // Being typed in, now: a note that is only open is undone through its editor and does not wait.
+      busy: (p) => (open.has(p) ? "you are typing in it" : undefined),
       work: async (p) => ({ summary: "tagged", changes: [{ type: "modify", path: p, before: w.files.get(p)!, after: `---\ntags:\n  - Virtual_Creatures\n---\n${w.files.get(p)!}` }], findings: [] }),
     });
     const id = (await runner.create(spec(Object.keys(before)), "m")).job.id;
@@ -170,7 +171,7 @@ describe("an undo that meets a note open in the editor", () => {
     open.add("Inbox/Physics Engine.md");
     const first = await runner.undo(id);
     expect(first.undone).toBe(1);
-    expect(first.problems).toEqual(["Inbox/Physics Engine.md: open in the editor"]);
+    expect(first.problems).toEqual(["Inbox/Physics Engine.md: not undone yet (you are typing in it)"]);
     expect(first.record.status).toBe("done");
     expect(first.record.steps.find((s) => s.path === "Inbox/Physics Engine.md")?.why).toMatch(/^not undone yet/);
     expect(w.files.get("Inbox/Competitions.md")).toBe(before["Inbox/Competitions.md"]);

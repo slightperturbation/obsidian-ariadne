@@ -228,7 +228,12 @@ function follow(card: HTMLElement, first: BatchRecord, ui: BatchUi, pauseAfter?:
     controls.empty();
     report.empty();
     if (record.status === "running") {
-      head.setText(`Working: ${done} of ${total} done${done < total ? ` — next: ${record.job.paths.find((p) => !shown.has(p)) ?? ""}` : ""}`);
+      const waits = record.waiting ?? [];
+      const next = record.job.paths.find((p) => !shown.has(p) && !waits.some((w) => w.path === p));
+      head.setText(`Working: ${done} of ${total} done${next ? ` — next: ${next}` : ""}`);
+      for (const w of waits) {
+        report.createDiv({ cls: "ariadne-batch-label", text: `Waiting: ${name(w.path)} — ${w.why}.` });
+      }
       controls.createEl("button", { text: "Stop" }).addEventListener("click", () => ui.stop(id));
       return;
     }
@@ -252,7 +257,7 @@ function follow(card: HTMLElement, first: BatchRecord, ui: BatchUi, pauseAfter?:
     if (waiting.length) {
       report.createDiv({
         cls: "ariadne-batch-label",
-        text: `Not undone yet — open in the editor: ${waiting.map((s) => name(s.path)).join(", ")}. Close ${waiting.length === 1 ? "it" : "them"}, then click "Undo the rest".`,
+        text: `Not undone yet: ${waiting.map((s) => `${name(s.path)} (${(s.why ?? "").replace(/^not undone yet: [^—]*— /, "")})`).join("; ")}. When you are done with ${waiting.length === 1 ? "it" : "them"}, click "Undo the rest".`,
       });
     }
     if (record.status === "paused" || record.status === "stopped") {
@@ -300,7 +305,7 @@ function follow(card: HTMLElement, first: BatchRecord, ui: BatchUi, pauseAfter?:
           .then(async (r) => {
             // "Undo these and stop": once put back, the job is not run on.
             if (stopAfter && r.record.status !== "undone") await ui.end(id).catch(() => {});
-            const changed = r.problems.filter((p) => !p.endsWith(": open in the editor"));
+            const changed = r.problems.filter((p) => !p.includes(": not undone yet ("));
             if (changed.length) report.createDiv({ text: `Not undone, because the note changed since the job: ${changed.join("; ")}` });
           })
           .catch((err: unknown) => {
