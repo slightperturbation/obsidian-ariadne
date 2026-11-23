@@ -571,8 +571,8 @@ export class AriadneSettingTab extends PluginSettingTab {
       .setName("Excluded folders")
       .setDesc(
         "Ariadne ignores these folders entirely — no indexing, no Related cards, no " +
-          "suggestions. Comma-separated. Obsidian's own \"Excluded files\" setting is " +
-          "honored too. Use for archives and parked copies (e.g. a _to_delete folder), " +
+          "suggestions. Comma-separated. Only this list counts: Obsidian's own \"Excluded files\" " +
+          "does not keep notes from Ariadne. Use for archives and parked copies (e.g. a _to_delete folder), " +
           "which otherwise surface as duplicates in Related.",
       )
       .addText((t) =>

@@ -32,6 +32,8 @@ export interface AriadneSettings {
   /** The model picked in the vault chat, as "endpoint|model"; empty = the
    * preferences above. Only ever one of the local endpoints. */
   chatModel: string;
+  /** The model picked in the persona chat, as "endpoint|model" or "cloud|model". */
+  personaModel: string;
   /** On battery, prefer remote endpoints and use this machine's own model
    * only as a last resort for user-initiated, local-only work. */
   avoidLocalOnBattery: boolean;
@@ -96,7 +98,7 @@ export interface AriadneSettings {
    * Off = every Ariadne-created note goes to the inbox folder. */
   inferPlacement: boolean;
   /** Folders Ariadne ignores entirely (indexing, retrieval, suggestions).
-   * Comma-separated; Obsidian's "Excluded files" setting is honored too. */
+   * Comma-separated. Only this list: Obsidian's "Excluded files" is not read. */
   excludedFolders: string;
   /** Frontmatter types kept out of ambient surfaces (Related, ghost,
    * tension, resurfacing, themes/threads). Search still finds them. */
@@ -161,6 +163,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   localEndpoints: "",
   localModels: "",
   chatModel: "",
+  personaModel: "",
   avoidLocalOnBattery: true,
   routingMode: "auto",
   costLimitUsd: 2,

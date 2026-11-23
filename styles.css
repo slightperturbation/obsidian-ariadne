@@ -574,3 +574,26 @@ body .ariadne-chat .ariadne-chat-input { width: 100%; box-sizing: border-box; re
 .ariadne-batch-findings { font-size: var(--font-ui-smaller); border-collapse: collapse; margin: 4px 0; }
 .ariadne-batch-findings td { border-top: 1px solid var(--background-modifier-border); padding: 2px 6px; vertical-align: top; }
 
+
+/* ── Persona chat ── */
+.ariadne-persona-head { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small); flex: none; }
+.ariadne-persona-row { display: flex; align-items: center; gap: 8px; }
+.ariadne-persona-label { flex: none; width: 4.5em; color: var(--text-muted); }
+.ariadne-persona-row select { flex: 1 1 auto; min-width: 0; }
+/* A cloud model picked: the picker itself says so. */
+.ariadne-persona-row select.is-cloud { border-color: var(--color-red); background-color: rgba(var(--color-red-rgb), 0.12); color: var(--color-red); font-weight: var(--font-semibold); }
+.ariadne-persona-cloud-option { color: var(--color-red); }
+.ariadne-persona-describe textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+.ariadne-persona-info { display: flex; flex-direction: column; gap: 4px; }
+.ariadne-persona-made { color: var(--text-normal); }
+.ariadne-persona-sources { color: var(--text-muted); font-size: var(--font-ui-smaller); max-height: 12em; overflow-y: auto; }
+.ariadne-persona-warn { color: var(--color-orange); }
+.ariadne-persona-cloud { border: 2px solid var(--color-red); background: rgba(var(--color-red-rgb), 0.1); border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.ariadne-persona-cloud-title { color: var(--color-red); font-weight: var(--font-bold); }
+.ariadne-persona-consent { display: flex; align-items: center; gap: 4px; font-weight: var(--font-semibold); }
+.ariadne-persona-who { color: var(--text-faint); font-size: var(--font-ui-smaller); margin-bottom: 2px; }
+.ariadne-persona-text { white-space: pre-wrap; }
+.ariadne-persona-inline { align-self: flex-start; font-size: var(--font-ui-smaller); }
+.ariadne-persona-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: var(--font-ui-smaller); }
+.ariadne-persona-actions button { font-size: var(--font-ui-smaller); }
+.ariadne-persona-open { color: var(--text-accent); }

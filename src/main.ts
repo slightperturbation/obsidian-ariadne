@@ -71,6 +71,15 @@ import { AdapterBatchStore } from "./batch/obsidian-store";
 import { BatchRunner, StopJob, workOnNote } from "./batch/runner";
 import type { BatchRecord, BatchStore } from "./batch/record";
 import type { BatchUi, ModelChoice } from "./batch/card";
+import { PERSONA_VIEW_TYPE, PersonaView } from "./persona/view";
+import { findPeople, isoDate, type NoteInfo, type Person } from "./persona/people";
+import { excerpts, gatherUnits, personaSystem, type Candidate } from "./persona/context";
+import { ERAS_SCHEMA, enoughEras, erasPrompt, gapEras, parseEras, type Era } from "./persona/eras";
+import { cloudEstimate, talkClaude, talkLocal, type Reply, type Turn } from "./persona/talk";
+import { buildProfile, plan } from "./persona/build";
+import { isCurrent, profileBody, profilePath } from "./persona/profile";
+import { claudeRates } from "./model/providers/claude";
+import { bodyOf as noteBody, parsedProperties } from "./chat/frontmatter";
 
 const obsidianFetch = makeObsidianFetch(requestUrl);
 /** A note typed in within this long is one the owner is busy in: a batch job waits for it. */
@@ -239,30 +248,12 @@ export default class AriadnePlugin extends Plugin {
   };
 
   /**
-   * Everything Ariadne must not see: the excludedFolders setting plus
-   * Obsidian's own "Excluded files" (userIgnoreFilters — prefix strings, or
-   * /regex/ entries). Read defensively: getConfig is undocumented API.
+   * Everything Ariadne must not see: its own excludedFolders setting, and
+   * nothing else. Obsidian's "Excluded files" is about Obsidian's search and
+   * graph, not about what Ariadne may read; the owner keeps the two apart.
    */
   private exclusionFilters(): ExclusionFilter[] {
-    const filters: ExclusionFilter[] = parseFolderList(this.settings.excludedFolders);
-    const raw = (
-      this.app.vault as unknown as { getConfig?: (k: string) => unknown }
-    ).getConfig?.("userIgnoreFilters");
-    if (Array.isArray(raw)) {
-      for (const entry of raw) {
-        if (typeof entry !== "string" || !entry) continue;
-        if (entry.length > 2 && entry.startsWith("/") && entry.endsWith("/")) {
-          try {
-            filters.push(new RegExp(entry.slice(1, -1)));
-          } catch {
-            /* invalid user regex — skip */
-          }
-        } else {
-          filters.push(entry.replace(/\/+$/, ""));
-        }
-      }
-    }
-    return filters;
+    return parseFolderList(this.settings.excludedFolders);
   }
 
   /** publish: true frontmatter — the note is (or is marked for) the public site. */
@@ -991,6 +982,15 @@ export default class AriadnePlugin extends Plugin {
       callback: () => void this.activateChat(),
     });
     this.addRibbonIcon("message-square", "Vault chat (local model)", () => void this.activateChat());
+
+    // ── Persona chat: someone the owner has written with, as their notes show them ──
+    this.registerView(PERSONA_VIEW_TYPE, (leaf) => new PersonaView(leaf, this.personaDeps()));
+    this.addCommand({
+      id: "open-persona-chat",
+      name: "Open persona chat",
+      callback: () => void this.activatePersona(),
+    });
+    this.addRibbonIcon("users", "Persona chat", () => void this.activatePersona());
 
     this.registerAriadneBasesView();
 
@@ -1782,6 +1782,196 @@ export default class AriadnePlugin extends Plugin {
     }
     this.backlinkIndex = index;
     return index;
+  }
+
+  private async activatePersona(): Promise<void> {
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(PERSONA_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = workspace.getRightLeaf(false) ?? workspace.getLeaf(true);
+      await leaf.setViewState({ type: PERSONA_VIEW_TYPE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+  }
+
+  /** Periods found for a person, by the people's names: asked of a local model once per session. */
+  private personaEras = new Map<string, Promise<Era[]>>();
+
+  /**
+   * May this note be made part of a persona? Never a sealed or excluded one;
+   * a journal entry (and correspondence, which is dated) only when journal
+   * text may reach a model at all. A cloud model is the owner's choice, made
+   * in the pane with the notes named and a box ticked.
+   */
+  private personaAllowed(path: string): boolean {
+    if (isExcludedPath(path, this.exclusionFilters())) return false;
+    if (this.levelOfPath(path) === "sealed") return false;
+    if (this.settings.journalModelCalls === "none" && this.isJournalPath(path)) return false;
+    return true;
+  }
+
+  private personaDeps(): ConstructorParameters<typeof PersonaView>[1] {
+    const read = async (path: string) => {
+      const f = this.app.vault.getAbstractFileByPath(path);
+      return f instanceof TFile ? this.app.vault.cachedRead(f) : undefined;
+    };
+    const fm = (path: string) => {
+      const f = this.app.vault.getAbstractFileByPath(path);
+      return f instanceof TFile ? (this.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined) : undefined;
+    };
+    const notes = (): NoteInfo[] =>
+      this.app.vault
+        .getMarkdownFiles()
+        .filter((f) => this.personaAllowed(f.path))
+        .map((f) => ({ path: f.path, mtime: f.stat.mtime, size: f.stat.size, frontmatter: this.app.metadataCache.getFileCache(f)?.frontmatter as Record<string, unknown> | undefined }));
+    const local = (url: string) => parseEndpoints(this.settings.localEndpoints).some((u) => u.trim().replace(/\/+$/, "") === url);
+    const candidates = (): Candidate[] => {
+      const out: Candidate[] = [];
+      for (const f of this.app.vault.getMarkdownFiles()) {
+        if (/(^|\/)Correspondence\//.test(f.path)) continue;
+        const journal = this.isJournalPath(f.path);
+        if (!journal && !f.path.startsWith("Personal/")) continue;
+        const props = fm(f.path);
+        const date = isoDate(/(\d{4}-\d{2}-\d{2})/.exec(f.basename)?.[1]) ?? isoDate(props?.date) ?? isoDate(props?.created);
+        out.push({ path: f.path, kind: journal ? "journal" : "note", ...(date ? { date } : {}) });
+      }
+      return out;
+    };
+    const gather = (person: Person, era?: Era) => gatherUnits({ person, era, read, candidates: candidates(), allowed: (q) => this.personaAllowed(q) });
+    // How much a model reads at a time when making a persona: a local one less, a cloud one more.
+    const sizing = (route: string) => (parseChoice(route)?.url === "cloud" ? { batchChars: 100_000, maxBatches: 8 } : { batchChars: 22_000, maxBatches: 14 });
+    const spend = (route: string) => {
+      const limit = this.settings.costLimitUsd;
+      const spent = this.router.sessionCost + [...this.batchSpent.values()].reduce((x, y) => x + y, 0);
+      if (limit > 0 && spent >= limit) throw new Error(`the session cost limit ($${limit.toFixed(2)}) is reached — raise it in Ariadne's settings`);
+      if (!this.settings.claudeApiKey.trim()) throw new Error("no Claude API key is set");
+      return parseChoice(route)!.model;
+    };
+    const talk = async (route: string, system: string, turns: Turn[], json = false): Promise<Reply> => {
+      const pick = parseChoice(route);
+      if (!pick) throw new Error("no model is picked");
+      if (pick.url !== "cloud") {
+        if (!local(pick.url)) throw new Error(`${pick.url} is no longer one of your local model servers`);
+        return talkLocal(pick.url, pick.model, system, turns, obsidianFetch, { json, maxTokens: json ? 3000 : 1500 });
+      }
+      const reply = await talkClaude(this.settings.claudeApiKey, spend(route), json ? `${system}\n\nReply with the JSON object only, with no words around it.` : system, turns, obsidianFetch);
+      this.batchSpent.set("persona chat", (this.batchSpent.get("persona chat") ?? 0) + reply.costUsd);
+      return reply;
+    };
+    const stamp = () => new Date().toISOString().slice(0, 10);
+    return {
+      people: () => findPeople(notes()),
+      choices: () => this.batchChoices(),
+      route: {
+        get: () => this.settings.personaModel,
+        set: (route) => {
+          this.settings.personaModel = route;
+          void this.saveSettings();
+        },
+      },
+      eras: (p: Person) => {
+        const key = `${p.key}|${p.moments.length}`;
+        const cached = this.personaEras.get(key);
+        if (cached) return cached;
+        const found = (async (): Promise<Era[]> => {
+          let proposed = gapEras(p.moments);
+          // Found by a local model only: the conversations' titles never go to a cloud model for this.
+          if (this.vaultChat() && this.chatComplete && this.settings.journalModelCalls !== "none") {
+            const summary = p.note ? noteBody((await read(p.note)) ?? "").trim() : "";
+            try {
+              const text = await this.chatComplete(erasPrompt(p, summary), {
+                system: "You read the dates and titles of someone's conversations and find the periods of a relationship. Reply with a single JSON object and nothing else.",
+                schema: ERAS_SCHEMA,
+                maxTokens: 600,
+              });
+              proposed = parseEras(text, p) ?? proposed;
+            } catch {
+              /* the gaps between conversations, then */
+            }
+          }
+          // Offered only when every period has enough to make a persona of its own.
+          return enoughEras(proposed, p.moments);
+        })();
+        this.personaEras.set(key, found);
+        return found;
+      },
+      state: async (p, era, route) => {
+        const { units, withheld } = await gather(p, era);
+        const convs = units.filter((u) => u.kind === "conversation");
+        const last = convs.map((u) => u.date ?? "").sort().pop() ?? "";
+        const { batchChars, maxBatches } = sizing(route);
+        const planned = plan(units, batchChars, maxBatches);
+        // Read from the note itself: just made, it is not in Obsidian's metadata yet.
+        const path = profilePath(p, era);
+        const text = await read(path);
+        const parsed = text === undefined ? undefined : parsedProperties(text);
+        const props = parsed?.ok ? (Object.fromEntries([...parsed.props].map(([k, v]) => [k, JSON.parse(v) as unknown])) as Record<string, unknown>) : undefined;
+        const ready = props?.type === "persona";
+        return {
+          name: p.name,
+          path,
+          ready,
+          stale: ready && !isCurrent(props, convs.length, last),
+          built: typeof props?.built === "string" ? props.built : isoDate(props?.built),
+          conversations: convs.length,
+          read: planned.read,
+          batches: planned.batches,
+          withheld,
+        };
+      },
+      make: async (p, era, route, progress, cancelled) => {
+        const { units } = await gather(p, era);
+        const { batchChars, maxBatches } = sizing(route);
+        const markdown = await buildProfile({
+          person: p,
+          era,
+          units,
+          model: parseChoice(route)?.model ?? "a model",
+          today: stamp(),
+          batchChars,
+          maxBatches,
+          onProgress: progress,
+          cancelled,
+          ask: async (system, prompt) => (await talk(route, system, [{ role: "user", content: prompt }], true)).text,
+        });
+        const path = profilePath(p, era);
+        const before = await read(path);
+        await this.executor.apply({
+          title: `Make the persona for ${p.name}`,
+          changes: [before === undefined ? { type: "create", path, after: markdown } : { type: "modify", path, before, after: markdown }],
+        });
+      },
+      persona: async ({ person, description, era, route }) => {
+        const cloud = parseChoice(route)?.url === "cloud";
+        const budget = cloud ? 150_000 : 40_000;
+        const today = stamp();
+        if (!person) return { name: description?.split(/[.,;\n]/)[0]?.trim().slice(0, 60) || "the persona", system: personaSystem({ name: "the persona", today, description }), chars: description?.length ?? 0 };
+        const text = await read(profilePath(person, era));
+        if (text === undefined) throw new Error(`there is no persona for ${person.name} yet — make it first`);
+        const profile = profileBody(text);
+        const { units } = await gather(person, era);
+        // Their own conversations, word for word, in what room is left: the strongest model of their voice.
+        const conversations = excerpts(units, Math.max(0, budget - profile.length));
+        const system = personaSystem({ name: person.name, era, cutoff: era?.to ?? person.last, today, description, profile, conversations });
+        return { name: person.name, system, chars: profile.length + conversations.length };
+      },
+      talk: (route, persona, turns) => talk(route, persona.system, turns),
+      estimate: (route, chars) => {
+        const pick = parseChoice(route);
+        return pick?.url === "cloud" ? cloudEstimate(pick.model, chars) : undefined;
+      },
+      makeEstimate: (route, batches) => {
+        const pick = parseChoice(route);
+        if (pick?.url !== "cloud") return undefined;
+        const r = claudeRates(pick.model);
+        const perBatch = ((sizing(route).batchChars / 3.5) * r.input + 2000 * r.output) / 1_000_000;
+        return perBatch * batches + (8000 * r.input + 1500 * r.output) / 1_000_000;
+      },
+      blocked: () =>
+        this.settings.journalModelCalls === "none"
+          ? "Your settings keep journal entries from every model (Ariadne settings → journal model calls: None). Correspondence is dated, so it counts as journal too. Change that setting to use persona chat."
+          : undefined,
+    };
   }
 
   private async activateChat(): Promise<void> {
