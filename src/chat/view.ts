@@ -97,6 +97,8 @@ export class ChatView extends ItemView {
     });
     this.renderHead();
     this.renderIntro();
+    // Sized to the pane once it is laid out, and again whenever the pane changes size.
+    window.requestAnimationFrame(() => this.fitInput());
     void this.refreshModels();
     this.deps.webAsker((what) => this.askWeb(what));
   }
@@ -217,8 +219,10 @@ export class ChatView extends ItemView {
       const label = head.createEl("label", { cls: "ariadne-chat-journal", attr: { title: "Let the local model read journal entries in this chat. Off: they are never shown to it." } });
       const box = label.createEl("input", { type: "checkbox" });
       box.checked = this.deps.journal.on();
+      label.toggleClass("is-on", box.checked);
       box.addEventListener("change", () => {
         this.deps.journal.set(box.checked);
+        label.toggleClass("is-on", box.checked);
         this.note(box.checked ? "Journal entries may now be read in this chat." : "Journal entries are no longer read in this chat.");
       });
       label.appendText(" journal");
@@ -273,12 +277,18 @@ export class ChatView extends ItemView {
   }
 
   /** Make the input as tall as its text, between its resting height and about two fifths of the pane. */
+  onResize(): void {
+    this.fitInput();
+  }
+
   private fitInput(): void {
     const el = this.inputEl;
     el.setCssStyles({ height: "auto" });
-    const max = Math.max(160, Math.round(this.contentEl.clientHeight * 0.4));
+    // At least about a sixth of the pane, so a longer request has room; up to half of it, then it scrolls.
+    const min = Math.max(140, Math.round(this.contentEl.clientHeight * 0.18));
+    const max = Math.max(min, Math.round(this.contentEl.clientHeight * 0.5));
     const wanted = el.scrollHeight + 2;
-    el.setCssStyles({ height: `${Math.min(wanted, max)}px`, overflowY: wanted > max ? "auto" : "hidden" });
+    el.setCssStyles({ height: `${Math.min(Math.max(wanted, min), max)}px`, overflowY: wanted > max ? "auto" : "hidden" });
   }
 
   /** A line from the pane itself, not from the model. */

@@ -512,7 +512,10 @@
 .ariadne-chat-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-smaller); flex-wrap: wrap; }
 .ariadne-chat-model { color: var(--text-muted); }
 .ariadne-chat-local { color: var(--color-green); border: 1px solid var(--color-green); border-radius: 8px; padding: 0 6px; }
-.ariadne-chat-journal { color: var(--text-muted); display: inline-flex; align-items: center; gap: 2px; }
+.ariadne-chat-journal { color: var(--text-muted); display: inline-flex; align-items: center; gap: 2px; padding: 1px 7px 1px 4px; border-radius: 999px; border: 1px solid transparent; }
+/* Ticked: journal entries are being read — shown so it cannot be missed. */
+.ariadne-chat-journal.is-on { color: var(--text-on-accent); background: var(--interactive-accent); border-color: var(--interactive-accent); font-weight: var(--font-semibold); }
+.ariadne-chat-journal.is-on input { accent-color: var(--text-on-accent); }
 .ariadne-chat-save { margin-left: auto; }
 .ariadne-chat-new { margin-left: 0; }
 .ariadne-chat-list { flex: 1 1 auto; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; user-select: text; }
@@ -540,7 +543,8 @@
 .ariadne-chat-proposal-buttons { display: flex; gap: 6px; }
 .ariadne-chat-proposal-status { color: var(--text-muted); font-size: var(--font-ui-small); }
 .ariadne-chat-form { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--background-modifier-border); flex: none; }
-.ariadne-chat-input { width: 100%; box-sizing: border-box; resize: none; min-height: 6.5em; font-size: var(--font-text-size); line-height: var(--line-height-normal); padding: 8px 10px; }
+/* body-level: Obsidian sets every textarea's min-height to one input line, which would win over a plain class. */
+body .ariadne-chat .ariadne-chat-input { width: 100%; box-sizing: border-box; resize: none; min-height: 9em; font-size: var(--font-text-size); line-height: var(--line-height-normal); padding: 8px 10px; }
 .ariadne-chat-form-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ariadne-chat-hint { color: var(--text-faint); font-size: var(--font-ui-smaller); }
 .ariadne-chat-list { min-height: 0; }

@@ -11,7 +11,7 @@ import { relink, vaultTools, type VaultAccess } from "../src/chat/tools";
 import { editProperty } from "../src/chat/tag-edit";
 import { overlayVault } from "../src/batch/overlay";
 import { inverseOf, memoryBatchStore, tally } from "../src/batch/record";
-import { BatchRunner, holdReason, saysLeft, workOnNote, type AgentResult } from "../src/batch/runner";
+import { BatchRunner, holdReason, saysDone, saysLeft, workOnNote, type AgentResult } from "../src/batch/runner";
 import { dateInName, selectNotes } from "../src/batch/select";
 
 function world(initial: Record<string, string>) {
@@ -146,7 +146,7 @@ describe("workOnNote: a fresh context for one note", () => {
       complete: script([
         { applies: true, why: "it is an idea note with a typo" },
         { tool: "propose_edit", args: { path: "Inbox/idea.md", find: "Teh", replace: "The" } },
-        { tool: "propose_moves", args: { moves: [{ path: "Inbox/idea.md", folder: "Areas/Home" }], add: ["garden"] } },
+        { tool: "propose_moves", args: { moves: [{ path: "Inbox/idea.md", folder: "Areas/Home" }], add: ["garden"], new_folder: true } },
         { tool: "answer", answer: "Changed: fixed a typo, tagged #garden, filed under Areas/Home." },
       ]),
     });
@@ -203,6 +203,58 @@ describe("workOnNote: a fresh context for one note", () => {
     expect(contradicted.changes).toHaveLength(1);
     for (const line of ["Left: personal.", "I left the note unchanged.", "No changes needed.", "It should be left as it is.", "The instruction does not apply."]) expect(saysLeft(line)).toBe(true);
     for (const line of ["Changed: tagged #meeting.", "Tagged it and moved it to Work."]) expect(saysLeft(line)).toBe(false);
+
+    // Out of steps: what it started is kept back, and the report says why in plain words.
+    const unfinished = await workOnNote("a.md", { instruction: "Tag meetings." }, {
+      vault: w.vault, isJournal: w.journal, today: () => "",
+      complete: script([{ applies: true, why: "maybe" }, { tool: "propose_tags", args: { add: ["meeting"] } }, ...Array.from({ length: 9 }, (_, i) => ({ tool: "search", args: { query: `q${i}` } }))]),
+    });
+    expect(unfinished.summary).toBe("");
+    expect(unfinished.hold).toBe("the model used all 10 of its steps on this note before it had finished, so nothing it started is done");
+    expect(unfinished.changes).toHaveLength(1);
+  });
+
+  it("does not file a note into a folder that does not exist — it points the model at merge_into — unless asked to make one", async () => {
+    const w = world({ "Weekly/2024-W44.md": "A week.", "Days/2024-11-01.md": "Friday." });
+    const r = await workOnNote("Weekly/2024-W44.md", { instruction: "Move it into the day's journal note." }, {
+      vault: w.vault, isJournal: () => false, today: () => "",
+      complete: script([
+        { applies: true, why: "yes" },
+        { tool: "propose_moves", args: { moves: [{ path: "Weekly/2024-W44.md", folder: "Days/2024-11-03" }] } },
+        { tool: "merge_into", args: { target: "Days/2024-11-03.md" } },
+        { tool: "answer", answer: "Changed: moved it to Days/2024-11-03.md." },
+      ]),
+    });
+    expect(r.changes).toEqual([{ type: "move", path: "Weekly/2024-W44.md", to: "Days/2024-11-03.md" }]);
+    expect(r.trace?.[0]).toMatch(/^propose_moves/);
+    expect(r.trace?.[1]).toMatch(/^merge_into/);
+  });
+
+  it("reads a step named under another key, and says plainly when replies cannot be read", async () => {
+    const w = world({ "a.md": "text" });
+    const r = await workOnNote("a.md", { instruction: "Tag it x." }, {
+      vault: w.vault, isJournal: w.journal, today: () => "",
+      complete: script([{ applies: true, why: "yes" }, { type: "propose_tags", args: { add: ["x"] } }, { tool: "answer", answer: "Changed: tagged it." }]),
+    });
+    expect(r.changes).toHaveLength(1);
+    const garbled = await workOnNote("a.md", { instruction: "Tag it x." }, {
+      vault: w.vault, isJournal: w.journal, today: () => "",
+      complete: script([{ applies: true, why: "yes" }, { nothing: 1 }, { nothing: 2 }]),
+    });
+    expect(garbled.summary).toBe("");
+    expect(garbled.failed).toBe("the model's replies could not be read, twice in a row, so nothing was done to this note — it is tried again on the next run");
+  });
+
+  it("does not report a change the model only said it made", async () => {
+    const w = world({ "a.md": "A quiet evening." });
+    const r = await workOnNote("a.md", { instruction: "Move it to Journal." }, {
+      vault: w.vault, isJournal: w.journal, today: () => "",
+      complete: script([{ applies: true, why: "yes" }, { tool: "answer", answer: "Moved a.md to Journal/2025-04-27." }]),
+    });
+    expect(r.changes).toEqual([]);
+    expect(r.failed).toMatch(/^the model said "Moved a\.md to Journal\/2025-04-27\.", but it made no change/);
+    for (const line of ["Changed: tagged it.", "Moved it to X.", "The note has been moved to X.", "I tagged it."]) expect(saysDone(line)).toBe(true);
+    for (const line of ["Left: personal.", "Nothing to do here.", "Already tagged."]) expect(saysDone(line)).toBe(false);
   });
 
   it("records findings for the report", async () => {
@@ -357,7 +409,7 @@ describe("BatchRunner", () => {
     });
     const rec = await runner.run((await runner.create(spec(["a.md", "b.md"]), "m")).job.id);
     expect(rec.steps.map((s) => [s.status, s.why])).toEqual([
-      ["held", "held, not applied: it would keep only 1% of the words of a.md"],
+      ["held", "Not changed: it would keep only 1% of the words of a.md."],
       ["failed", "model offline"],
     ]);
     expect(Object.fromEntries(w.files)).toEqual({ "a.md": long, "b.md": "beta" });

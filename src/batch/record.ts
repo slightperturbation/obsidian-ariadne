@@ -10,6 +10,12 @@ export interface BatchJob {
   id: string;
   /** The owner's instruction, the same for every note. */
   instruction: string;
+  /**
+   * The owner's own words, as they asked the chat for this job — the
+   * instruction was written from them. Absent when the owner edited the
+   * instruction: then that is their own words.
+   */
+  request?: string;
   /** How the notes were chosen, in words ("Periodic/Daily, 8 notes"). */
   selection: string;
   /** The notes, in the order they are worked through. */
@@ -47,6 +53,10 @@ export interface BatchStep {
   why?: string;
   /** While applying: the change it was on. Kept if the app stops there, so undo knows what may have landed. */
   attempting?: number;
+  /** The model's steps on this note, one line each: kept when it was not applied as asked (failed or held). */
+  trace?: string[];
+  /** Folders that did not exist before this step and that its changes made: undo removes those it leaves empty. */
+  folders?: string[];
   at: string;
 }
 

@@ -33,6 +33,8 @@ export interface ToolResult {
 /** A batch job as the chat proposes it: which notes, and what to do with each. */
 export interface JobSpec {
   instruction: string;
+  /** The owner's message the chat set the job up from. */
+  request?: string;
   /** How the notes were chosen, in words. */
   selection: string;
   paths: string[];
@@ -126,6 +128,11 @@ export function parseStep(text: string): { tool: string; args: Record<string, un
   }
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
+  // Some models name the step under another key: {"type": "propose_moves", "args": …}.
+  if (typeof r.tool !== "string") {
+    const named = [r.name, r.type, r.action, r.function].find((v): v is string => typeof v === "string" && /^[a-z_]+$/.test(v));
+    if (named && (r.args === undefined || (typeof r.args === "object" && r.args !== null))) r.tool = named;
+  }
   if (typeof r.tool !== "string") {
     // Some models answer straight away without naming the step.
     return typeof r.answer === "string" ? { tool: "answer", args: {}, answer: r.answer, sources: strings(r.sources) } : null;
@@ -249,7 +256,7 @@ export class ChatEngine {
       }
       for (const path of result.sources ?? []) this.seen.add(path);
       if (result.proposal) proposals.push(result.proposal);
-      if (result.job) jobs.push(result.job);
+      if (result.job) jobs.push({ ...result.job, request: userText });
       if (result.finding) findings.push(result.finding);
       scratch.push(`You called ${tool.name}(${JSON.stringify(step.args).slice(0, 300)}) and got:\n${clip(result.text, RESULT_CHARS)}`);
     }

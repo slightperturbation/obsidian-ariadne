@@ -370,6 +370,7 @@ export function vaultTools(vault: VaultAccess, opts: ToolOptions = {}): ChatTool
       add: "(optional) a list of tags to add to every note moved, without #",
       remove: "(optional) a list of tags to remove from every note moved, without #",
       reason: "one sentence: the organizing idea behind the moves",
+      new_folder: "(optional) true to make a folder that does not exist yet",
     },
     async run(args): Promise<ToolResult> {
       const asked = Array.isArray(args.moves) ? args.moves : args.path !== undefined ? [{ path: args.path, folder: args.folder }] : [];
@@ -394,6 +395,15 @@ export function vaultTools(vault: VaultAccess, opts: ToolOptions = {}): ChatTool
         const folder = folderPath(str(m.folder));
         if (folder === null) {
           refused.push(`${from}: "${str(m.folder).slice(0, 80)}" is not a usable folder`);
+          continue;
+        }
+        // A folder that does not exist is most often a note's name given as a folder ("Journal/2024-11-03"):
+        // made only when asked for, so a note is not filed away in a new folder by mistake.
+        const newFolder = args.new_folder === true || args.new_folder === "true";
+        if (batch && folder && !newFolder && !vault.notes().some((n) => n.path.startsWith(`${folder}/`))) {
+          refused.push(
+            `${from}: there is no folder "${folder}". propose_moves keeps a note's name and puts it into a folder. To put this note into another note — at its end if that note exists, or this note renamed to it if not — use merge_into with target "${folder}.md". To make the new folder, give new_folder: true.`,
+          );
           continue;
         }
         const to = folder ? `${folder}/${from.split("/").pop()}` : (from.split("/").pop() ?? from);

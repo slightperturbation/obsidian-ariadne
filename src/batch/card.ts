@@ -63,7 +63,14 @@ export function renderJobCard(parent: HTMLElement, spec: JobSpec, ui: BatchUi): 
   for (const line of spec.leftOut) card.createDiv({ cls: "ariadne-chat-proposal-why", text: `Left out — ${line}.` });
 
   const setup = card.createDiv();
-  setup.createDiv({ cls: "ariadne-batch-label", text: "What to do with each note (you can change it):" });
+  // What the owner asked beside what the chat made of it: a difference is seen before the job starts.
+  if (spec.request && spec.request.trim() !== spec.instruction.trim()) {
+    setup.createDiv({ cls: "ariadne-batch-label", text: "You asked:" });
+    setup.createDiv({ cls: "ariadne-chat-proposal-why", text: spec.request.trim() });
+    setup.createDiv({ cls: "ariadne-batch-label", text: "Each note's model is told this, and your words above (check it; you can change it):" });
+  } else {
+    setup.createDiv({ cls: "ariadne-batch-label", text: "What to do with each note (you can change it):" });
+  }
   const instruction = setup.createEl("textarea", { cls: "ariadne-batch-instruction" });
   instruction.value = spec.instruction;
   instruction.rows = Math.min(6, Math.max(2, Math.ceil(spec.instruction.length / 70)));
@@ -155,7 +162,8 @@ export function renderJobCard(parent: HTMLElement, spec: JobSpec, ui: BatchUi): 
     setup.remove();
     for (const line of leftOut.slice(spec.leftOut.length)) card.createDiv({ cls: "ariadne-chat-proposal-why", text: `Left out — ${line}.` });
     void ui
-      .create({ ...spec, paths, leftOut, instruction: text, allowShrink: shrink.checked }, route)
+      // An instruction the owner rewrote is their own words: the request it replaced is not sent along.
+      .create({ ...spec, paths, leftOut, instruction: text, request: text === spec.instruction.trim() ? spec.request : undefined, allowShrink: shrink.checked }, route)
       .then((record) => follow(card, record, ui, pauseAfter))
       .catch((err: unknown) => status.setText(`Not started: ${err instanceof Error ? err.message : "error"}.`));
   };
@@ -186,9 +194,18 @@ function follow(card: HTMLElement, first: BatchRecord, ui: BatchUi, pauseAfter?:
       ui.openNote(s.path);
     });
     const what = s.status === "applied" || s.status === "undone" ? describeChanges(s.path, s.changes) : "";
-    const detail = [what, s.summary, s.why].filter(Boolean).join(" — ");
+    // Held: what it would have done, so the owner can judge it — and do it by hand if it was right.
+    const meant = s.status === "held" && s.changes.length ? `What it had in mind: ${describeChanges(s.path, s.changes)}.` : "";
+    const detail = [what, s.summary, s.why, meant].filter(Boolean).join(" — ");
     if (detail) line.createSpan({ cls: "ariadne-batch-detail", text: ` ${detail}` });
     for (const f of s.findings) line.createDiv({ cls: "ariadne-batch-finding", text: `↳ ${f}` });
+    // A note that did not go as asked: the model's steps, so what went wrong can be seen.
+    if (s.trace?.length && (s.status === "failed" || s.status === "held")) {
+      const box = line.createEl("details", { cls: "ariadne-batch-diff" });
+      box.createEl("summary", { text: `what the model tried (${s.trace.length} step${s.trace.length === 1 ? "" : "s"})` });
+      const list = box.createEl("ol");
+      for (const t of s.trace) list.createEl("li", { text: t });
+    }
     // Text a model changed is shown exactly — so a change it was not asked for is seen, not missed.
     const edits = s.changes.filter((c) => c.type === "modify");
     if (edits.length && (s.status === "applied" || s.status === "held" || s.status === "undone")) {

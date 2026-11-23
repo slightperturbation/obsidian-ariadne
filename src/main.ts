@@ -1867,6 +1867,13 @@ export default class AriadnePlugin extends Plugin {
         const file = this.app.vault.getAbstractFileByPath(path);
         return file instanceof TFile ? io.read(path) : undefined;
       },
+      folders: {
+        exists: (path) => this.app.vault.getAbstractFileByPath(normalizePath(path)) instanceof TFolder,
+        removeIfEmpty: async (path) => {
+          const f = this.app.vault.getAbstractFileByPath(normalizePath(path));
+          if (f instanceof TFolder && f.children.length === 0) await this.app.fileManager.trashFile(f);
+        },
+      },
       busy: (path) => {
         const at = this.lastTyped.get(path);
         return at !== undefined && Date.now() - at < TYPING_QUIET_MS ? "you are typing in it — it is done once you stop" : undefined;
