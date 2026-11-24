@@ -597,3 +597,9 @@ body .ariadne-chat .ariadne-chat-input { width: 100%; box-sizing: border-box; re
 .ariadne-persona-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: var(--font-ui-smaller); }
 .ariadne-persona-actions button { font-size: var(--font-ui-smaller); }
 .ariadne-persona-open { color: var(--text-accent); }
+.ariadne-persona-actions input[type="text"] { min-width: 10em; }
+.ariadne-persona-ios { display: flex; flex-direction: column; gap: 6px; padding: 8px; margin: 6px 0; border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.ariadne-persona-ios-q { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.ariadne-persona-ios-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.ariadne-persona-ios-pick { padding: 2px 4px; height: auto; color: var(--text-muted); }
+.ariadne-persona-ios-pick:hover { color: var(--text-accent); }

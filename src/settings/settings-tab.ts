@@ -555,6 +555,16 @@ export class AriadneSettingTab extends PluginSettingTab {
       );
 
 
+    new Setting(containerEl)
+      .setName("Your name")
+      .setDesc("What the personas made for you in persona chat call you.")
+      .addText((t) =>
+        t.setValue(this.plugin.settings.ownerName).onChange(async (v) => {
+          this.plugin.settings.ownerName = v.trim();
+          await this.plugin.saveSettings();
+        }),
+      );
+
     new Setting(containerEl).setName("Filing").setHeading();
 
     new Setting(containerEl)

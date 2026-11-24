@@ -34,6 +34,8 @@ export interface AriadneSettings {
   chatModel: string;
   /** The model picked in the persona chat, as "endpoint|model" or "cloud|model". */
   personaModel: string;
+  /** What the personas made for the owner call them. */
+  ownerName: string;
   /** On battery, prefer remote endpoints and use this machine's own model
    * only as a last resort for user-initiated, local-only work. */
   avoidLocalOnBattery: boolean;
@@ -164,6 +166,7 @@ export const DEFAULT_SETTINGS: AriadneSettings = {
   localModels: "",
   chatModel: "",
   personaModel: "",
+  ownerName: "",
   avoidLocalOnBattery: true,
   routingMode: "auto",
   costLimitUsd: 2,

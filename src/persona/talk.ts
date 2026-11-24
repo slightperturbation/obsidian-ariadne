@@ -47,6 +47,8 @@ export async function talkLocal(url: string, model: string, system: string, turn
         if (!text) throw new Error(`${model} gave an empty reply`);
         return { text, costUsd: 0 };
       }
+      // Some runners (Ollama's MLX one) have no JSON mode: ask again without it — the reply is read for its JSON either way.
+      if (native && native.status === 501 && opts.json) return await talkLocal(url, model, system, turns, fetchImpl, { ...opts, json: false });
       if (native && native.status !== 404) throw new Error(`${model} answered HTTP ${native.status}`);
     }
     const resp = await fetchImpl(`${base}/chat/completions`, {
@@ -55,6 +57,7 @@ export async function talkLocal(url: string, model: string, system: string, turn
       signal: controller.signal,
       body: JSON.stringify({ model, messages, max_tokens: opts.maxTokens ?? 1500, reasoning_effort: "none", ...(opts.json ? { response_format: { type: "json_object" } } : {}) }),
     });
+    if (resp.status === 501 && opts.json) return await talkLocal(url, model, system, turns, fetchImpl, { ...opts, json: false });
     if (!resp.ok) throw new Error(`${model} answered HTTP ${resp.status}`);
     const body = (await resp.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const text = body.choices?.[0]?.message?.content?.trim() ?? "";

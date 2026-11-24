@@ -77,7 +77,9 @@ import { excerpts, gatherUnits, personaSystem, type Candidate } from "./persona/
 import { ERAS_SCHEMA, enoughEras, erasPrompt, gapEras, parseEras, type Era } from "./persona/eras";
 import { cloudEstimate, talkClaude, talkLocal, type Reply, type Turn } from "./persona/talk";
 import { buildProfile, plan } from "./persona/build";
-import { isCurrent, profileBody, profilePath } from "./persona/profile";
+import { PERSONA_FOLDER, isCurrent, profileBody, profilePath } from "./persona/profile";
+import { gatherSelf, selfCurrent, selfEras, selfPath, selfPrompts, type SelfInput } from "./persona/self";
+import { CONVERSATION_FOLDER, conversationMarkdown, conversationPath, memoryOf, opener, premade, premadeSystem } from "./persona/premade";
 import { claudeRates } from "./model/providers/claude";
 import { bodyOf as noteBody, parsedProperties } from "./chat/frontmatter";
 
@@ -1859,6 +1861,81 @@ export default class AriadnePlugin extends Plugin {
       return reply;
     };
     const stamp = () => new Date().toISOString().slice(0, 10);
+    const propsOf = (text: string | undefined): Record<string, unknown> | undefined => {
+      const parsed = text === undefined ? undefined : parsedProperties(text);
+      return parsed?.ok ? (Object.fromEntries([...parsed.props].map(([k, v]) => [k, JSON.parse(v) as unknown])) as Record<string, unknown>) : undefined;
+    };
+    const owner = () => this.settings.ownerName.trim();
+    // Everything the owner wrote: their side of the correspondence, their journal, their personal notes.
+    const selfInput = (era?: Era): SelfInput => {
+      const cands = candidates();
+      return {
+        moments: findPeople(notes()).flatMap((p) => p.moments.map((m) => ({ ...m, person: p.name }))),
+        journal: cands.filter((c) => c.kind === "journal"),
+        notes: cands.filter((c) => c.kind === "note").map((c) => c.path),
+        era,
+        read,
+        allowed: (q) => this.personaAllowed(q),
+      };
+    };
+    // Their latest journal entries, whole, newest first until `room` is used, then put back in order.
+    const recentJournal = async (room: number): Promise<string> => {
+      const entries = candidates()
+        .filter((c) => c.kind === "journal" && c.date && this.personaAllowed(c.path))
+        .sort((x, y) => (x.date! < y.date! ? 1 : -1));
+      const out: string[] = [];
+      let used = 0;
+      for (const c of entries) {
+        const t = noteBody((await read(c.path)) ?? "").trim();
+        if (!t) continue;
+        if (used + t.length > room) break;
+        out.push(`### ${c.date}\n${t}`);
+        used += t.length;
+      }
+      return out.reverse().join("\n\n");
+    };
+    // The vault as rooms, people and the notes left longest alone: titles and dates only.
+    const vaultMap = (): string => {
+      const files = this.app.vault.getMarkdownFiles().filter((f) => this.personaAllowed(f.path) && !f.path.startsWith(`${PERSONA_FOLDER}/`));
+      const month = (ms: number) => new Date(ms).toISOString().slice(0, 7);
+      const rooms = new Map<string, { n: number; last: number }>();
+      for (const f of files) {
+        const parts = f.path.split("/");
+        const room = parts.length === 1 ? "(the top)" : parts[0] === "Personal" && parts.length > 2 ? parts.slice(0, 2).join("/") : parts[0]!;
+        const r = rooms.get(room) ?? { n: 0, last: 0 };
+        r.n++;
+        r.last = Math.max(r.last, f.stat.mtime);
+        rooms.set(room, r);
+      }
+      const people = findPeople(notes()).slice(0, 20);
+      const alone = files
+        .filter((f) => !/(^|\/)Correspondence\//.test(f.path))
+        .sort((x, y) => x.stat.mtime - y.stat.mtime)
+        .slice(0, 15);
+      return [
+        `${files.length} notes in all.`,
+        `## Rooms (folders): notes, last walked\n${[...rooms].sort((x, y) => y[1].n - x[1].n).slice(0, 40).map(([k, v]) => `- ${k}: ${v.n}, ${month(v.last)}`).join("\n")}`,
+        `## People written with: conversations, from–to\n${people.map((p) => `- ${p.name}: ${p.moments.length}, ${p.first.slice(0, 4)}–${p.last.slice(0, 7)}`).join("\n")}`,
+        `## Notes left longest alone\n${alone.map((f) => `- ${f.path.replace(/\.md$/, "")} (last touched ${month(f.stat.mtime)})`).join("\n")}`,
+      ].join("\n\n");
+    };
+    // Earlier conversations with a persona made for the owner, as it remembers them.
+    const pastConversations = async (id: string, era?: Era) => {
+      const out: Array<{ started: string; updated: string; text: string }> = [];
+      for (const f of this.app.vault.getMarkdownFiles()) {
+        if (!f.path.startsWith(`${CONVERSATION_FOLDER}/`)) continue;
+        const text = await this.app.vault.cachedRead(f);
+        const props = propsOf(text);
+        if (props?.persona !== id || (era && props.period !== era.label)) continue;
+        const body = noteBody(text)
+          .split("\n")
+          .filter((l) => !/^(# |> \[!note\])/.test(l))
+          .join("\n")
+          .trim();
+        out.push({ started: String(props.started ?? ""), updated: String(props.updated ?? props.started ?? ""), text: body });
+      }
+      return out;
+    };
     return {
       people: () => findPeople(notes()),
       choices: () => this.batchChoices(),
@@ -1903,9 +1980,7 @@ export default class AriadnePlugin extends Plugin {
         const planned = plan(units, batchChars, maxBatches);
         // Read from the note itself: just made, it is not in Obsidian's metadata yet.
         const path = profilePath(p, era);
-        const text = await read(path);
-        const parsed = text === undefined ? undefined : parsedProperties(text);
-        const props = parsed?.ok ? (Object.fromEntries([...parsed.props].map(([k, v]) => [k, JSON.parse(v) as unknown])) as Record<string, unknown>) : undefined;
+        const props = propsOf(await read(path));
         const ready = props?.type === "persona";
         return {
           name: p.name,
@@ -1966,6 +2041,93 @@ export default class AriadnePlugin extends Plugin {
         const r = claudeRates(pick.model);
         const perBatch = ((sizing(route).batchChars / 3.5) * r.input + 2000 * r.output) / 1_000_000;
         return perBatch * batches + (8000 * r.input + 1500 * r.output) / 1_000_000;
+      },
+      owner: {
+        get: () => this.settings.ownerName,
+        set: (name) => {
+          this.settings.ownerName = name.trim();
+          void this.saveSettings();
+        },
+      },
+      selfEras: async () => {
+        const key = "__self";
+        const cached = this.personaEras.get(key);
+        if (cached) return cached;
+        const found = gatherSelf(selfInput()).then(({ units }) => selfEras(units));
+        this.personaEras.set(key, found);
+        return found;
+      },
+      selfState: async (era, route) => {
+        const { units, withheld } = await gatherSelf(selfInput(era));
+        const { batchChars, maxBatches } = sizing(route);
+        const planned = plan(units, batchChars, maxBatches);
+        const path = selfPath(era);
+        const props = propsOf(await read(path));
+        const ready = props?.type === "persona" && props.subject === "self";
+        return {
+          name: owner() || "you",
+          path,
+          ready,
+          stale: ready && !selfCurrent(props, units.length),
+          built: typeof props?.built === "string" ? props.built : isoDate(props?.built),
+          conversations: units.filter((u) => u.kind === "conversation").length,
+          read: planned.read,
+          batches: planned.batches,
+          withheld,
+        };
+      },
+      makeSelf: async (era, route, progress, cancelled) => {
+        const name = owner();
+        if (!name) throw new Error("say what to call you first");
+        const { units } = await gatherSelf(selfInput(era));
+        const { batchChars, maxBatches } = sizing(route);
+        const markdown = await buildProfile({
+          era,
+          units,
+          model: parseChoice(route)?.model ?? "a model",
+          today: stamp(),
+          batchChars,
+          maxBatches,
+          onProgress: progress,
+          cancelled,
+          prompts: selfPrompts(name, era, units.length),
+          ask: async (system, prompt) => (await talk(route, system, [{ role: "user", content: prompt }], true)).text,
+        });
+        const path = selfPath(era);
+        const before = await read(path);
+        await this.executor.apply({
+          title: `Make your profile${era ? ` for ${era.label}` : ""} for persona chat`,
+          changes: [before === undefined ? { type: "create", path, after: markdown } : { type: "modify", path, before, after: markdown }],
+        });
+      },
+      premade: async (id, era, route) => {
+        const def = premade(id);
+        if (!def) throw new Error("that persona is not known");
+        const name = owner();
+        if (!name) throw new Error("say what to call you first");
+        const period = def.period ? era : undefined;
+        const text = await read(selfPath(period));
+        if (text === undefined) throw new Error("there is no profile of you yet — make it first");
+        const profile = profileBody(text);
+        const cloud = parseChoice(route)?.url === "cloud";
+        const room = Math.max(4000, (cloud ? 150_000 : 40_000) - profile.length);
+        const today = stamp();
+        const past = await pastConversations(id, period);
+        const lastAt = past.map((c) => c.updated).sort().pop();
+        const since = lastAt ? Math.max(0, (Date.now() - Date.parse(lastAt)) / 86_400_000) : undefined;
+        const memory = memoryOf(past, Math.floor(room * 0.4), today);
+        const recent = def.recent ? await recentJournal(Math.floor(room * 0.3)) : "";
+        const system = premadeSystem(def, { owner: name, today, era: period, profile, recent: recent || undefined, memory: memory || undefined, since, map: def.map ? vaultMap() : undefined });
+        return { name: def.name(name, period), system, chars: system.length, opener: opener(name, since), since };
+      },
+      saveConversation: async (rec) => {
+        const path = conversationPath(rec);
+        const text = conversationMarkdown(rec);
+        if (!this.app.vault.getAbstractFileByPath(CONVERSATION_FOLDER)) await this.app.vault.createFolder(CONVERSATION_FOLDER);
+        const f = this.app.vault.getAbstractFileByPath(path);
+        if (f instanceof TFile) await this.app.vault.modify(f, text);
+        else await this.app.vault.create(path, text);
+        return path;
       },
       blocked: () =>
         this.settings.journalModelCalls === "none"

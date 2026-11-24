@@ -100,6 +100,9 @@ export function parseExtract(text: string, batch: Unit[]): Extract {
   }
   const source = clean(batch.map((u) => u.text).join("\n"));
   const dates = new Set(batch.map((u) => u.date).filter(Boolean));
+  const undated = batch.some((u) => !u.date);
+  // A fact's date is one of the parts' own, or one written in them (a timeline), or "undated" from an undated note.
+  const dated = (d: string) => dates.has(d) || (/^\d{4}(-\d{2}(-\d{2})?)?$/.test(d) && source.includes(d)) || (d === "undated" && undated);
   const list = (v: unknown) => (Array.isArray(v) ? v : []);
   for (const ph of list(raw.phrases)) {
     if (typeof ph !== "string") continue;
@@ -109,10 +112,10 @@ export function parseExtract(text: string, batch: Unit[]): Extract {
   }
   for (const f of list(raw.facts)) {
     const r = (f ?? {}) as Record<string, unknown>;
-    const date = typeof r.date === "string" ? r.date.trim().slice(0, 10) : "";
+    const date = typeof r.date === "string" ? r.date.trim().slice(0, 10).toLowerCase() : "";
     const fact = typeof r.fact === "string" ? clean(r.fact).slice(0, 300) : "";
     // A fact is kept only with the date of a part it could have come from.
-    if (fact && dates.has(date)) out.facts.push({ date, fact });
+    if (fact && dated(date)) out.facts.push({ date, fact });
   }
   for (const v of list(raw.voice)) if (typeof v === "string" && clean(v)) out.voice.push(clean(v).slice(0, 300));
   for (const v of list(raw.relationship)) if (typeof v === "string" && clean(v)) out.relationship.push(clean(v).slice(0, 300));
@@ -167,7 +170,12 @@ export function mergeExtracts(all: Extract[]): Extract {
     phrases: uniq(all.flatMap((e) => e.phrases)),
     voice: uniq(all.flatMap((e) => e.voice)),
     relationship: uniq(all.flatMap((e) => e.relationship)),
-    facts: [...facts.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)),
+    // In date order; the undated ones last.
+    facts: [...facts.values()].sort((a, b) => {
+      const x = a.date === "undated" ? "9999" : a.date;
+      const y = b.date === "undated" ? "9999" : b.date;
+      return x < y ? -1 : x > y ? 1 : 0;
+    }),
   };
 }
 
